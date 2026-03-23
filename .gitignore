@@ -6,6 +6,9 @@ ansible/inventory/!(production.example)   # ignore all inventories except the ex
 .env
 *.env
 !*.env.example
+# Test fixtures contain no real credentials — always commit them
+!molecule/backup/fixtures/**
+!backup/tests/integration/fixtures/**
 
 # Python / Ansible / Molecule
 __pycache__/

@@ -1,8 +1,0 @@
-# Server secrets
-.env
-
-# App secrets — .env.example files ARE committed; .env files are not
-apps/**/.env
-
-# Local dev overrides
-docker-compose.override.yml

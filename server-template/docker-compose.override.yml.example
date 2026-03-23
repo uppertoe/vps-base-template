@@ -1,9 +1,0 @@
----
-# LOCAL DEVELOPMENT ONLY — copy to docker-compose.override.yml (gitignored)
-# Loaded automatically by Docker Compose alongside docker-compose.yml.
-# Swaps in Caddyfile.local which uses self-signed certs.
-
-services:
-  caddy:
-    volumes:
-      - ./Caddyfile.local:/etc/caddy/Caddyfile:ro

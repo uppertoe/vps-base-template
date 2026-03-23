@@ -1,105 +1,152 @@
-# Local Testing with Molecule
+# Local Testing
 
-Molecule lets you test the Ansible roles against real (containerised) OS images
-before running anything on a real server. Runs entirely on your local machine
-via Docker — no VPS needed.
+Two test layers cover different things:
 
-## What gets tested
+| Layer | What it tests | Tool |
+|-------|---------------|------|
+| Molecule `default` | All roles deploy correctly on Ubuntu + Debian | Molecule + Docker |
+| Molecule `backup` | Backup role deploys scripts/config with correct permissions | Molecule + Docker |
+| Integration tests | `backup.sh` and `restore.sh` actually work end-to-end | Bash + Docker |
 
-The test suite runs all roles against:
-- **Ubuntu 24.04** (primary target)
-- **Debian 12**
+---
 
-It verifies that after the playbook runs:
+## Molecule — role deployment tests
+
+Molecule tests the Ansible roles against real containerised OS images before
+running anything on a real server. No VPS needed.
+
+### What the `default` scenario covers
+
+Runs all roles against **Ubuntu 24.04** and **Debian 12** and verifies:
 - The `deploy` user exists with the correct SSH key and sudo access
 - SSH password authentication is disabled
 - Docker and the compose plugin are installed
 - The deploy user is in the `docker` group
-- UFW is active
+- UFW is active and configured
 - `/opt/deploy` exists and is owned by `deploy`
 
 > **Container limitations:** Kernel-level hardening (sysctl settings from
 > `os_hardening`) is skipped inside Docker containers — those changes require
-> a real kernel. They're tested by the devsec.io project's own test suite and
-> are applied on real servers. Docker-in-Docker is also skipped — the Docker
-> role installs Docker but doesn't start the daemon.
+> a real kernel. Docker-in-Docker is also skipped — the Docker role installs
+> Docker but doesn't start the daemon.
 
-## Running the tests
-
-From the root of this repo:
+### Running the default scenario
 
 ```bash
 # Full test run (create → converge → verify → destroy)
 molecule test
 
 # Step through manually (useful for debugging)
-molecule create       # start containers
-molecule converge    # apply the playbook
-molecule verify      # run assertions
-molecule destroy     # tear down containers
-
-# Re-run converge without recreating containers (fast iteration)
+molecule create
 molecule converge
 molecule verify
+molecule destroy
 
-# Log in to a container for manual inspection
+# Re-run without recreating containers
+molecule converge && molecule verify
+
+# Log in to a container for inspection
 molecule login --host ubuntu-2404
 ```
 
-## Targeting a single distro
+### Targeting a single distro
 
 ```bash
-# Run against Ubuntu only
 molecule test -- -l ubuntu-2404
-
-# Run against Debian only
 molecule test -- -l debian-12
 ```
 
-## Running with verbose Ansible output
+### What the `backup` scenario covers
+
+Tests the backup role in isolation (single Ubuntu container):
+- `backup.sh` and `restore.sh` installed at `/opt/backup/` with correct permissions
+- Config files at `/etc/restic/` with mode 0600
+- Systemd units installed
+- restic binary present and executable
+- Scripts reject bad arguments (syntax smoke test)
+
+### Running the backup scenario
+
+```bash
+molecule test -s backup
+
+# Or step through:
+molecule converge -s backup
+molecule verify -s backup
+```
+
+### Verbose output
 
 ```bash
 molecule converge -- -v      # verbose
-molecule converge -- -vvv    # very verbose (shows all task details)
+molecule converge -- -vvv    # very verbose
 ```
 
-## Troubleshooting
+### Troubleshooting
 
 **`cgroups` error on first run**
 
-Some macOS + Docker Desktop combinations have cgroup issues. Try:
-
 ```bash
-# In Docker Desktop → Settings → General
+# Docker Desktop → Settings → General
 # Enable "Use Virtualization framework" and "Use Rosetta for x86/amd64..."
 # Then restart Docker Desktop
 ```
 
 **`image not found` or pull errors**
 
-The images are pulled from Docker Hub on first run. Ensure Docker Desktop is
-running and you have internet access:
-
 ```bash
 docker pull geerlingguy/docker-ubuntu2404-ansible:latest
 docker pull geerlingguy/docker-debian12-ansible:latest
 ```
 
-**Molecule can't find roles**
-
-The `ANSIBLE_ROLES_PATH` is set in `molecule/default/molecule.yml`. If you
-move the molecule directory, update that path.
-
 **A verify assertion fails**
 
-Run `molecule login --host ubuntu-2404` to inspect the container and debug
-manually. The container persists between `converge` and `verify` steps.
+Run `molecule login --host ubuntu-2404` to inspect the container. The container
+persists between `converge` and `verify`.
 
-## Adding tests
+---
 
-Edit `molecule/default/verify.yml`. Tests are written as regular Ansible tasks
-with `ansible.builtin.assert`. Follow the pattern of existing checks: gather
-facts/files with a task, then assert on the result.
+## Integration tests — backup + restore end-to-end
+
+Tests that the backup and restore scripts work correctly against a real
+PostgreSQL database and a local restic repository.
+
+### Prerequisites
+
+```bash
+# macOS
+brew install restic libpq
+
+# Debian/Ubuntu
+apt install restic postgresql-client
+```
+
+Docker must be running (used for the PostgreSQL container).
+
+### Running the tests
+
+```bash
+cd vps-base-template
+bash backup/tests/integration/run_tests.sh
+```
+
+### What gets tested
+
+| Test | What it validates |
+|------|------------------|
+| `test_dry_run_exits_zero` | `--dry-run` makes no changes, exits 0 |
+| `test_backup_creates_snapshot` | A snapshot exists after backup |
+| `test_retention_runs_clean` | `forget --prune` runs without error |
+| `test_restore_into_alternate_db` | Rows match after restore to a different DB |
+| `test_verify_query_passes` | `VERIFY_QUERY` succeeds on a good restore |
+| `test_restore_rollback_on_failure` | Original DB is preserved when restore fails |
+| `test_partial_failure_continues` | A bad service fails; other services still back up |
+| `test_optional_service_skips_unreachable_db` | `OPTIONAL=true` skips gracefully, exits 0 |
+| `test_list_snapshots` | `--list` shows snapshots for a service |
+
+The `test_restore_rollback_on_failure` and `test_partial_failure_continues`
+tests are the most important — they validate the reliability fixes in the
+backup scripts (rollback on failure, per-service failure accumulation).
 
 ---
 

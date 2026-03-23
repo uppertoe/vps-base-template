@@ -1,0 +1,156 @@
+---
+# verify.yml — asserts the backup role deployed everything correctly.
+#
+# Checks: scripts, config files, systemd units, restic binary.
+# Does NOT execute backup/restore — see backup/tests/integration/.
+
+- name: Verify backup role deployment
+  hosts: all
+  gather_facts: false
+  become: true
+  tasks:
+
+    # -------------------------------------------------------------------------
+    # Scripts
+    # -------------------------------------------------------------------------
+
+    - name: Check backup.sh exists
+      ansible.builtin.stat:
+        path: /opt/backup/backup.sh
+      register: backup_script
+
+    - name: Assert backup.sh exists with correct permissions
+      ansible.builtin.assert:
+        that:
+          - backup_script.stat.exists
+          - backup_script.stat.pw_name == 'root'
+          - backup_script.stat.gr_name == 'root'
+          - backup_script.stat.mode == '0750'
+        msg: "/opt/backup/backup.sh missing or has wrong owner/permissions"
+
+    - name: Check restore.sh exists
+      ansible.builtin.stat:
+        path: /opt/backup/restore.sh
+      register: restore_script
+
+    - name: Assert restore.sh exists with correct permissions
+      ansible.builtin.assert:
+        that:
+          - restore_script.stat.exists
+          - restore_script.stat.pw_name == 'root'
+          - restore_script.stat.gr_name == 'root'
+          - restore_script.stat.mode == '0750'
+        msg: "/opt/backup/restore.sh missing or has wrong owner/permissions"
+
+    # -------------------------------------------------------------------------
+    # Configuration
+    # -------------------------------------------------------------------------
+
+    - name: Check /etc/restic/config.env exists
+      ansible.builtin.stat:
+        path: /etc/restic/config.env
+      register: global_config
+
+    - name: Assert config.env has restrictive permissions
+      ansible.builtin.assert:
+        that:
+          - global_config.stat.exists
+          - global_config.stat.pw_name == 'root'
+          - global_config.stat.mode == '0600'
+        msg: "/etc/restic/config.env missing or world-readable"
+
+    - name: Check /etc/restic/services/testapp.env exists
+      ansible.builtin.stat:
+        path: /etc/restic/services/testapp.env
+      register: service_config
+
+    - name: Assert service config has restrictive permissions
+      ansible.builtin.assert:
+        that:
+          - service_config.stat.exists
+          - service_config.stat.pw_name == 'root'
+          - service_config.stat.mode == '0600'
+        msg: "/etc/restic/services/testapp.env missing or world-readable"
+
+    # -------------------------------------------------------------------------
+    # Systemd units
+    # -------------------------------------------------------------------------
+
+    - name: Check backup.service unit exists
+      ansible.builtin.stat:
+        path: /etc/systemd/system/backup.service
+      register: backup_service_unit
+
+    - name: Assert backup.service unit exists
+      ansible.builtin.assert:
+        that:
+          - backup_service_unit.stat.exists
+        msg: "/etc/systemd/system/backup.service not found"
+
+    - name: Check backup.timer unit exists
+      ansible.builtin.stat:
+        path: /etc/systemd/system/backup.timer
+      register: backup_timer_unit
+
+    - name: Assert backup.timer unit exists
+      ansible.builtin.assert:
+        that:
+          - backup_timer_unit.stat.exists
+        msg: "/etc/systemd/system/backup.timer not found"
+
+    # -------------------------------------------------------------------------
+    # Restic binary
+    # -------------------------------------------------------------------------
+
+    - name: Check restic binary exists
+      ansible.builtin.stat:
+        path: /usr/local/bin/restic
+      register: restic_bin
+
+    - name: Assert restic is installed and executable
+      ansible.builtin.assert:
+        that:
+          - restic_bin.stat.exists
+          - restic_bin.stat.executable
+        msg: "restic binary not found at /usr/local/bin/restic"
+
+    - name: Check restic version
+      ansible.builtin.command: restic version
+      register: restic_version_output
+      changed_when: false
+
+    - name: Assert restic reports a version
+      ansible.builtin.assert:
+        that:
+          - "'restic' in restic_version_output.stdout"
+        msg: "restic version command did not produce expected output"
+
+    # -------------------------------------------------------------------------
+    # Script syntax (dry-run smoke test)
+    # -------------------------------------------------------------------------
+
+    - name: Run backup.sh with unknown flag to confirm it is executable and parses args
+      ansible.builtin.command: /opt/backup/backup.sh --unknown-flag
+      register: backup_bad_flag
+      changed_when: false
+      failed_when: backup_bad_flag.rc == 0  # should exit non-zero for unknown flag
+
+    - name: Assert backup.sh rejected the unknown flag
+      ansible.builtin.assert:
+        that:
+          - backup_bad_flag.rc != 0
+          - "'Unknown argument' in backup_bad_flag.stderr or 'Usage' in backup_bad_flag.stderr"
+        msg: "backup.sh did not exit non-zero for an unknown flag"
+
+    - name: Run restore.sh without --service to confirm required-arg check
+      ansible.builtin.command: /opt/backup/restore.sh
+      register: restore_no_service
+      changed_when: false
+      failed_when: restore_no_service.rc == 0
+
+    - name: Assert restore.sh requires --service
+      ansible.builtin.assert:
+        that:
+          - restore_no_service.rc != 0
+          - "'--service' in restore_no_service.stderr"
+        msg: "restore.sh did not exit non-zero when --service is missing"

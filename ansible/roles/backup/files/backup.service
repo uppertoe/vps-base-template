@@ -1,0 +1,29 @@
+# backup.service — One-shot systemd service for database backups.
+#
+# Triggered by backup.timer. Do not enable this unit directly.
+# Installed by the backup Ansible role.
+
+[Unit]
+Description=Database backup (restic → S3)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+
+# Load global backup config (AWS creds, SMTP, retention).
+# Per-service configs are sourced by the script itself.
+EnvironmentFile=/etc/restic/config.env
+
+ExecStart=/opt/backup/backup.sh --verify
+
+# Kill after 30 minutes to prevent a hung pg_dump blocking the next run.
+# Restic uploads are resumable; no partial state is left in the repository.
+TimeoutStartSec=30min
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=backup
+
+[Install]
+WantedBy=multi-user.target

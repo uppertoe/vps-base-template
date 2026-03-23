@@ -1,0 +1,14 @@
+---
+# converge.yml — applies the backup role using test fixtures instead of real
+# server-repo config. The fixtures contain no real credentials.
+
+- name: Converge — backup role
+  hosts: all
+  gather_facts: true
+  become: true
+  vars:
+    # Override the default (which points at a server repo's backup/ directory)
+    # to use the local test fixtures instead.
+    backup_config_src: "{{ playbook_dir }}/fixtures"
+  roles:
+    - role: backup

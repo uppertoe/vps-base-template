@@ -1,0 +1,17 @@
+---
+# Path on the control host (server repo) containing backup config.
+# The role copies config.env and services/*.env from here to the VPS.
+backup_config_src: "{{ playbook_dir }}/../backup"
+
+# Where config lands on the VPS.
+backup_config_dest: /etc/restic
+
+# Where the backup and restore scripts are installed.
+backup_scripts_dest: /opt/backup
+
+# When to run the daily backup (systemd OnCalendar format, UTC).
+backup_schedule: "hourly"
+
+# Restic version to install from the official GitHub releases.
+# Check https://github.com/restic/restic/releases for the latest.
+backup_restic_version: "0.17.3"

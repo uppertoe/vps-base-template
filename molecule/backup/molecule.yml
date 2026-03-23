@@ -1,0 +1,46 @@
+---
+# Molecule scenario: backup role
+#
+# Tests that the backup Ansible role correctly deploys scripts, config,
+# and systemd units. Does not execute backup/restore — see the integration
+# tests in backup/tests/integration/ for end-to-end script testing.
+#
+# Run with: molecule test -s backup
+
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../ansible/requirements.yml
+
+driver:
+  name: docker
+
+platforms:
+  - name: ubuntu-2404-backup
+    image: geerlingguy/docker-ubuntu2404-ansible:latest
+    command: ""
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    cgroupns_mode: host
+    privileged: true
+    pre_build_image: true
+
+provisioner:
+  name: ansible
+  env:
+    ANSIBLE_ROLES_PATH: "../../ansible/roles"
+    ANSIBLE_COLLECTIONS_PATH: "~/.ansible/collections"
+  inventory:
+    links:
+      group_vars: ../../ansible/group_vars
+    host_vars:
+      ubuntu-2404-backup:
+        ansible_python_interpreter: /usr/bin/python3
+  playbooks:
+    converge: converge.yml
+    verify: verify.yml
+  options:
+    verbose: false
+
+verifier:
+  name: ansible

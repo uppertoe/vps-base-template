@@ -1,0 +1,19 @@
+# backup.timer — Run the database backup on the configured schedule.
+#
+# Default schedule: hourly (configurable via backup_schedule in group_vars).
+# Persistent=true ensures the backup runs at next boot if the system was
+# offline at the scheduled time (e.g. after a reboot or maintenance window).
+#
+# Installed by the backup Ansible role.
+
+[Unit]
+Description=Database backup — {{ backup_schedule }} schedule
+Requires=backup.service
+
+[Timer]
+OnCalendar={{ backup_schedule }}
+Persistent=true
+Unit=backup.service
+
+[Install]
+WantedBy=timers.target

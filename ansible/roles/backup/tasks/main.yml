@@ -1,0 +1,203 @@
+---
+# =============================================================================
+# backup role — Install and configure the database backup system.
+# =============================================================================
+#
+# Prerequisites:
+#   - backup/config.env must exist in your server repo (copy from config.env.example).
+#   - At least one backup/services/*.env must exist (copy from services/example.env.example).
+#
+# After running this role:
+#   - Scripts are at /opt/backup/backup.sh and /opt/backup/restore.sh.
+#   - Config is at /etc/restic/config.env and /etc/restic/services/*.env.
+#   - backup.timer runs daily at the configured schedule.
+#   - Run `systemctl start backup.service` to trigger a backup immediately.
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# System dependencies
+# ---------------------------------------------------------------------------
+
+- name: Install msmtp, postgresql-client dependencies
+  ansible.builtin.apt:
+    name:
+      - bzip2
+      - ca-certificates
+      - curl
+      - gnupg
+      - msmtp
+      - msmtp-mta
+      - python3
+    state: present
+    update_cache: true
+
+- name: Add PostgreSQL apt signing key
+  ansible.builtin.apt_key:
+    url: https://www.postgresql.org/media/keys/ACCC4CF8.asc
+    keyring: /usr/share/keyrings/postgresql.gpg
+    state: present
+
+- name: Add PostgreSQL apt repository
+  ansible.builtin.apt_repository:
+    repo: >-
+      deb [signed-by=/usr/share/keyrings/postgresql.gpg]
+      https://apt.postgresql.org/pub/repos/apt
+      {{ ansible_distribution_release }}-pgdg main
+    filename: pgdg
+    state: present
+
+- name: Install postgresql-client
+  ansible.builtin.apt:
+    name: postgresql-client-17
+    state: present
+    update_cache: true
+
+# ---------------------------------------------------------------------------
+# Install restic
+# ---------------------------------------------------------------------------
+
+- name: Check installed restic version
+  ansible.builtin.command: restic version
+  register: backup_restic_installed
+  changed_when: false
+  failed_when: false
+
+- name: Install restic {{ backup_restic_version }}
+  when: >-
+    backup_restic_installed.rc != 0 or
+    backup_restic_version not in backup_restic_installed.stdout
+  block:
+    - name: Download restic binary
+      ansible.builtin.get_url:
+        url: >-
+          https://github.com/restic/restic/releases/download/v{{ backup_restic_version }}/restic_{{ backup_restic_version }}_linux_{{ ansible_architecture | replace('x86_64', 'amd64') | replace('aarch64', 'arm64') }}.bz2
+        dest: /tmp/restic.bz2
+        mode: "0644"
+
+    - name: Decompress restic
+      ansible.builtin.shell: bunzip2 -c /tmp/restic.bz2 > /usr/local/bin/restic.tmp
+      changed_when: true
+
+    - name: Install restic binary
+      ansible.builtin.copy:
+        src: /usr/local/bin/restic.tmp
+        dest: /usr/local/bin/restic
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Remove temporary restic files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /tmp/restic.bz2
+        - /usr/local/bin/restic.tmp
+
+# ---------------------------------------------------------------------------
+# Install backup scripts
+# ---------------------------------------------------------------------------
+
+- name: Create scripts directory
+  ansible.builtin.file:
+    path: "{{ backup_scripts_dest }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Install backup.sh
+  ansible.builtin.copy:
+    src: backup.sh
+    dest: "{{ backup_scripts_dest }}/backup.sh"
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Install restore.sh
+  ansible.builtin.copy:
+    src: restore.sh
+    dest: "{{ backup_scripts_dest }}/restore.sh"
+    owner: root
+    group: root
+    mode: "0750"
+
+# ---------------------------------------------------------------------------
+# Deploy configuration
+# ---------------------------------------------------------------------------
+
+- name: Create /etc/restic directory
+  ansible.builtin.file:
+    path: "{{ backup_config_dest }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Create /etc/restic/services directory
+  ansible.builtin.file:
+    path: "{{ backup_config_dest }}/services"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Deploy global config (config.env)
+  ansible.builtin.copy:
+    src: "{{ backup_config_src }}/config.env"
+    dest: "{{ backup_config_dest }}/config.env"
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Find service env files in server repo
+  ansible.builtin.find:
+    paths: "{{ backup_config_src }}/services"
+    patterns: "*.env"
+    file_type: file
+  register: backup_service_files
+  delegate_to: localhost
+  become: false
+
+- name: Deploy service configs
+  ansible.builtin.copy:
+    src: "{{ item.path }}"
+    dest: "{{ backup_config_dest }}/services/{{ item.path | basename }}"
+    owner: root
+    group: root
+    mode: "0600"
+  loop: "{{ backup_service_files.files }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+
+# ---------------------------------------------------------------------------
+# Systemd units
+# ---------------------------------------------------------------------------
+
+- name: Install backup.service
+  ansible.builtin.copy:
+    src: backup.service
+    dest: /etc/systemd/system/backup.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Install backup.timer
+  ansible.builtin.template:
+    src: backup.timer.j2
+    dest: /etc/systemd/system/backup.timer
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Enable and start backup timer
+  ansible.builtin.systemd:
+    name: backup.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+  tags:
+    - molecule-notest

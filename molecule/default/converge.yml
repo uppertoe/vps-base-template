@@ -1,0 +1,25 @@
+---
+# converge.yml — applies all roles to the test container
+#
+# Uses a dummy SSH key for deploy_user_public_key so the role can be tested
+# without needing your real key present.
+
+- name: Converge
+  hosts: all
+  gather_facts: true
+  become: true
+  vars:
+    # A valid-format (but fake) public key for testing purposes
+    deploy_user_public_key: >-
+      ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForMoleculeTesting molecule-test
+  pre_tasks:
+    - name: Mark this as a Molecule test run (disables kernel-level hardening)
+      ansible.builtin.set_fact:
+        molecule_test: true
+  roles:
+    - role: common
+    - role: deploy-user
+    - role: ssh-hardening
+    - role: os-hardening
+    - role: docker
+    - role: firewall

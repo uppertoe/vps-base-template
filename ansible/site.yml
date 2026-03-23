@@ -1,0 +1,25 @@
+---
+# site.yml — full server configuration, run as the deploy user
+#
+# Run this after bootstrap.yml. Safe to re-run (all roles are idempotent).
+#
+# Usage:
+#   ansible-playbook -i ansible/inventory/myserver ansible/site.yml
+#
+# To limit to specific roles, use tags:
+#   ansible-playbook -i ansible/inventory/myserver ansible/site.yml --tags docker
+#   ansible-playbook -i ansible/inventory/myserver ansible/site.yml --tags hardening
+
+- name: Configure server
+  hosts: all
+  gather_facts: true
+  become: true
+  roles:
+    - role: ssh-hardening
+      tags: [hardening, ssh]
+    - role: os-hardening
+      tags: [hardening, os]
+    - role: docker
+      tags: [docker]
+    - role: firewall
+      tags: [firewall]

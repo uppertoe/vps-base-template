@@ -1,0 +1,10 @@
+[Unit]
+Description=Docker system prune — remove unused images, containers, networks
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# --filter until=24h skips images used in the last 24 hours
+# Named volumes are never removed by prune (no -v flag), so app data is safe
+ExecStart=/usr/bin/docker system prune --force --filter "until=24h"

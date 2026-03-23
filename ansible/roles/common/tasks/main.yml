@@ -1,0 +1,39 @@
+---
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Upgrade all packages to latest safe versions
+  ansible.builtin.apt:
+    upgrade: safe
+
+- name: Install common packages
+  ansible.builtin.apt:
+    name: "{{ common_packages }}"
+    state: present
+
+- name: Configure automatic security updates
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+    mode: "0644"
+
+- name: Set server timezone
+  community.general.timezone:
+    name: "{{ server_timezone }}"
+
+- name: Deploy fail2ban SSH jail config
+  ansible.builtin.copy:
+    src: fail2ban-jail-ssh.conf
+    dest: /etc/fail2ban/jail.d/ssh.conf
+    mode: "0644"
+  notify: Restart fail2ban
+
+- name: Enable and start fail2ban
+  ansible.builtin.systemd:
+    name: fail2ban
+    enabled: true
+    state: started

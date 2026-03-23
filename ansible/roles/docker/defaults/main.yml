@@ -1,0 +1,16 @@
+---
+# Docker daemon configuration written to /etc/docker/daemon.json
+# See: https://docs.docker.com/engine/reference/commandline/dockerd/#daemon-configuration-file
+docker_daemon_config:
+  # Keep containers running if the daemon is restarted (e.g. during updates)
+  live-restore: true
+
+  # Prevent container processes from gaining new privileges via setuid/setgid
+  # binaries. Applied as a default — individual containers can override.
+  no-new-privileges: true
+
+  # Log rotation — prevents Docker logs filling the disk on a long-lived server
+  log-driver: json-file
+  log-opts:
+    max-size: "10m"
+    max-file: "3"

@@ -1,0 +1,6 @@
+# Caddyfile — copy this to your server repo root as ./Caddyfile
+#
+# All app routing is discovered automatically from apps/*/*.caddy files.
+# Adding an app requires no changes here.
+
+import /srv/repo/apps/*/*.caddy

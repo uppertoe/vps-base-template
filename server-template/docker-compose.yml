@@ -1,0 +1,7 @@
+---
+# docker-compose.yml
+# Managed partly by scripts/add-app — see that script before editing manually.
+
+include:
+  - scaffold/docker/caddy.base.yml
+  # Apps included below — one line per app, added by: ./scaffold/scripts/add-app

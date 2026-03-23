@@ -1,0 +1,3 @@
+---
+deploy_user: deploy
+deploy_user_public_key: "{{ lookup('file', '~/.ssh/id_ed25519.pub') }}"

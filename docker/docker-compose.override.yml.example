@@ -1,0 +1,20 @@
+# docker-compose.override.yml — copy this to your server repo root
+#
+# Docker Compose automatically merges this file when present. Use it for
+# local development overrides — the production server should not have this
+# file (add it to the server's .gitignore or simply don't create it).
+#
+# This override swaps the production Caddyfile for the local one that uses
+# self-signed certificates.
+#
+# Setup (once per machine):
+#   cp docker-compose.override.yml.example docker-compose.override.yml
+#   cp Caddyfile.local.example Caddyfile.local
+#   docker compose up -d caddy
+#   docker compose exec caddy caddy trust
+#   # Enter your macOS password when prompted — adds local CA to keychain
+
+services:
+  caddy:
+    volumes:
+      - ./Caddyfile.local:/etc/caddy/Caddyfile:ro

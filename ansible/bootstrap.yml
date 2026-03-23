@@ -1,0 +1,25 @@
+---
+# bootstrap.yml — run ONCE on a fresh server, as root
+#
+# This playbook creates the non-root deploy user and installs common packages.
+# After this runs, all further access uses the deploy user — root login will
+# be disabled by site.yml.
+#
+# Usage:
+#   ansible-playbook -i ansible/inventory/myserver ansible/bootstrap.yml
+#
+# If your provider gave you a root password instead of an SSH key, add:
+#   --ask-pass
+#
+# If your provider gave you a non-root sudo user (e.g. ubuntu on AWS):
+#   Override ansible_user in your inventory instead of using root here.
+
+- name: Bootstrap server
+  hosts: all
+  gather_facts: true
+  become: true
+  vars:
+    ansible_user: root
+  roles:
+    - role: common
+    - role: deploy-user

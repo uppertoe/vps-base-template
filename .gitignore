@@ -1,0 +1,29 @@
+# Ansible
+*.retry
+ansible/inventory/!(production.example)   # ignore all inventories except the example
+
+# Environment files
+.env
+*.env
+!*.env.example
+
+# Python / Ansible / Molecule
+__pycache__/
+*.pyc
+.pytest_cache/
+.molecule/
+.cache/
+
+# Audit reports (fetched from servers — may contain sensitive system info)
+reports/
+
+# Python venv
+.venv/
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+*.swp

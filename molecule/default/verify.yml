@@ -1,0 +1,225 @@
+---
+# verify.yml — asserts the expected post-state of the server
+# Run standalone with: molecule verify
+
+- name: Verify
+  hosts: all
+  gather_facts: true
+  become: true
+  tasks:
+
+    # -------------------------------------------------------------------------
+    # Deploy user
+    # -------------------------------------------------------------------------
+    - name: Gather deploy user info
+      ansible.builtin.getent:
+        database: passwd
+        key: deploy
+
+    - name: Assert deploy user exists
+      ansible.builtin.assert:
+        that:
+          - "'deploy' in getent_passwd"
+        msg: "deploy user was not created"
+
+    - name: Check deploy user authorized_keys
+      ansible.builtin.stat:
+        path: /home/deploy/.ssh/authorized_keys
+      register: auth_keys
+
+    - name: Assert authorized_keys exists
+      ansible.builtin.assert:
+        that:
+          - auth_keys.stat.exists
+        msg: "authorized_keys file not found for deploy user"
+
+    - name: Check deploy sudoers file
+      ansible.builtin.stat:
+        path: /etc/sudoers.d/deploy
+      register: sudoers_file
+
+    - name: Assert deploy sudoers file exists
+      ansible.builtin.assert:
+        that:
+          - sudoers_file.stat.exists
+        msg: "sudoers file for deploy user not found"
+
+    # -------------------------------------------------------------------------
+    # SSH hardening
+    # -------------------------------------------------------------------------
+    - name: Read SSH config
+      ansible.builtin.slurp:
+        src: /etc/ssh/sshd_config
+      register: sshd_config_raw
+
+    - name: Set sshd_config content fact
+      ansible.builtin.set_fact:
+        sshd_config: "{{ sshd_config_raw.content | b64decode }}"
+
+    - name: Check for sshd_config.d includes (modern systems split config)
+      ansible.builtin.find:
+        paths: /etc/ssh/sshd_config.d
+        patterns: "*.conf"
+      register: sshd_config_d
+      failed_when: false
+
+    - name: Read sshd_config.d files if present
+      ansible.builtin.slurp:
+        src: "{{ item.path }}"
+      loop: "{{ sshd_config_d.files | default([]) }}"
+      register: sshd_config_d_raw
+      when: sshd_config_d.files is defined and sshd_config_d.files | length > 0
+
+    - name: Assert PasswordAuthentication is disabled
+      ansible.builtin.assert:
+        that:
+          - >-
+            'PasswordAuthentication no' in sshd_config or
+            (sshd_config_d_raw.results | default([]) |
+             map(attribute='content') | map('b64decode') |
+             select('search', 'PasswordAuthentication no') | list | length > 0)
+        msg: "SSH password authentication is not disabled"
+
+    # -------------------------------------------------------------------------
+    # Docker
+    # Note: Docker CE installation is skipped in Molecule (molecule-notest tag)
+    # because installing Docker-in-Docker is OOM-prone and not meaningful to test.
+    # Verify on a real VPS with: ansible-playbook ... && docker --version
+    # Here we verify: docker group exists, daemon.json is deployed, user is in group.
+    # -------------------------------------------------------------------------
+    - name: Check docker group exists
+      ansible.builtin.getent:
+        database: group
+        key: docker
+      register: docker_group_check
+      failed_when: false
+
+    - name: Assert docker group exists
+      ansible.builtin.assert:
+        that:
+          - "'docker' in getent_group"
+        msg: "docker group was not created — docker CE install may have been skipped"
+
+    - name: Check Docker daemon.json exists
+      ansible.builtin.stat:
+        path: /etc/docker/daemon.json
+      register: daemon_json
+
+    - name: Assert daemon.json exists
+      ansible.builtin.assert:
+        that:
+          - daemon_json.stat.exists
+        msg: "/etc/docker/daemon.json not found — daemon is unconfigured"
+
+    - name: Read daemon.json
+      ansible.builtin.slurp:
+        src: /etc/docker/daemon.json
+      register: daemon_json_raw
+
+    - name: Assert live-restore is enabled in daemon.json
+      ansible.builtin.assert:
+        that:
+          - (daemon_json_raw.content | b64decode | from_json)['live-restore'] == true
+        msg: "live-restore is not enabled in daemon.json"
+
+    - name: Check deploy user is in docker group
+      ansible.builtin.command: id deploy
+      register: deploy_id
+      changed_when: false
+
+    - name: Assert deploy user is in docker group
+      ansible.builtin.assert:
+        that:
+          - "'docker' in deploy_id.stdout"
+        msg: "deploy user is not in the docker group"
+
+    # -------------------------------------------------------------------------
+    # Firewall
+    # -------------------------------------------------------------------------
+    - name: Check ufw is installed
+      ansible.builtin.stat:
+        path: /usr/sbin/ufw
+      register: ufw_bin
+
+    - name: Assert ufw is installed
+      ansible.builtin.assert:
+        that:
+          - ufw_bin.stat.exists
+        msg: "ufw is not installed"
+
+    - name: Check ufw status
+      ansible.builtin.command: ufw status
+      register: ufw_status
+      changed_when: false
+
+    - name: Assert ufw is active
+      ansible.builtin.assert:
+        that:
+          - "'active' in ufw_status.stdout"
+        msg: "ufw firewall is not active. Status: {{ ufw_status.stdout }}"
+
+    # -------------------------------------------------------------------------
+    # Deploy directory
+    # -------------------------------------------------------------------------
+    - name: Check /opt/deploy exists and is owned by deploy user
+      ansible.builtin.stat:
+        path: /opt/deploy
+      register: deploy_dir
+
+    - name: Assert /opt/deploy exists
+      ansible.builtin.assert:
+        that:
+          - deploy_dir.stat.exists
+          - deploy_dir.stat.isdir
+          - deploy_dir.stat.pw_name == 'deploy'
+        msg: "/opt/deploy directory missing or not owned by deploy user"
+
+    # -------------------------------------------------------------------------
+    # fail2ban SSH jail
+    # -------------------------------------------------------------------------
+    - name: Check fail2ban SSH jail config exists
+      ansible.builtin.stat:
+        path: /etc/fail2ban/jail.d/ssh.conf
+      register: fail2ban_ssh
+
+    - name: Assert fail2ban SSH jail config exists
+      ansible.builtin.assert:
+        that:
+          - fail2ban_ssh.stat.exists
+        msg: "fail2ban SSH jail config not found at /etc/fail2ban/jail.d/ssh.conf"
+
+    - name: Read fail2ban SSH jail config
+      ansible.builtin.slurp:
+        src: /etc/fail2ban/jail.d/ssh.conf
+      register: fail2ban_ssh_raw
+
+    - name: Assert fail2ban SSH jail is enabled
+      ansible.builtin.assert:
+        that:
+          - "'enabled  = true' in (fail2ban_ssh_raw.content | b64decode)"
+        msg: "fail2ban SSH jail is not enabled"
+
+    # -------------------------------------------------------------------------
+    # Docker prune timer
+    # -------------------------------------------------------------------------
+    - name: Check docker-prune service unit exists
+      ansible.builtin.stat:
+        path: /etc/systemd/system/docker-prune.service
+      register: prune_service
+
+    - name: Assert docker-prune service unit exists
+      ansible.builtin.assert:
+        that:
+          - prune_service.stat.exists
+        msg: "docker-prune.service unit not found"
+
+    - name: Check docker-prune timer unit exists
+      ansible.builtin.stat:
+        path: /etc/systemd/system/docker-prune.timer
+      register: prune_timer
+
+    - name: Assert docker-prune timer unit exists
+      ansible.builtin.assert:
+        that:
+          - prune_timer.stat.exists
+        msg: "docker-prune.timer unit not found"

@@ -1,0 +1,13 @@
+# Caddyfile.local — local development override
+# Mounted by docker-compose.override.yml instead of Caddyfile.
+# Uses self-signed certs via Caddy's local CA.
+#
+# One-time setup:
+#   docker compose exec caddy caddy trust
+#   (enter macOS password — adds CA to keychain)
+
+{
+    local_certs
+}
+
+import /srv/repo/apps/*/*.caddy

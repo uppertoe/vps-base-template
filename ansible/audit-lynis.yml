@@ -1,0 +1,95 @@
+---
+# audit-lynis.yml — run a Lynis security audit and fetch the report
+#
+# Lynis audits the running system against CIS Benchmark and other standards,
+# producing a hardening index score (0-100) and a prioritised list of findings.
+#
+# Usage:
+#   ansible-playbook -i ansible/inventory/myserver ansible/audit-lynis.yml
+#
+# Reports are saved locally to ./reports/lynis-<hostname>-<date>/
+# Run this after provisioning, and periodically thereafter.
+#
+# Interpreting the hardening index:
+#   < 60  — significant gaps, review findings immediately
+#   60-75 — reasonable baseline, work through suggestions
+#   75-85 — good hardening (realistic target for a web server)
+#   > 85  — strong hardening; remaining findings are often low-risk or
+#            intentional trade-offs (e.g. running a public web server
+#            will always flag open ports 80/443)
+#
+# NOTE: Run against a real VPS, not a Molecule container. Many Lynis checks
+# are kernel/host-level and report incorrectly inside containers.
+
+- name: Lynis security audit
+  hosts: all
+  gather_facts: true
+  become: true
+
+  vars:
+    lynis_report_dir: "/var/log/lynis"
+    local_report_dir: "reports/lynis-{{ inventory_hostname }}-{{ ansible_date_time.date }}"
+
+  tasks:
+    - name: Install Lynis
+      ansible.builtin.apt:
+        name: lynis
+        state: present
+        update_cache: true
+
+    - name: Ensure report directory exists on server
+      ansible.builtin.file:
+        path: "{{ lynis_report_dir }}"
+        state: directory
+        mode: "0750"
+
+    - name: Run Lynis audit
+      ansible.builtin.command:
+        cmd: >-
+          lynis audit system
+          --quiet
+          --no-colors
+          --report-file {{ lynis_report_dir }}/report.dat
+          --logfile {{ lynis_report_dir }}/lynis.log
+      changed_when: true  # lynis always writes new output
+      register: lynis_output
+
+    - name: Print hardening index
+      ansible.builtin.debug:
+        msg: >-
+          {{
+            lynis_output.stdout_lines
+            | select('match', '.*Hardening index.*')
+            | list
+            | join('')
+            | default('Hardening index not found in stdout — check lynis.log')
+          }}
+
+    - name: Print warning count
+      ansible.builtin.debug:
+        msg: >-
+          {{
+            lynis_output.stdout_lines
+            | select('match', '.*[Ww]arning.*')
+            | list
+          }}
+
+    - name: Fetch Lynis log
+      ansible.builtin.fetch:
+        src: "{{ lynis_report_dir }}/lynis.log"
+        dest: "{{ local_report_dir }}/lynis.log"
+        flat: true
+
+    - name: Fetch Lynis report data
+      ansible.builtin.fetch:
+        src: "{{ lynis_report_dir }}/report.dat"
+        dest: "{{ local_report_dir }}/report.dat"
+        flat: true
+
+    - name: Remind how to read results
+      ansible.builtin.debug:
+        msg:
+          - "Full report saved to: {{ local_report_dir }}/"
+          - "View warnings:     grep 'warning' {{ local_report_dir }}/report.dat"
+          - "View suggestions:  grep 'suggestion' {{ local_report_dir }}/report.dat"
+          - "Online reference:  https://cisofy.com/lynis/controls/<TEST-ID>"

@@ -1,0 +1,95 @@
+---
+# audit-docker.yml — CIS Docker Benchmark audit via docker/docker-bench-security
+#
+# Docker's official benchmark tool. Checks the running Docker daemon, images,
+# containers, and runtime against the CIS Docker Benchmark controls.
+#
+# Source: https://github.com/docker/docker-bench-security
+#
+# Usage:
+#   ansible-playbook -i ansible/inventory/myserver ansible/audit-docker.yml
+#
+# Reports are saved locally to ./reports/docker-bench-<hostname>-<date>/
+#
+# Unlike the OS audit tools, this one IS meaningful in a container to some
+# extent — but run it on a real server with your actual running containers
+# for useful results.
+
+- name: Docker CIS Benchmark audit
+  hosts: all
+  gather_facts: true
+  become: true
+
+  vars:
+    local_report_dir: "reports/docker-bench-{{ inventory_hostname }}-{{ ansible_date_time.date }}"
+
+  tasks:
+    - name: Install git (required to clone docker-bench-security)
+      ansible.builtin.apt:
+        name: git
+        state: present
+
+    - name: Clone docker-bench-security
+      ansible.builtin.git:
+        repo: https://github.com/docker/docker-bench-security.git
+        dest: /opt/docker-bench-security
+        version: main
+        force: true
+
+    - name: Run docker-bench-security
+      ansible.builtin.shell:
+        cmd: >-
+          bash docker-bench-security.sh
+          -l /tmp/docker-bench.log
+          -u /tmp/docker-bench-output.json
+          2>/dev/null
+        chdir: /opt/docker-bench-security
+      register: bench_result
+      changed_when: false
+      # Non-zero exit is normal when warnings/failures are found
+      failed_when: false
+
+    - name: Print summary (WARN and FAIL lines)
+      ansible.builtin.debug:
+        msg: >-
+          {{
+            bench_result.stdout_lines
+            | select('match', '.*(WARN|FAIL).*')
+            | list
+          }}
+
+    - name: Ensure local report directory exists
+      ansible.builtin.file:
+        path: "{{ local_report_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      become: false
+
+    - name: Fetch text log
+      ansible.builtin.fetch:
+        src: /tmp/docker-bench.log
+        dest: "{{ local_report_dir }}/docker-bench.log"
+        flat: true
+
+    - name: Fetch JSON output
+      ansible.builtin.fetch:
+        src: /tmp/docker-bench-output.json
+        dest: "{{ local_report_dir }}/docker-bench.json"
+        flat: true
+      # JSON output may not exist on older versions of the tool
+      failed_when: false
+
+    - name: Remind how to read results
+      ansible.builtin.debug:
+        msg:
+          - "Full log: {{ local_report_dir }}/docker-bench.log"
+          - "Each line references a CIS Docker Benchmark control number"
+          - "e.g. [WARN] 2.1 means CIS Docker Benchmark section 2.1"
+          - "Reference: https://github.com/docker/docker-bench-security"
+          - "CIS Docker Benchmark PDF: https://www.cisecurity.org/benchmark/docker"
+
+    - name: Clean up cloned repo
+      ansible.builtin.file:
+        path: /opt/docker-bench-security
+        state: absent

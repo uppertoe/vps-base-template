@@ -1,0 +1,51 @@
+---
+# -----------------------------------------------------------------------------
+# Deploy user
+# -----------------------------------------------------------------------------
+deploy_user: deploy
+
+# Path to the public key on your LOCAL machine that will be added to the
+# server's authorized_keys. Override per-server in inventory host_vars if
+# needed (e.g. for a shared team key).
+deploy_user_public_key: "{{ lookup('file', '~/.ssh/id_ed25519.pub') }}"
+
+# -----------------------------------------------------------------------------
+# Server basics
+# -----------------------------------------------------------------------------
+server_timezone: UTC
+
+# -----------------------------------------------------------------------------
+# SSH hardening (passed to devsec.hardening.ssh_hardening)
+# See: https://github.com/dev-sec/ansible-collection-hardening
+# -----------------------------------------------------------------------------
+ssh_permit_root_login: "no"
+ssh_password_authentication: "no"
+ssh_challenge_response_authentication: "no"
+ssh_gss_api_authentication: "no"
+ssh_kerberos_authentication: "no"
+ssh_x11_forwarding: false
+ssh_max_auth_tries: 3
+ssh_allow_tcp_forwarding: "no"
+ssh_print_motd: false
+ssh_print_last_log: true
+# Only allow the deploy user to connect via SSH
+ssh_allowed_users: "{{ deploy_user }}"
+
+# -----------------------------------------------------------------------------
+# OS hardening (passed to devsec.hardening.os_hardening)
+# Skipped automatically when running inside Docker (Molecule tests)
+# -----------------------------------------------------------------------------
+os_security_kernel_enable_module_loading: true
+os_security_suid_sgid_enforce: true
+os_auth_retries: 5
+os_auth_lockout_time: 600
+
+# -----------------------------------------------------------------------------
+# Firewall (ufw)
+# -----------------------------------------------------------------------------
+firewall_allowed_tcp_ports:
+  - "22"   # SSH
+  - "80"   # HTTP
+  - "443"  # HTTPS
+firewall_allowed_udp_ports:
+  - "443"  # HTTP/3

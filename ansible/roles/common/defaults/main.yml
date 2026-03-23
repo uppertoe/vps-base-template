@@ -1,0 +1,10 @@
+---
+common_packages:
+  - curl
+  - git
+  - unattended-upgrades
+  - apt-listchanges
+  - fail2ban
+  - htop
+  - vim
+  - ufw

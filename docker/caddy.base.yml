@@ -1,0 +1,46 @@
+---
+# caddy.base.yml — base Caddy service definition
+#
+# Included by server repos via:
+#
+#   include:
+#     - scaffold/docker/caddy.base.yml
+#
+# Caddy discovers routing automatically by importing all *.caddy files
+# from apps/*/. Adding an app requires no changes to this file or the
+# Caddyfile — just drop a .caddy file in the app directory.
+#
+# Environment variables (from server .env):
+#   DOMAIN      → primary domain, available as {$DOMAIN} in caddy snippets
+#   ACME_EMAIL  → Let's Encrypt registration email (optional)
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"   # HTTP/3 (QUIC)
+    volumes:
+      # Mount repo root so the glob can reach apps/*/*.caddy
+      - .:/srv/repo:ro
+      # Caddyfile mounted explicitly for clarity
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data          # TLS certs — persisted across restarts
+      - caddy_logs:/var/log/caddy
+    networks:
+      - caddy
+    environment:
+      - DOMAIN=${DOMAIN}
+      - ACME_EMAIL=${ACME_EMAIL:-}
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+
+networks:
+  caddy:
+    name: caddy  # fixed name so app containers can join it
+
+volumes:
+  caddy_data:
+  caddy_logs:

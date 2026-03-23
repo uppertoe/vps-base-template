@@ -1,0 +1,119 @@
+---
+# audit-openscap.yml — CIS Benchmark compliance scan via OpenSCAP
+#
+# OpenSCAP implements NIST's SCAP standard. The scap-security-guide package
+# provides official CIS Benchmark profiles for Ubuntu and Debian.
+# Reports are in XCCDF format — machine-readable and accepted by auditors.
+#
+# Usage:
+#   ansible-playbook -i ansible/inventory/myserver ansible/audit-openscap.yml
+#
+# Reports are saved locally to ./reports/openscap-<hostname>-<date>/
+# Open the HTML report in a browser for a readable view of pass/fail rules.
+#
+# Profiles available (Ubuntu 24.04):
+#   xccdf_org.ssgproject.content_profile_cis_level1_server   ← recommended
+#   xccdf_org.ssgproject.content_profile_cis_level2_server   ← stricter
+#   xccdf_org.ssgproject.content_profile_stig                ← DISA STIG
+#
+# NOTE: Run against a real VPS. OpenSCAP checks kernel parameters, mount
+# options, and other host-level settings that don't exist in containers.
+# A pass on a container means nothing.
+
+- name: OpenSCAP CIS Benchmark audit
+  hosts: all
+  gather_facts: true
+  become: true
+
+  vars:
+    openscap_profile: xccdf_org.ssgproject.content_profile_cis_level1_server
+    openscap_report_dir: /tmp/openscap
+    local_report_dir: "reports/openscap-{{ inventory_hostname }}-{{ ansible_date_time.date }}"
+
+    # SCAP content path varies by distro/version — set automatically below
+    scap_content_ubuntu: /usr/share/xml/scap/ssg/content/ssg-ubuntu2404-ds.xml
+    scap_content_debian: /usr/share/xml/scap/ssg/content/ssg-debian12-ds.xml
+
+  tasks:
+    - name: Install OpenSCAP scanner and security guide
+      ansible.builtin.apt:
+        name:
+          - libopenscap8
+          - openscap-scanner
+          - ssg-base
+          - ssg-debderived
+        state: present
+        update_cache: true
+
+    - name: Set SCAP content path for Ubuntu
+      ansible.builtin.set_fact:
+        scap_content_path: "{{ scap_content_ubuntu }}"
+      when: ansible_distribution == 'Ubuntu'
+
+    - name: Set SCAP content path for Debian
+      ansible.builtin.set_fact:
+        scap_content_path: "{{ scap_content_debian }}"
+      when: ansible_distribution == 'Debian'
+
+    - name: Verify SCAP content file exists
+      ansible.builtin.stat:
+        path: "{{ scap_content_path }}"
+      register: scap_content_stat
+
+    - name: Fail if SCAP content not found
+      ansible.builtin.fail:
+        msg: >-
+          SCAP content not found at {{ scap_content_path }}.
+          Check that ssg-debderived is installed and the distro version matches.
+      when: not scap_content_stat.stat.exists
+
+    - name: Create report directory on server
+      ansible.builtin.file:
+        path: "{{ openscap_report_dir }}"
+        state: directory
+        mode: "0750"
+
+    - name: Run OpenSCAP CIS scan
+      ansible.builtin.command:
+        cmd: >-
+          oscap xccdf eval
+          --profile {{ openscap_profile }}
+          --results {{ openscap_report_dir }}/results.xml
+          --report {{ openscap_report_dir }}/report.html
+          --oval-results
+          {{ scap_content_path }}
+      # oscap exits 2 when rules fail (expected on a non-fully-compliant system)
+      # exit 1 means a real error; exit 0 means all rules passed
+      register: oscap_result
+      changed_when: false
+      failed_when: oscap_result.rc == 1
+
+    - name: Print pass/fail summary
+      ansible.builtin.debug:
+        msg: >-
+          {{
+            oscap_result.stdout_lines
+            | select('match', '.*(pass|fail|Score).*')
+            | list
+          }}
+
+    - name: Fetch HTML report
+      ansible.builtin.fetch:
+        src: "{{ openscap_report_dir }}/report.html"
+        dest: "{{ local_report_dir }}/report.html"
+        flat: true
+
+    - name: Fetch XML results
+      ansible.builtin.fetch:
+        src: "{{ openscap_report_dir }}/results.xml"
+        dest: "{{ local_report_dir }}/results.xml"
+        flat: true
+
+    - name: Remind how to read results
+      ansible.builtin.debug:
+        msg:
+          - "Open {{ local_report_dir }}/report.html in a browser for full results"
+          - "Failed rules are CIS Benchmark Level 1 requirements not currently met"
+          - "Each rule links to the CIS control ID and remediation guidance"
+          - "Some failures are intentional trade-offs for a public web server"
+          - "(e.g. CIS may recommend disabling IPv6 — you may choose not to)"

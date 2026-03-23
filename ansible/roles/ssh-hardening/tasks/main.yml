@@ -1,0 +1,8 @@
+---
+# Thin wrapper around the dev-sec.io ssh_hardening role.
+# Variables are set in group_vars/all.yml and passed through automatically.
+# See: https://github.com/dev-sec/ansible-collection-hardening/blob/master/roles/ssh_hardening/README.md
+
+- name: Apply SSH hardening via dev-sec.io
+  ansible.builtin.include_role:
+    name: devsec.hardening.ssh_hardening

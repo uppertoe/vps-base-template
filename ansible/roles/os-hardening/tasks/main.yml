@@ -1,0 +1,12 @@
+---
+# Thin wrapper around the dev-sec.io os_hardening role.
+# Skipped automatically inside Docker containers (Molecule tests) because
+# kernel-level settings (sysctl) cannot be changed in unprivileged containers.
+# On a real VPS these all apply.
+#
+# See: https://github.com/dev-sec/ansible-collection-hardening/blob/master/roles/os_hardening/README.md
+
+- name: Apply OS hardening via dev-sec.io
+  ansible.builtin.include_role:
+    name: devsec.hardening.os_hardening
+  when: ansible_virtualization_type not in ['docker', 'container', 'lxc']

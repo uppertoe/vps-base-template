@@ -1,0 +1,53 @@
+---
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../ansible/requirements.yml
+
+driver:
+  name: docker
+
+# Test against multiple distros.
+# Images are from geerlingguy — multi-arch, includes systemd, works on Apple Silicon.
+platforms:
+  - name: ubuntu-2404
+    image: geerlingguy/docker-ubuntu2404-ansible:latest
+    command: ""
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    cgroupns_mode: host
+    privileged: true
+    pre_build_image: true
+
+  - name: debian-12
+    image: geerlingguy/docker-debian12-ansible:latest
+    command: ""
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    cgroupns_mode: host
+    privileged: true
+    pre_build_image: true
+
+provisioner:
+  name: ansible
+  env:
+    ANSIBLE_ROLES_PATH: "../../ansible/roles"
+    ANSIBLE_COLLECTIONS_PATH: "~/.ansible/collections"
+  inventory:
+    links:
+      group_vars: ../../ansible/group_vars
+    host_vars:
+      ubuntu-2404:
+        ansible_python_interpreter: /usr/bin/python3
+      debian-12:
+        ansible_python_interpreter: /usr/bin/python3
+  playbooks:
+    prepare: prepare.yml
+    converge: converge.yml
+    verify: verify.yml
+  options:
+    # -v for verbose output; increase to -vvv for full debug
+    verbose: false
+
+verifier:
+  name: ansible

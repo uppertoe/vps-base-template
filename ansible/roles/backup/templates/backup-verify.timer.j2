@@ -1,0 +1,18 @@
+# backup-verify.timer — Run periodic repository integrity checks.
+#
+# This is intentionally less frequent than the main backup timer to avoid
+# unnecessary remote storage reads on every scheduled backup.
+#
+# Installed by the backup Ansible role.
+
+[Unit]
+Description=Database backup verification — {{ backup_verify_schedule }} schedule
+Requires=backup-verify.service
+
+[Timer]
+OnCalendar={{ backup_verify_schedule }}
+Persistent=true
+Unit=backup-verify.service
+
+[Install]
+WantedBy=timers.target

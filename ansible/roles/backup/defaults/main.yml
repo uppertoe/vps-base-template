@@ -9,8 +9,12 @@ backup_config_dest: /etc/restic
 # Where the backup and restore scripts are installed.
 backup_scripts_dest: /opt/backup
 
-# When to run the daily backup (systemd OnCalendar format, UTC).
+# When to run scheduled backups (systemd OnCalendar format, UTC).
 backup_schedule: "hourly"
+
+# When to run repository verification (restic check + snapshot listing).
+# Keep this less frequent than backups to avoid unnecessary storage churn.
+backup_verify_schedule: "weekly"
 
 # Restic version to install from the official GitHub releases.
 # Check https://github.com/restic/restic/releases for the latest.

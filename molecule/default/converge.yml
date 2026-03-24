@@ -1,17 +1,16 @@
 ---
 # converge.yml — applies all roles to the test container
 #
-# Uses a dummy SSH key for deploy_user_public_key so the role can be tested
-# without needing your real key present.
+# Uses a fixture SSH key path so Molecule exercises the same
+# ansible_ssh_private_key_file -> .pub lookup used during real provisioning.
 
 - name: Converge
   hosts: all
   gather_facts: true
   become: true
+  serial: 1
   vars:
-    # A valid-format (but fake) public key for testing purposes
-    deploy_user_public_key: >-
-      ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForMoleculeTesting molecule-test
+    ansible_ssh_private_key_file: "{{ playbook_dir }}/fixtures/id_ed25519_molecule"
   pre_tasks:
     - name: Mark this as a Molecule test run (disables kernel-level hardening)
       ansible.builtin.set_fact:

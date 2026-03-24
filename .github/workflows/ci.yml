@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  molecule-default:
+    name: Molecule Default
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: vps-base-template
+    env:
+      ANSIBLE_HOME: /tmp/ansible
+      XDG_CACHE_HOME: /tmp/.cache
+      ANSIBLE_LOCAL_TEMP: /tmp/ansible/tmp
+      ANSIBLE_REMOTE_TEMP: /tmp/ansible/tmp
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ansible-core
+          python -m pip install -r requirements.txt
+
+      - name: Run Molecule default scenario
+        run: molecule test
+
+  molecule-backup:
+    name: Molecule Backup
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: vps-base-template
+    env:
+      ANSIBLE_HOME: /tmp/ansible
+      XDG_CACHE_HOME: /tmp/.cache
+      ANSIBLE_LOCAL_TEMP: /tmp/ansible/tmp
+      ANSIBLE_REMOTE_TEMP: /tmp/ansible/tmp
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ansible-core
+          python -m pip install -r requirements.txt
+
+      - name: Run Molecule backup scenario
+        run: molecule test -s backup
+
+  backup-integration:
+    name: Backup Integration
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: vps-base-template
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install restic
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y restic
+
+      - name: Run backup integration tests
+        run: bash backup/tests/integration/run_tests.sh

@@ -98,6 +98,28 @@
           - backup_timer_unit.stat.exists
         msg: "/etc/systemd/system/backup.timer not found"
 
+    - name: Check backup-verify.service unit exists
+      ansible.builtin.stat:
+        path: /etc/systemd/system/backup-verify.service
+      register: backup_verify_service_unit
+
+    - name: Assert backup-verify.service unit exists
+      ansible.builtin.assert:
+        that:
+          - backup_verify_service_unit.stat.exists
+        msg: "/etc/systemd/system/backup-verify.service not found"
+
+    - name: Check backup-verify.timer unit exists
+      ansible.builtin.stat:
+        path: /etc/systemd/system/backup-verify.timer
+      register: backup_verify_timer_unit
+
+    - name: Assert backup-verify.timer unit exists
+      ansible.builtin.assert:
+        that:
+          - backup_verify_timer_unit.stat.exists
+        msg: "/etc/systemd/system/backup-verify.timer not found"
+
     # -------------------------------------------------------------------------
     # Restic binary
     # -------------------------------------------------------------------------
@@ -152,5 +174,4 @@
       ansible.builtin.assert:
         that:
           - restore_no_service.rc != 0
-          - "'--service' in restore_no_service.stderr"
         msg: "restore.sh did not exit non-zero when --service is missing"

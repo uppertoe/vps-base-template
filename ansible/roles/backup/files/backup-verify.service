@@ -1,0 +1,28 @@
+# backup-verify.service — One-shot systemd service for periodic repository checks.
+#
+# Triggered by backup-verify.timer. Do not enable this unit directly.
+# Installed by the backup Ansible role.
+
+[Unit]
+Description=Database backup verification (restic check)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+
+# Load global backup config (AWS creds, SMTP, retention).
+# Per-service configs are sourced by the script itself.
+EnvironmentFile=/etc/restic/config.env
+
+ExecStart=/opt/backup/backup.sh --verify
+
+# restic check can take much longer than a normal backup on larger repositories.
+TimeoutStartSec=2h
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=backup-verify
+
+[Install]
+WantedBy=multi-user.target

@@ -15,7 +15,7 @@ Type=oneshot
 # Per-service configs are sourced by the script itself.
 EnvironmentFile=/etc/restic/config.env
 
-ExecStart=/opt/backup/backup.sh --verify
+ExecStart=/opt/backup/backup.sh
 
 # Kill after 30 minutes to prevent a hung pg_dump blocking the next run.
 # Restic uploads are resumable; no partial state is left in the repository.

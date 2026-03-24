@@ -37,6 +37,7 @@ provisioner:
       ubuntu-2404-backup:
         ansible_python_interpreter: /usr/bin/python3
   playbooks:
+    cleanup: cleanup.yml
     converge: converge.yml
     verify: verify.yml
   options:
@@ -44,3 +45,13 @@ provisioner:
 
 verifier:
   name: ansible
+
+scenario:
+  test_sequence:
+    - destroy
+    - syntax
+    - create
+    - converge
+    - idempotence
+    - verify
+    - destroy

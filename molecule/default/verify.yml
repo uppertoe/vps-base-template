@@ -15,11 +15,12 @@
       ansible.builtin.getent:
         database: passwd
         key: deploy
+      register: deploy_user_info
 
     - name: Assert deploy user exists
       ansible.builtin.assert:
         that:
-          - "'deploy' in getent_passwd"
+          - "'deploy' in deploy_user_info.ansible_facts.getent_passwd"
         msg: "deploy user was not created"
 
     - name: Check deploy user authorized_keys
@@ -31,7 +32,23 @@
       ansible.builtin.assert:
         that:
           - auth_keys.stat.exists
+          - auth_keys.stat.pw_name == 'deploy'
+          - auth_keys.stat.gr_name == 'deploy'
+          - auth_keys.stat.mode == '0600'
         msg: "authorized_keys file not found for deploy user"
+
+    - name: Read deploy user authorized_keys
+      ansible.builtin.slurp:
+        src: /home/deploy/.ssh/authorized_keys
+      register: deploy_authorized_keys_raw
+
+    - name: Assert deploy user authorized_keys contains the fixture key
+      ansible.builtin.assert:
+        that:
+          - >-
+            'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyFromFixtureForMolecule
+            molecule-fixture' in (deploy_authorized_keys_raw.content | b64decode)
+        msg: "deploy user authorized_keys does not contain the configured fixture public key"
 
     - name: Check deploy sudoers file
       ansible.builtin.stat:
@@ -42,7 +59,22 @@
       ansible.builtin.assert:
         that:
           - sudoers_file.stat.exists
+          - sudoers_file.stat.pw_name == 'root'
+          - sudoers_file.stat.gr_name == 'root'
+          - sudoers_file.stat.mode == '0440'
         msg: "sudoers file for deploy user not found"
+
+    - name: Read deploy sudoers file
+      ansible.builtin.slurp:
+        src: /etc/sudoers.d/deploy
+      register: deploy_sudoers_raw
+
+    - name: Assert deploy sudoers grants passwordless sudo
+      ansible.builtin.assert:
+        that:
+          - >-
+            'deploy ALL=(ALL) NOPASSWD:ALL' in (deploy_sudoers_raw.content | b64decode)
+        msg: "deploy sudoers does not grant expected passwordless sudo access"
 
     # -------------------------------------------------------------------------
     # SSH hardening
@@ -80,6 +112,26 @@
              select('search', 'PasswordAuthentication no') | list | length > 0)
         msg: "SSH password authentication is not disabled"
 
+    - name: Assert root SSH login is disabled
+      ansible.builtin.assert:
+        that:
+          - >-
+            'PermitRootLogin no' in sshd_config or
+            (sshd_config_d_raw.results | default([]) |
+             map(attribute='content') | map('b64decode') |
+             select('search', 'PermitRootLogin no') | list | length > 0)
+        msg: "SSH root login is not disabled"
+
+    - name: Assert SSH access is restricted to the deploy user
+      ansible.builtin.assert:
+        that:
+          - >-
+            'AllowUsers deploy' in sshd_config or
+            (sshd_config_d_raw.results | default([]) |
+             map(attribute='content') | map('b64decode') |
+             select('search', 'AllowUsers deploy') | list | length > 0)
+        msg: "SSH is not restricted to the deploy user"
+
     # -------------------------------------------------------------------------
     # Docker
     # Note: Docker CE installation is skipped in Molecule (molecule-notest tag)
@@ -97,7 +149,8 @@
     - name: Assert docker group exists
       ansible.builtin.assert:
         that:
-          - "'docker' in getent_group"
+          - docker_group_check.ansible_facts.getent_group is defined
+          - "'docker' in docker_group_check.ansible_facts.getent_group"
         msg: "docker group was not created — docker CE install may have been skipped"
 
     - name: Check Docker daemon.json exists
@@ -158,6 +211,15 @@
           - "'active' in ufw_status.stdout"
         msg: "ufw firewall is not active. Status: {{ ufw_status.stdout }}"
 
+    - name: Assert ufw allows expected ports
+      ansible.builtin.assert:
+        that:
+          - "'22/tcp' in ufw_status.stdout"
+          - "'80/tcp' in ufw_status.stdout"
+          - "'443/tcp' in ufw_status.stdout"
+          - "'443/udp' in ufw_status.stdout"
+        msg: "ufw is active but expected ports are not all present. Status: {{ ufw_status.stdout }}"
+
     # -------------------------------------------------------------------------
     # Deploy directory
     # -------------------------------------------------------------------------
@@ -172,7 +234,22 @@
           - deploy_dir.stat.exists
           - deploy_dir.stat.isdir
           - deploy_dir.stat.pw_name == 'deploy'
+          - deploy_dir.stat.gr_name == 'deploy'
         msg: "/opt/deploy directory missing or not owned by deploy user"
+
+    - name: Check deploy helper script exists
+      ansible.builtin.stat:
+        path: /home/deploy/deploy
+      register: deploy_helper
+
+    - name: Assert deploy helper script exists and is executable
+      ansible.builtin.assert:
+        that:
+          - deploy_helper.stat.exists
+          - deploy_helper.stat.pw_name == 'deploy'
+          - deploy_helper.stat.gr_name == 'deploy'
+          - deploy_helper.stat.mode == '0755'
+        msg: "deploy helper script is missing or has unexpected ownership/permissions"
 
     # -------------------------------------------------------------------------
     # fail2ban SSH jail

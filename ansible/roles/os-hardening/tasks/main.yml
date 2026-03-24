@@ -9,4 +9,4 @@
 - name: Apply OS hardening via dev-sec.io
   ansible.builtin.include_role:
     name: devsec.hardening.os_hardening
-  when: ansible_virtualization_type not in ['docker', 'container', 'lxc']
+  when: ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']

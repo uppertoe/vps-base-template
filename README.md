@@ -1,5 +1,7 @@
 # vps-base-template
 
+[![CI](https://github.com/uppertoe/vps-base-template/actions/workflows/ci.yml/badge.svg)](https://github.com/uppertoe/vps-base-template/actions/workflows/ci.yml)
+
 Infrastructure base for hardened VPS instances running Dockerised apps behind
 Caddy. Used as a git submodule in per-server repos.
 
@@ -26,7 +28,7 @@ provides everything specific to that VPS.
 | `ansible/roles/os-hardening` | Kernel-level hardening (wraps dev-sec.io) |
 | `ansible/roles/docker` | Docker CE + compose plugin + weekly prune timer |
 | `ansible/roles/firewall` | UFW — allow 22, 80, 443 only |
-| `ansible/roles/backup` | Hourly PostgreSQL → Restic (S3) backups with rollback |
+| `ansible/roles/backup` | Hourly PostgreSQL → Restic backups + weekly verification |
 | `ansible/bootstrap.yml` | Run once as root — creates deploy user |
 | `ansible/site.yml` | Idempotent — hardening, Docker, firewall |
 | `ansible/audit-*.yml` | Lynis, OpenSCAP, docker-bench security audits |
@@ -51,6 +53,15 @@ a submodule and includes the backup configuration structure.
 | [docs/04-server-repo.md](docs/04-server-repo.md) | Server repo structure and conventions |
 | [docs/06-auditing.md](docs/06-auditing.md) | Lynis + OpenSCAP + docker-bench auditing |
 
+## CI
+
+GitHub Actions runs three checks on pushes to `main` and on pull requests:
+- Molecule `default`
+- Molecule `backup`
+- `backup/tests/integration/run_tests.sh`
+
+Workflow file: `.github/workflows/ci.yml`
+
 ## Repository structure
 
 ```
@@ -63,7 +74,7 @@ vps-base-template/
 │   │   ├── os-hardening/    # wraps dev-sec.io os_hardening
 │   │   ├── docker/          # Docker CE + compose plugin + weekly prune timer
 │   │   ├── firewall/        # ufw — allow 22, 80, 443 only
-│   │   └── backup/          # hourly PostgreSQL → Restic backups with rollback
+│   │   └── backup/          # hourly PostgreSQL → Restic backups + weekly verification
 │   ├── bootstrap.yml
 │   ├── site.yml
 │   ├── audit-lynis.yml

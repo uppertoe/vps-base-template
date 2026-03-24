@@ -3,4 +3,4 @@
   ansible.builtin.systemd:
     name: docker
     state: restarted
-  when: ansible_virtualization_type not in ['docker', 'container']
+  when: ansible_facts['virtualization_type'] not in ['docker', 'container']

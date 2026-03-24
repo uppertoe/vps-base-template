@@ -19,10 +19,13 @@ running anything on a real server. No VPS needed.
 
 Runs all roles against **Ubuntu 24.04** and **Debian 12** and verifies:
 - The `deploy` user exists with the correct SSH key and sudo access
+- The deployed SSH key matches the configured `ansible_ssh_private_key_file`
+- `authorized_keys`, sudoers, and the deploy helper script have the expected ownership and permissions
 - SSH password authentication is disabled
+- Root SSH login is disabled and SSH is restricted to `deploy`
 - Docker and the compose plugin are installed
 - The deploy user is in the `docker` group
-- UFW is active and configured
+- UFW is active and exposes exactly the expected ports
 - `/opt/deploy` exists and is owned by `deploy`
 
 > **Container limitations:** Kernel-level hardening (sysctl settings from
@@ -61,7 +64,7 @@ molecule test -- -l debian-12
 Tests the backup role in isolation (single Ubuntu container):
 - `backup.sh` and `restore.sh` installed at `/opt/backup/` with correct permissions
 - Config files at `/etc/restic/` with mode 0600
-- Systemd units installed
+- Backup and backup-verify systemd units installed
 - restic binary present and executable
 - Scripts reject bad arguments (syntax smoke test)
 

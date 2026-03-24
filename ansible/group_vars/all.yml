@@ -5,9 +5,11 @@
 deploy_user: deploy
 
 # Path to the public key on your LOCAL machine that will be added to the
-# server's authorized_keys. Override per-server in inventory host_vars if
-# needed (e.g. for a shared team key).
-deploy_user_public_key: "{{ lookup('file', '~/.ssh/id_ed25519.pub') }}"
+# server's authorized_keys. By default this is derived from the same key set in
+# ansible_ssh_private_key_file, so bootstrap and day-to-day SSH use stay aligned.
+# Override per-server in inventory host_vars if needed (e.g. for a shared team
+# key).
+deploy_user_public_key: "{{ lookup('file', ((ansible_ssh_private_key_file | default('~/.ssh/id_ed25519')) ~ '.pub')) }}"
 
 # -----------------------------------------------------------------------------
 # Server basics
@@ -29,7 +31,7 @@ ssh_allow_tcp_forwarding: "no"
 ssh_print_motd: false
 ssh_print_last_log: true
 # Only allow the deploy user to connect via SSH
-ssh_allowed_users: "{{ deploy_user }}"
+ssh_allow_users: "{{ deploy_user }}"
 
 # -----------------------------------------------------------------------------
 # OS hardening (passed to devsec.hardening.os_hardening)

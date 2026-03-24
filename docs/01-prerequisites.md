@@ -113,6 +113,9 @@ Host myserver
     IdentityFile ~/.ssh/id_ed25519
 ```
 
+`myserver` is just an example alias. You can rename it, but if you do, use the
+same alias in your Ansible inventory too.
+
 ---
 
 Next: [02-local-testing.md](02-local-testing.md)

@@ -1,5 +1,7 @@
-# Copy this file to a server-specific inventory, e.g. inventory/myserver
+# Copy this file to a server-specific inventory, e.g. inventory/myserver,
 # and fill in your server's IP address.
+# Replace "myserver" with your own SSH alias if you prefer, but keep that alias
+# consistent with ~/.ssh/config and your Ansible commands.
 #
 # Usage:
 #   ansible-playbook -i ansible/inventory/myserver ansible/bootstrap.yml
@@ -11,3 +13,4 @@ myserver ansible_host=1.2.3.4
 [servers:vars]
 ansible_user=deploy
 ansible_ssh_private_key_file=~/.ssh/id_ed25519
+ansible_python_interpreter=/usr/bin/python3

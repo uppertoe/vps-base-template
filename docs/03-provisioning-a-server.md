@@ -35,6 +35,9 @@ inventory file from the example:
 cp ansible/inventory/production.example ansible/inventory/myserver
 ```
 
+`myserver` is just an example alias. Rename it if you like, but use the same
+alias consistently in your inventory file, `~/.ssh/config`, and SSH commands.
+
 Edit it:
 
 ```ini
@@ -44,6 +47,7 @@ myserver ansible_host=YOUR_SERVER_IP
 [servers:vars]
 ansible_user=deploy
 ansible_ssh_private_key_file=~/.ssh/id_ed25519
+ansible_python_interpreter=/usr/bin/python3
 ```
 
 ## Step 3 — Install Ansible dependencies

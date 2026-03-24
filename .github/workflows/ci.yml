@@ -10,9 +10,6 @@ jobs:
   molecule-default:
     name: Molecule Default
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: vps-base-template
     env:
       ANSIBLE_HOME: /tmp/ansible
       XDG_CACHE_HOME: /tmp/.cache
@@ -39,9 +36,6 @@ jobs:
   molecule-backup:
     name: Molecule Backup
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: vps-base-template
     env:
       ANSIBLE_HOME: /tmp/ansible
       XDG_CACHE_HOME: /tmp/.cache
@@ -68,9 +62,6 @@ jobs:
   backup-integration:
     name: Backup Integration
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: vps-base-template
     steps:
       - name: Check out repository
         uses: actions/checkout@v4

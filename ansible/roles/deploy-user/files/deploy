@@ -5,4 +5,4 @@ set -euo pipefail
 
 cd /opt/deploy
 git pull --recurse-submodules
-docker compose up -d --remove-orphans
+docker compose up -d --pull always --remove-orphans

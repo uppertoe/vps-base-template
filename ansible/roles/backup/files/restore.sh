@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
 # =============================================================================
-# restore.sh — Restore a PostgreSQL database from a Restic snapshot.
+# restore.sh — Restore one or more services from Restic snapshots.
 # =============================================================================
 #
 # USAGE
-#   restore.sh --service NAME [OPTIONS]
+#   restore.sh [--service NAME]... [OPTIONS]
 #
-#   --service NAME   Which service to restore (required). Must match a file
-#                    in $BACKUP_CONFIG_DIR/services/NAME.env.
-#   --snapshot ID    Restic snapshot ID (default: latest).
-#   --target DB      Target database name. Defaults to the real database name.
-#                    Set to a different name (e.g. myapp_restore_test) to
-#                    restore into a new database without touching production.
-#                    The target database is created if it does not exist.
-#   --list           List available snapshots for the named service and exit.
+#   --service NAME   Service to restore. Can be repeated. Omit to restore ALL
+#                    services (disaster-recovery mode).
+#   --snapshot ID    Restic snapshot ID for the database restore (default: latest).
+#                    Only valid when restoring a single service.
+#   --target DB      Restore the database into this name instead of the live
+#                    database. Safe for testing without touching production.
+#                    Only valid when restoring a single service.
+#   --list           List available snapshots for a service and exit.
+#                    Requires exactly one --service.
 #   --dry-run        Print commands without executing.
 #
 # CONFIGURATION
@@ -21,53 +22,61 @@
 #   Per-service:     $BACKUP_CONFIG_DIR/services/NAME.env
 #
 # SAFETY
-#   When --target matches the real database name, the script prints a prominent
-#   warning and requires interactive confirmation unless RESTORE_NO_CONFIRM=true
-#   is set. Use RESTORE_NO_CONFIRM=true only in automated testing pipelines.
+#   When restoring to the live database, the script prints a warning and
+#   requires interactive confirmation unless RESTORE_NO_CONFIRM=true is set.
+#
+# FILE PATHS
+#   If a service config sets BACKUP_PATHS, the most recent file snapshot
+#   (tagged SERVICE_NAME-files) is restored to / after the database restore.
+#   --snapshot does not apply to file restores; always uses latest.
 #
 # EXAMPLES
-#   # List available snapshots for a service
-#   restore.sh --service myapp --list
+#   # Restore one service (interactive confirmation for live DB)
+#   restore.sh --service myapp
 #
-#   # Test restore into a temporary database (safe — does not touch production)
+#   # Safe test restore into an alternate database
 #   restore.sh --service myapp --target myapp_restore_test
 #
 #   # Restore from a specific snapshot
-#   restore.sh --service myapp --snapshot abc1234 --target myapp_restore_test
-#
-#   # Production restore (prompts for confirmation)
 #   restore.sh --service myapp --snapshot abc1234
+#
+#   # Restore two services
+#   restore.sh --service myapp --service planka
+#
+#   # Restore everything (disaster recovery)
+#   restore.sh
+#
+#   # List available snapshots
+#   restore.sh --service myapp --list
 # =============================================================================
 
-set -euo pipefail
+set -eEuo pipefail  # -E: ERR trap inherited by functions (required for rollback)
 
 # ---------------------------------------------------------------------------
 # Arguments
 # ---------------------------------------------------------------------------
 
-SERVICE_NAME=""
+SERVICE_NAMES=()
 SNAPSHOT="latest"
-TARGET_DB=""
+TARGET_DB_ARG=""
 LIST_ONLY=false
 DRY_RUN=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --service)  [[ -n "${2:-}" ]] || { echo "--service requires a NAME argument" >&2; exit 1; }
-                SERVICE_NAME="$2"; shift 2 ;;
-    --snapshot) SNAPSHOT="$2";  shift 2 ;;
-    --target)   TARGET_DB="$2"; shift 2 ;;
-    --list)     LIST_ONLY=true; shift ;;
-    --dry-run)  DRY_RUN=true;   shift ;;
+                SERVICE_NAMES+=("$2"); shift 2 ;;
+    --snapshot) SNAPSHOT="$2";     shift 2 ;;
+    --target)   TARGET_DB_ARG="$2"; shift 2 ;;
+    --list)     LIST_ONLY=true;    shift ;;
+    --dry-run)  DRY_RUN=true;      shift ;;
     *)
       echo "Unknown argument: $1" >&2
-      echo "Usage: $0 --service NAME [--snapshot ID] [--target DB] [--list] [--dry-run]" >&2
+      echo "Usage: $0 [--service NAME]... [--snapshot ID] [--target DB] [--list] [--dry-run]" >&2
       exit 1
       ;;
   esac
 done
-
-[[ -n "$SERVICE_NAME" ]] || { echo "Error: --service NAME is required." >&2; exit 1; }
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -75,25 +84,12 @@ done
 
 CONFIG_DIR="${BACKUP_CONFIG_DIR:-/etc/restic}"
 GLOBAL_CONFIG="$CONFIG_DIR/config.env"
-SERVICE_ENV="$CONFIG_DIR/services/${SERVICE_NAME}.env"
+SERVICES_DIR="$CONFIG_DIR/services"
 
-[[ -f "$SERVICE_ENV" ]] || {
-  echo "Error: service config not found: $SERVICE_ENV" >&2
-  exit 1
-}
-
-# Source global config (AWS creds etc.) then service config.
 if [[ -f "$GLOBAL_CONFIG" ]]; then
   # shellcheck source=/dev/null
   source "$GLOBAL_CONFIG"
 fi
-
-# Load per-service variables.
-# shellcheck source=/dev/null
-source "$SERVICE_ENV"
-
-# Export restic credentials for all restic commands.
-export RESTIC_REPOSITORY RESTIC_PASSWORD
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -113,30 +109,72 @@ run() {
 }
 
 # ---------------------------------------------------------------------------
-# Validate required service variables
+# Per-service state — updated by restore_service(), read by _rollback_db.
+# Not declared local so the ERR trap can access them from any call depth.
 # ---------------------------------------------------------------------------
 
-require_var() {
-  local var="$1"
-  [[ -n "${!var:-}" ]] || die "Required variable \$$var is not set in $SERVICE_ENV."
+ROLLBACK_DB=""
+TARGET_DB=""
+SERVICE_NAME=""
+CONTAINER_NAME=""
+DB_NAME=""
+DB_USER=""
+DB_PASSWORD=""
+RESTIC_REPOSITORY=""
+RESTIC_PASSWORD=""
+STDIN_FILENAME=""
+BACKUP_PATHS=""
+
+# ---------------------------------------------------------------------------
+# PostgreSQL helpers (via docker exec)
+# ---------------------------------------------------------------------------
+
+_psql_admin() {
+  # Admin operations (CREATE/DROP/ALTER DATABASE). No stdin needed.
+  docker exec -e PGPASSWORD="${DB_PASSWORD:-}" "$CONTAINER_NAME" \
+    psql --username "$DB_USER" --no-password "$@" < /dev/null
 }
 
-require_var RESTIC_REPOSITORY
-require_var RESTIC_PASSWORD
-require_var DB_HOST
-require_var DB_NAME
-require_var DB_USER
-require_var STDIN_FILENAME
+_psql_app() {
+  # App user queries. Uses -i so stdin can be piped (e.g. SQL dump from restic).
+  docker exec -e PGPASSWORD="${DB_PASSWORD:-}" -i "$CONTAINER_NAME" \
+    psql --username "$DB_USER" --no-password "$@"
+}
+
+db_exists() {
+  local db="$1"
+  _psql_admin --tuples-only \
+    --command "SELECT 1 FROM pg_database WHERE datname='$db'" \
+    postgres 2>/dev/null | grep -q 1
+}
 
 # ---------------------------------------------------------------------------
-# Resolve target database
+# Rollback trap
 # ---------------------------------------------------------------------------
+# If restore fails after the original database was renamed, this trap drops
+# the partial restore and renames the original back.
+# Uses script-level globals set by restore_service().
 
-TARGET_DB="${TARGET_DB:-$DB_NAME}"
+_rollback_db() {
+  trap - ERR
+  [[ -n "$ROLLBACK_DB" ]] || return 0
 
-# Tracks the pre-restore database name created for rollback; set inside do_restore.
-ROLLBACK_DB=""
-RESTORE_TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+  warn "Restore failed — rolling back '$TARGET_DB' to pre-restore state..."
+
+  _psql_admin postgres \
+    --command "DROP DATABASE IF EXISTS \"$TARGET_DB\";" 2>/dev/null || true
+
+  if db_exists "$ROLLBACK_DB"; then
+    _psql_admin postgres \
+      --command "ALTER DATABASE \"$ROLLBACK_DB\" RENAME TO \"$TARGET_DB\";"
+    warn "Rollback complete — '$TARGET_DB' is back to its pre-restore state."
+  else
+    warn "Rollback source '$ROLLBACK_DB' not found — manual recovery required."
+    warn "  Recover with: ALTER DATABASE \"$ROLLBACK_DB\" RENAME TO \"$TARGET_DB\";"
+  fi
+}
+
+trap '_rollback_db' ERR
 
 # ---------------------------------------------------------------------------
 # Confirm destructive operations
@@ -144,8 +182,6 @@ RESTORE_TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 
 confirm_destructive() {
   local target="$1" real="$2"
-
-  # Restoring to a different name — safe, no confirmation needed.
   [[ "$target" == "$real" ]] || return 0
 
   if [[ "${RESTORE_NO_CONFIRM:-false}" == "true" ]]; then
@@ -173,68 +209,43 @@ confirm_destructive() {
 }
 
 # ---------------------------------------------------------------------------
-# PostgreSQL helpers
+# Per-service restore
 # ---------------------------------------------------------------------------
 
-_psql() {
-  PGPASSWORD="${DB_PASSWORD:-}" psql \
-    --host     "$DB_HOST" \
-    --port     "${DB_PORT:-5432}" \
-    --username "$DB_USER" \
-    --no-password \
-    "$@"
-}
+restore_service() {
+  local env_file="$1"
 
-db_exists() {
-  local db="$1"
-  PGPASSWORD="${DB_PASSWORD:-}" psql \
-    --host "$DB_HOST" --port "${DB_PORT:-5432}" \
-    --username "$DB_USER" --no-password \
-    --tuples-only \
-    --command "SELECT 1 FROM pg_database WHERE datname='$db'" \
-    postgres 2>/dev/null | grep -q 1
-}
+  # Reset per-service state. Not declared local — _rollback_db must see these.
+  ROLLBACK_DB=""
+  SERVICE_NAME="" CONTAINER_NAME="" DB_NAME="" DB_USER="" DB_PASSWORD=""
+  RESTIC_REPOSITORY="" RESTIC_PASSWORD="" STDIN_FILENAME="" BACKUP_PATHS=""
 
-# ---------------------------------------------------------------------------
-# Rollback trap
-# ---------------------------------------------------------------------------
-# If restore fails after we have renamed the original database, this trap
-# drops the partial restore and renames the original back.
+  [[ -f "$env_file" ]] || { warn "Service config not found: $env_file"; return 1; }
 
-_rollback_db() {
-  trap - ERR  # prevent recursive invocation on rollback failure
-  [[ -n "$ROLLBACK_DB" ]] || return 0
+  # shellcheck source=/dev/null
+  source "$env_file"
 
-  warn "Restore failed — rolling back to pre-restore state…"
+  # Validate required variables.
+  local var missing=0
+  for var in SERVICE_NAME CONTAINER_NAME DB_NAME DB_USER RESTIC_REPOSITORY RESTIC_PASSWORD STDIN_FILENAME; do
+    if [[ -z "${!var:-}" ]]; then
+      warn "[$env_file] \$$var is not set — skipping."
+      missing=1
+    fi
+  done
+  [[ $missing -eq 0 ]] || return 1
 
-  # Drop the partial (possibly empty) target database.
-  _psql --dbname postgres \
-    --command "DROP DATABASE IF EXISTS \"$TARGET_DB\";" 2>/dev/null || true
+  export RESTIC_REPOSITORY RESTIC_PASSWORD
 
-  # Rename the preserved pre-restore database back.
-  if db_exists "$ROLLBACK_DB"; then
-    _psql --dbname postgres \
-      --command "ALTER DATABASE \"$ROLLBACK_DB\" RENAME TO \"$TARGET_DB\";"
-    warn "Rollback complete — '$TARGET_DB' is back to its pre-restore state."
-  else
-    warn "Rollback source '$ROLLBACK_DB' not found — manual recovery required."
-    warn "  Recover with: ALTER DATABASE \"$ROLLBACK_DB\" RENAME TO \"$TARGET_DB\";"
-  fi
-}
+  # TARGET_DB: honour --target for single-service runs, else use the real DB name.
+  TARGET_DB="${TARGET_DB_ARG:-$DB_NAME}"
 
-trap '_rollback_db' ERR
-
-# ---------------------------------------------------------------------------
-# Restore
-# ---------------------------------------------------------------------------
-
-do_restore() {
   info "================================================================="
-  info "Restore started"
-  info "  Service:   $SERVICE_NAME"
+  info "Restoring service: $SERVICE_NAME"
+  info "  Container: $CONTAINER_NAME"
   info "  Snapshot:  $SNAPSHOT"
-  info "  Source:    /$STDIN_FILENAME"
-  info "  Target:    $TARGET_DB on $DB_HOST"
+  info "  Target DB: $TARGET_DB"
+  [[ -n "${BACKUP_PATHS:-}" ]] && info "  File paths: $BACKUP_PATHS"
   "$DRY_RUN" && info "  (dry-run mode — no changes will be made)"
   info "================================================================="
 
@@ -242,47 +253,67 @@ do_restore() {
 
   if "$DRY_RUN"; then
     echo "DRY-RUN: restic dump $SNAPSHOT --tag $SERVICE_NAME /$STDIN_FILENAME | psql $TARGET_DB"
+    [[ -n "${BACKUP_PATHS:-}" ]] && \
+      echo "DRY-RUN: restic restore latest --tag ${SERVICE_NAME}-files --target /"
     return 0
   fi
 
-  # Preserve the existing database under a timestamped name so we can roll
-  # back if the restore fails. On success the caller can drop it manually.
+  # Preserve the existing database for rollback.
   if db_exists "$TARGET_DB"; then
-    ROLLBACK_DB="${TARGET_DB}_pre_restore_${RESTORE_TIMESTAMP}"
-    info "Preserving '$TARGET_DB' → '$ROLLBACK_DB' for rollback safety…"
-    _psql --dbname postgres \
+    ROLLBACK_DB="${TARGET_DB}_pre_restore_$(date -u +%Y%m%dT%H%M%SZ)"
+    info "Preserving '$TARGET_DB' -> '$ROLLBACK_DB' for rollback safety..."
+    _psql_admin postgres \
       --command "ALTER DATABASE \"$TARGET_DB\" RENAME TO \"$ROLLBACK_DB\";"
   fi
 
-  info "Creating database '$TARGET_DB'…"
-  _psql --dbname postgres --command "CREATE DATABASE \"$TARGET_DB\";"
+  info "Creating database '$TARGET_DB'..."
+  _psql_admin postgres --command "CREATE DATABASE \"$TARGET_DB\";"
 
-  # Dump the snapshot directly into psql.
-  # The leading slash is required — restic stores stdin files as /filename.
-  # Discard psql stdout (sequence setval rows); surface only stderr (errors).
+  # Restore the database from the restic snapshot.
   restic dump "$SNAPSHOT" --tag "$SERVICE_NAME" "/$STDIN_FILENAME" \
-    | _psql --dbname "$TARGET_DB" > /dev/null
+    | _psql_app --dbname "$TARGET_DB" > /dev/null
 
-  # Optional post-restore verification query.
-  if [[ -n "${VERIFY_QUERY:-}" ]]; then
-    info "Verifying restore…"
-    local count
-    count="$(_psql --dbname "$TARGET_DB" --tuples-only \
-               --command "$VERIFY_QUERY" | tr -d ' \n')"
-    info "  Verification result: $count"
-    [[ "$count" -gt 0 ]] || die "Restore verification failed — query returned 0 or empty."
-    info "  Verification passed."
+  # Verify the restore produced a non-empty database.
+  info "Verifying restore..."
+  local table_count
+  table_count="$(_psql_app --dbname "$TARGET_DB" --tuples-only \
+    --command "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public'" \
+    | tr -d ' \n')"
+  info "  Tables in restored database: $table_count"
+  [[ "$table_count" -gt 0 ]] || \
+    die "[$SERVICE_NAME] Restore verification failed — no tables found in '$TARGET_DB'."
+  info "  Verification passed."
+
+  # Restore file paths if configured.
+  if [[ -n "${BACKUP_PATHS:-}" ]]; then
+    info "[$SERVICE_NAME] Checking for file snapshots..."
+    local file_snap_count
+    file_snap_count="$(restic snapshots --tag "${SERVICE_NAME}-files" --json 2>/dev/null \
+      | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"
+
+    if [[ "$file_snap_count" -gt 0 ]]; then
+      info "[$SERVICE_NAME] Restoring file paths (latest snapshot)..."
+      restic restore latest --tag "${SERVICE_NAME}-files" --target /
+      info "[$SERVICE_NAME] File paths restored."
+    else
+      warn "[$SERVICE_NAME] No file snapshots found — skipping file restore."
+    fi
   fi
 
+  # Clear rollback marker on success so the trap does nothing on exit.
+  local _preserved="$ROLLBACK_DB"
+  ROLLBACK_DB=""
+
   info "================================================================="
-  info "Restore complete — '$SERVICE_NAME' → '$TARGET_DB'."
+  info "Restore complete — $SERVICE_NAME -> $TARGET_DB."
   info "================================================================="
 
-  if [[ -n "$ROLLBACK_DB" ]]; then
+  if [[ -n "$_preserved" ]]; then
     echo ""
-    echo "  Pre-restore snapshot preserved as: '$ROLLBACK_DB'"
+    echo "  Pre-restore database preserved as: '$_preserved'"
     echo "  Verify the restore, then drop it:"
-    printf "    psql -c 'DROP DATABASE \"%s\";'\n" "$ROLLBACK_DB"
+    printf "    docker exec -e PGPASSWORD=... %s psql -U %s -d postgres -c 'DROP DATABASE \"%s\";'\n" \
+      "$CONTAINER_NAME" "$DB_USER" "$_preserved"
     echo ""
   fi
 
@@ -301,10 +332,64 @@ do_restore() {
 # Main
 # ---------------------------------------------------------------------------
 
-if "$LIST_ONLY"; then
-  info "Snapshots for service '$SERVICE_NAME' (repository: $RESTIC_REPOSITORY):"
-  restic snapshots --tag "$SERVICE_NAME"
-  exit 0
-fi
+main() {
+  # Collect service env files.
+  local service_files=()
 
-do_restore
+  if [[ ${#SERVICE_NAMES[@]} -gt 0 ]]; then
+    for name in "${SERVICE_NAMES[@]}"; do
+      local f="$SERVICES_DIR/${name}.env"
+      [[ -f "$f" ]] || die "Service config not found: $f"
+      service_files+=("$f")
+    done
+  else
+    for f in "$SERVICES_DIR"/*.env; do
+      [[ -f "$f" ]] && service_files+=("$f")
+    done
+    [[ ${#service_files[@]} -gt 0 ]] || die "No service configs found in $SERVICES_DIR/"
+  fi
+
+  # Options that only make sense for a single service.
+  if [[ ${#service_files[@]} -gt 1 ]]; then
+    [[ -z "$TARGET_DB_ARG" ]] || \
+      die "--target can only be used with a single --service"
+    [[ "$SNAPSHOT" == "latest" ]] || \
+      die "--snapshot can only be used with a single --service"
+  fi
+
+  # List mode — show snapshots for one service and exit.
+  if "$LIST_ONLY"; then
+    [[ ${#service_files[@]} -eq 1 ]] || die "--list requires exactly one --service"
+    source "${service_files[0]}"
+    export RESTIC_REPOSITORY RESTIC_PASSWORD
+    info "Snapshots for service '$SERVICE_NAME' (repository: $RESTIC_REPOSITORY):"
+    restic snapshots --tag "$SERVICE_NAME"
+    exit 0
+  fi
+
+  if [[ ${#service_files[@]} -eq 1 ]]; then
+    # Single service: direct call so the ERR trap and rollback work at this level.
+    restore_service "${service_files[0]}"
+  else
+    # Multiple services: run each in a subshell. The ERR trap is inherited (-E)
+    # so rollback fires correctly inside each subshell. Failures are accumulated.
+    local failed_services=()
+    for env_file in "${service_files[@]}"; do
+      if ! ( restore_service "$env_file" ); then
+        failed_services+=("$(basename "$env_file" .env)")
+      fi
+    done
+
+    if [[ ${#failed_services[@]} -gt 0 ]]; then
+      warn "================================================================="
+      warn "The following services failed to restore:"
+      for svc in "${failed_services[@]}"; do
+        warn "  - $svc"
+      done
+      warn "================================================================="
+      exit 1
+    fi
+  fi
+}
+
+main

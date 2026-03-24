@@ -115,13 +115,14 @@ PostgreSQL database and a local restic repository.
 
 ```bash
 # macOS
-brew install restic libpq
+brew install restic
 
 # Debian/Ubuntu
-apt install restic postgresql-client
+apt install restic
 ```
 
-Docker must be running (used for the PostgreSQL container).
+Docker must be running. All database operations run via `docker exec` into the
+PostgreSQL container — no system `psql` or `pg_dump` required.
 
 ### Running the tests
 
@@ -138,10 +139,10 @@ bash backup/tests/integration/run_tests.sh
 | `test_backup_creates_snapshot` | A snapshot exists after backup |
 | `test_retention_runs_clean` | `forget --prune` runs without error |
 | `test_restore_into_alternate_db` | Rows match after restore to a different DB |
-| `test_verify_query_passes` | `VERIFY_QUERY` succeeds on a good restore |
+| `test_verify_passes` | Built-in table count check passes after good restore |
 | `test_restore_rollback_on_failure` | Original DB is preserved when restore fails |
 | `test_partial_failure_continues` | A bad service fails; other services still back up |
-| `test_optional_service_skips_unreachable_db` | `OPTIONAL=true` skips gracefully, exits 0 |
+| `test_optional_service_skips_stopped_container` | `OPTIONAL=true` skips gracefully, exits 0 |
 | `test_list_snapshots` | `--list` shows snapshots for a service |
 
 The `test_restore_rollback_on_failure` and `test_partial_failure_continues`

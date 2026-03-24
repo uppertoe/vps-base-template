@@ -8,16 +8,17 @@
 #   - Backup creates a restic snapshot
 #   - Retention/prune runs without error
 #   - Restore recreates data correctly in an alternate database
-#   - Post-restore VERIFY_QUERY passes on good data and fails on empty DB
+#   - Post-restore verification passes on good data
 #   - Rollback: original database is recovered after a failed restore
 #   - Partial failure: one bad service does not abort the others
-#   - OPTIONAL=true service skips an unreachable database gracefully
+#   - OPTIONAL=true service skips a stopped container gracefully
 #   - --list shows snapshots for a service
+#   - BACKUP_PATHS: files are backed up and restored alongside the database
+#   - Multi-service restore: --service a --service b restores both
 #
 # PREREQUISITES
 #   - Docker (for PostgreSQL container)
 #   - restic (brew install restic  /  apt install restic)
-#   - psql client (brew install libpq  /  apt install postgresql-client)
 #
 # USAGE
 #   cd vps-base-template
@@ -40,6 +41,7 @@ PG_PORT=15432
 PG_DB=testapp
 PG_USER=testapp
 PG_PASSWORD=testpass
+PG_IMAGE="postgres:17-alpine"
 
 RESTIC_REPO_DIR=""  # set in setup()
 CONFIG_DIR=""       # set in setup()
@@ -55,11 +57,10 @@ check_deps() {
   local missing=()
   command -v docker  &>/dev/null || missing+=(docker)
   command -v restic  &>/dev/null || missing+=(restic)
-  command -v psql    &>/dev/null || missing+=(psql)
   if [[ ${#missing[@]} -gt 0 ]]; then
     echo "ERROR: missing required tools: ${missing[*]}" >&2
-    echo "Install with: brew install restic libpq  (macOS)" >&2
-    echo "          or: apt install restic postgresql-client  (Debian/Ubuntu)" >&2
+    echo "Install with: brew install restic  (macOS)" >&2
+    echo "          or: apt install restic  (Debian/Ubuntu)" >&2
     exit 1
   fi
 }
@@ -88,22 +89,20 @@ run_restore() {
 }
 
 # ---------------------------------------------------------------------------
-# PostgreSQL helpers
+# PostgreSQL helpers (via docker exec — no system psql needed)
 # ---------------------------------------------------------------------------
 
 _psql() {
-  PGPASSWORD="$PG_PASSWORD" psql \
-    --host 127.0.0.1 \
-    --port "$PG_PORT" \
-    --username "$PG_USER" \
-    --no-psqlrc \
-    "$@"
+  # Run as the app user (PG_USER is set as the superuser in this test container)
+  docker exec -i -e PGPASSWORD="$PG_PASSWORD" "$PG_CONTAINER" \
+    psql --username "$PG_USER" --no-password "$@"
 }
 
 wait_for_postgres() {
   echo -n "Waiting for PostgreSQL"
   for _ in $(seq 1 30); do
-    if _psql --dbname "$PG_DB" --command "SELECT 1" &>/dev/null; then
+    if docker exec "$PG_CONTAINER" \
+         pg_isready --username "$PG_USER" --dbname "$PG_DB" --quiet 2>/dev/null; then
       echo " ready."
       return 0
     fi
@@ -131,13 +130,14 @@ setup() {
   RESTIC_REPO_DIR="$(mktemp -d)"
   CONFIG_DIR="$(mktemp -d)"
 
-  # Start PostgreSQL container
+  # Start PostgreSQL container — POSTGRES_USER becomes the superuser,
+  # which allows it to CREATE/ALTER/DROP databases in the tests below.
   docker run -d --name "$PG_CONTAINER" \
     -e POSTGRES_DB="$PG_DB" \
     -e POSTGRES_USER="$PG_USER" \
     -e POSTGRES_PASSWORD="$PG_PASSWORD" \
     -p "127.0.0.1:${PG_PORT}:5432" \
-    postgres:17-alpine \
+    "$PG_IMAGE" \
     > /dev/null
 
   wait_for_postgres
@@ -153,15 +153,13 @@ setup() {
   mkdir -p "$CONFIG_DIR/services"
   cat > "$CONFIG_DIR/services/testapp.env" <<EOF
 SERVICE_NAME=testapp
+CONTAINER_NAME=${PG_CONTAINER}
 RESTIC_REPOSITORY=${RESTIC_REPO_DIR}/testapp
 RESTIC_PASSWORD=test-repo-password
-DB_HOST=127.0.0.1
-DB_PORT=${PG_PORT}
 DB_NAME=${PG_DB}
 DB_USER=${PG_USER}
 DB_PASSWORD=${PG_PASSWORD}
 STDIN_FILENAME=testapp-db.sql
-VERIFY_QUERY=SELECT COUNT(*) FROM users
 OPTIONAL=false
 EOF
 
@@ -244,8 +242,8 @@ test_restore_into_alternate_db() {
   _psql --dbname postgres --command "DROP DATABASE IF EXISTS \"$target\";" > /dev/null
 }
 
-test_verify_query_passes() {
-  header "test_verify_query_passes"
+test_verify_passes() {
+  header "test_verify_passes"
   local target="testapp_verify_test"
 
   _psql --dbname postgres --command "DROP DATABASE IF EXISTS \"$target\";" > /dev/null
@@ -253,9 +251,9 @@ test_verify_query_passes() {
   if RESTORE_NO_CONFIRM=true run_restore \
        --service testapp \
        --target "$target" > /dev/null 2>&1; then
-    pass "restore with VERIFY_QUERY passed"
+    pass "restore with built-in verification passed"
   else
-    fail "restore with VERIFY_QUERY failed unexpectedly"
+    fail "restore with built-in verification failed unexpectedly"
   fi
 
   _psql --dbname postgres --command "DROP DATABASE IF EXISTS \"$target\";" > /dev/null
@@ -274,10 +272,9 @@ test_restore_rollback_on_failure() {
   # Write a service config that points to a non-existent restic repository.
   cat > "$CONFIG_DIR/services/rollback-test.env" <<EOF
 SERVICE_NAME=rollback-test
+CONTAINER_NAME=${PG_CONTAINER}
 RESTIC_REPOSITORY=${RESTIC_REPO_DIR}/does-not-exist
 RESTIC_PASSWORD=wrong-password
-DB_HOST=127.0.0.1
-DB_PORT=${PG_PORT}
 DB_NAME=${sentinel_db}
 DB_USER=${PG_USER}
 DB_PASSWORD=${PG_PASSWORD}
@@ -317,48 +314,44 @@ test_partial_failure_continues() {
   # (broken) behaviour the script would exit before reaching testapp.
   cat > "$CONFIG_DIR/services/aaa-bad.env" <<EOF
 SERVICE_NAME=
+CONTAINER_NAME=nonexistent-container
 RESTIC_REPOSITORY=${RESTIC_REPO_DIR}/bad
 RESTIC_PASSWORD=test-password
-DB_HOST=127.0.0.1
-DB_PORT=${PG_PORT}
 DB_NAME=nonexistent
 DB_USER=${PG_USER}
 DB_PASSWORD=${PG_PASSWORD}
 STDIN_FILENAME=bad.sql
 EOF
 
-  local before_count
-  before_count="$(snapshot_count "${RESTIC_REPO_DIR}/testapp" "test-repo-password")"
-
   # Script should exit non-zero (aaa-bad.env fails) but still back up testapp.
+  # Note: do NOT compare snapshot counts — restic's retention policy can prune
+  # existing snapshots during the same run, keeping the count flat.
+  # Instead, check that backup.sh logged success for the testapp service.
   local exit_code=0
-  run_backup > /dev/null 2>&1 || exit_code=$?
-
-  local after_count
-  after_count="$(snapshot_count "${RESTIC_REPO_DIR}/testapp" "test-repo-password")"
+  local output
+  output="$(run_backup 2>&1)" || exit_code=$?
 
   rm -f "$CONFIG_DIR/services/aaa-bad.env"
 
   if [[ "$exit_code" -eq 0 ]]; then
     fail "partial failure: backup should exit non-zero when a service fails"
-  elif [[ "$after_count" -gt "$before_count" ]]; then
-    pass "partial failure: testapp backed up ($before_count → $after_count snapshots) despite bad service failing"
+  elif echo "$output" | grep -q "\[testapp\] Backup complete"; then
+    pass "partial failure: testapp backed up despite bad service failing (exit $exit_code)"
   else
-    fail "partial failure: testapp was NOT backed up (snapshots: $before_count → $after_count)"
+    fail "partial failure: testapp was NOT backed up"
   fi
 }
 
-test_optional_service_skips_unreachable_db() {
-  header "test_optional_service_skips_unreachable_db"
+test_optional_service_skips_stopped_container() {
+  header "test_optional_service_skips_stopped_container"
 
-  # Swap out testapp for an OPTIONAL service pointing at a closed port.
+  # Swap out testapp for an OPTIONAL service pointing at a non-existent container.
   mv "$CONFIG_DIR/services/testapp.env" "$CONFIG_DIR/services/testapp.env.bak"
   cat > "$CONFIG_DIR/services/optional.env" <<EOF
 SERVICE_NAME=optional-svc
+CONTAINER_NAME=nonexistent-container-12345
 RESTIC_REPOSITORY=${RESTIC_REPO_DIR}/optional
 RESTIC_PASSWORD=test-password
-DB_HOST=127.0.0.1
-DB_PORT=19999
 DB_NAME=nonexistent
 DB_USER=nobody
 DB_PASSWORD=
@@ -376,7 +369,7 @@ EOF
   if [[ "$exit_code" -ne 0 ]]; then
     fail "optional service: backup exited non-zero ($exit_code) — optional skip should exit 0"
   elif echo "$output" | grep -q "skipping (OPTIONAL=true)"; then
-    pass "optional service: unreachable DB skipped gracefully, overall exit 0"
+    pass "optional service: stopped container skipped gracefully, overall exit 0"
   else
     fail "optional service: did not log expected skip message"
   fi
@@ -395,6 +388,125 @@ test_list_snapshots() {
   fi
 }
 
+test_backup_paths() {
+  header "test_backup_paths"
+
+  # Create a temp directory with test files that will be backed up.
+  # On macOS, mktemp returns /var/... paths but /var is a symlink to /private/var.
+  # restic restore --target / tries to remove /var as a "stale item" and hits a
+  # permissions error. Use /private/tmp directly to get a real (non-symlinked) path.
+  local test_files_dir
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    test_files_dir="$(mktemp -d /private/tmp/backup-test-XXXXXX)"
+  else
+    test_files_dir="$(mktemp -d)"
+  fi
+  mkdir -p "$test_files_dir/data"
+  echo "marker-content" > "$test_files_dir/data/marker.txt"
+  echo "other-content"  > "$test_files_dir/data/other.txt"
+
+  # Temporarily add BACKUP_PATHS to the testapp service config.
+  cp "$CONFIG_DIR/services/testapp.env" "$CONFIG_DIR/services/testapp.env.bak"
+  echo "BACKUP_PATHS=${test_files_dir}" >> "$CONFIG_DIR/services/testapp.env"
+
+  # Run backup — should create a DB snapshot AND a files snapshot.
+  run_backup --service testapp > /dev/null 2>&1
+
+  local file_snap_count
+  file_snap_count="$(RESTIC_PASSWORD=test-repo-password restic \
+    -r "${RESTIC_REPO_DIR}/testapp" \
+    snapshots --tag "testapp-files" --json 2>/dev/null \
+    | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"
+
+  if [[ "$file_snap_count" -lt 1 ]]; then
+    fail "backup_paths: no file snapshot found after backup"
+    cp "$CONFIG_DIR/services/testapp.env.bak" "$CONFIG_DIR/services/testapp.env"
+    rm -f "$CONFIG_DIR/services/testapp.env.bak"
+    rm -rf "$test_files_dir"
+    return
+  fi
+
+  # Delete the files to simulate data loss, then restore.
+  rm -rf "$test_files_dir"
+
+  local target="testapp_paths_test"
+  _psql --dbname postgres --command "DROP DATABASE IF EXISTS \"$target\";" > /dev/null
+
+  local exit_code=0
+  RESTORE_NO_CONFIRM=true run_restore \
+    --service testapp \
+    --target "$target" > /dev/null 2>&1 || exit_code=$?
+
+  local db_count marker_content
+  db_count="$(_psql --dbname "$target" --tuples-only \
+    --command "SELECT COUNT(*) FROM users" | tr -d ' ')" || db_count=0
+  marker_content="$(cat "$test_files_dir/data/marker.txt" 2>/dev/null || echo "")"
+
+  # Restore testapp.env and clean up.
+  cp "$CONFIG_DIR/services/testapp.env.bak" "$CONFIG_DIR/services/testapp.env"
+  rm -f "$CONFIG_DIR/services/testapp.env.bak"
+  rm -rf "$test_files_dir"
+  _psql --dbname postgres --command "DROP DATABASE IF EXISTS \"$target\";" > /dev/null
+
+  if [[ "$exit_code" -ne 0 ]]; then
+    fail "backup_paths: restore exited $exit_code"
+  elif [[ "$db_count" -eq 3 && "$marker_content" == "marker-content" ]]; then
+    pass "backup_paths: DB ($db_count rows) and files (marker.txt) both restored correctly"
+  else
+    fail "backup_paths: DB count=$db_count, marker='$marker_content' (expected 3 and 'marker-content')"
+  fi
+}
+
+test_multi_service_restore() {
+  header "test_multi_service_restore"
+
+  # Create a second database in the same container with distinct data.
+  _psql --dbname postgres --command "DROP DATABASE IF EXISTS testapp2;" > /dev/null
+  _psql --dbname postgres --command "CREATE DATABASE testapp2;" > /dev/null
+  _psql --dbname testapp2 --command \
+    "CREATE TABLE items (name TEXT); INSERT INTO items VALUES ('alpha'), ('beta');" > /dev/null
+
+  cat > "$CONFIG_DIR/services/testapp2.env" <<EOF
+SERVICE_NAME=testapp2
+CONTAINER_NAME=${PG_CONTAINER}
+RESTIC_REPOSITORY=${RESTIC_REPO_DIR}/testapp2
+RESTIC_PASSWORD=test-repo-password-2
+DB_NAME=testapp2
+DB_USER=${PG_USER}
+DB_PASSWORD=${PG_PASSWORD}
+STDIN_FILENAME=testapp2-db.sql
+OPTIONAL=false
+EOF
+
+  # Back up both services.
+  run_backup > /dev/null 2>&1
+
+  # Drop both live databases to simulate data loss.
+  _psql --dbname postgres --command "DROP DATABASE IF EXISTS testapp;" > /dev/null
+  _psql --dbname postgres --command "DROP DATABASE IF EXISTS testapp2;" > /dev/null
+
+  # Restore both with a single restore.sh invocation.
+  local exit_code=0
+  RESTORE_NO_CONFIRM=true run_restore \
+    --service testapp \
+    --service testapp2 > /dev/null 2>&1 || exit_code=$?
+
+  local count1 count2
+  count1="$(_psql --dbname testapp  --tuples-only --command "SELECT COUNT(*) FROM users" | tr -d ' ')" || count1=0
+  count2="$(_psql --dbname testapp2 --tuples-only --command "SELECT COUNT(*) FROM items" | tr -d ' ')" || count2=0
+
+  rm -f "$CONFIG_DIR/services/testapp2.env"
+  _psql --dbname postgres --command "DROP DATABASE IF EXISTS testapp2;" > /dev/null
+
+  if [[ "$exit_code" -ne 0 ]]; then
+    fail "multi_service_restore: exited $exit_code"
+  elif [[ "$count1" -eq 3 && "$count2" -eq 2 ]]; then
+    pass "multi_service_restore: testapp ($count1 users) and testapp2 ($count2 items) both restored"
+  else
+    fail "multi_service_restore: unexpected counts (testapp: $count1, testapp2: $count2)"
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -406,11 +518,13 @@ test_dry_run_exits_zero
 test_backup_creates_snapshot
 test_retention_runs_clean
 test_restore_into_alternate_db
-test_verify_query_passes
+test_verify_passes
 test_restore_rollback_on_failure
 test_partial_failure_continues
-test_optional_service_skips_unreachable_db
+test_optional_service_skips_stopped_container
 test_list_snapshots
+test_backup_paths
+test_multi_service_restore
 
 header "Results"
 printf "  Passed: %d\n" "$PASS"

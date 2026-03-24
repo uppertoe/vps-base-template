@@ -25,19 +25,19 @@
 #
 # PER-SERVICE VARIABLES (services/NAME.env)
 #   SERVICE_NAME      Identifier used in tags and log messages.
+#   CONTAINER_NAME    Docker container running PostgreSQL for this service.
 #   RESTIC_REPOSITORY Restic repository URL (e.g. s3:s3.amazonaws.com/bucket/svc).
 #   RESTIC_PASSWORD   Encryption passphrase for this service's repository.
-#   DB_HOST           PostgreSQL host.
-#   DB_PORT           PostgreSQL port (default: 5432).
-#   DB_NAME           Database name.
-#   DB_USER           Database user.
+#   DB_NAME           Database name inside the container.
+#   DB_USER           PostgreSQL user inside the container.
 #   DB_PASSWORD       Password (leave empty for trust/peer auth).
 #   STDIN_FILENAME    Filename stored inside the snapshot (e.g. myapp-db.sql).
-#   VERIFY_QUERY      Optional SQL to verify a successful backup is restorable.
-#                     Should return a row count > 0 for a healthy database.
-#                     Example: SELECT COUNT(*) FROM django_migrations
-#   OPTIONAL          Set to "true" to skip this service if the DB is unreachable
-#                     instead of failing the whole backup run (default: false).
+#   BACKUP_PATHS      Colon-separated host paths to back up alongside the database
+#                     (e.g. /opt/apps/planka/data:/opt/apps/planka/backgrounds).
+#                     Stored as a separate snapshot tagged SERVICE_NAME-files.
+#                     Omit if the service has no file assets to back up.
+#   OPTIONAL          Set to "true" to skip this service if the container is not
+#                     running instead of failing the whole backup run (default: false).
 #
 # EXIT CODES
 #   0   All services backed up successfully.
@@ -209,16 +209,16 @@ backup_service() {
 
   # Reset per-service variables before sourcing to prevent bleed-through
   # between services.
-  local SERVICE_NAME="" DB_HOST="" DB_PORT="" DB_NAME="" DB_USER="" DB_PASSWORD=""
-  local RESTIC_REPOSITORY="" RESTIC_PASSWORD="" STDIN_FILENAME=""
-  local VERIFY_QUERY="" OPTIONAL="false"
+  local SERVICE_NAME="" CONTAINER_NAME="" DB_NAME="" DB_USER="" DB_PASSWORD=""
+  local RESTIC_REPOSITORY="" RESTIC_PASSWORD="" STDIN_FILENAME="" BACKUP_PATHS=""
+  local OPTIONAL="false"
 
   # shellcheck source=/dev/null
   source "$env_file"
 
   # Validate required variables.
   local var missing=0
-  for var in SERVICE_NAME DB_HOST DB_NAME DB_USER RESTIC_REPOSITORY RESTIC_PASSWORD STDIN_FILENAME; do
+  for var in SERVICE_NAME CONTAINER_NAME DB_NAME DB_USER RESTIC_REPOSITORY RESTIC_PASSWORD STDIN_FILENAME; do
     if [[ -z "${!var:-}" ]]; then
       warn "[$env_file] \$$var is not set — skipping this service."
       missing=1
@@ -228,22 +228,20 @@ backup_service() {
 
   info "--- Service: $SERVICE_NAME ---"
 
-  # If OPTIONAL=true, check DB reachability before attempting the backup.
+  # If OPTIONAL=true, check container is running before attempting the backup.
   if [[ "$OPTIONAL" == "true" ]]; then
-    if ! pg_isready \
-           --host "$DB_HOST" \
-           --port "${DB_PORT:-5432}" \
-           --username "$DB_USER" \
-           --quiet 2>/dev/null; then
-      warn "[$SERVICE_NAME] Database is not reachable — skipping (OPTIONAL=true)."
+    local running
+    running="$(docker inspect --format '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null || echo 'false')"
+    if [[ "$running" != "true" ]]; then
+      warn "[$SERVICE_NAME] Container '$CONTAINER_NAME' is not running — skipping (OPTIONAL=true)."
       return 0
     fi
   fi
 
-  info "[$SERVICE_NAME] Backing up $DB_NAME on $DB_HOST…"
+  info "[$SERVICE_NAME] Backing up ${DB_NAME} from container ${CONTAINER_NAME}..."
 
   if "$DRY_RUN"; then
-    echo "DRY-RUN: pg_dump $DB_NAME | restic backup --stdin --stdin-filename $STDIN_FILENAME --tag $SERVICE_NAME"
+    echo "DRY-RUN: docker exec $CONTAINER_NAME pg_dump $DB_NAME | restic backup --stdin --stdin-filename $STDIN_FILENAME --tag $SERVICE_NAME"
     return 0
   fi
 
@@ -252,17 +250,19 @@ backup_service() {
 
   # Initialise the repository if this is the first run.
   if ! restic snapshots --no-lock &>/dev/null; then
-    info "[$SERVICE_NAME] Initialising new Restic repository at $RESTIC_REPOSITORY…"
+    info "[$SERVICE_NAME] Initialising new Restic repository at ${RESTIC_REPOSITORY}..."
     restic init
   fi
 
-  # Dump the database directly into restic (no temp file).
-  PGPASSWORD="${DB_PASSWORD:-}" pg_dump \
-      --host     "$DB_HOST" \
-      --port     "${DB_PORT:-5432}" \
-      --username "$DB_USER" \
-      --no-password \
-      "$DB_NAME" \
+  # Dump the database via docker exec directly into restic (no temp file).
+  # Using the container's own pg_dump avoids version mismatches.
+  docker exec \
+      -e PGPASSWORD="${DB_PASSWORD:-}" \
+      "$CONTAINER_NAME" \
+      pg_dump \
+        --username "$DB_USER" \
+        --no-password \
+        "$DB_NAME" \
     | restic backup \
         --stdin \
         --stdin-filename "$STDIN_FILENAME" \
@@ -271,12 +271,26 @@ backup_service() {
 
   info "[$SERVICE_NAME] Backup complete."
 
+  # Back up file paths if configured (separate snapshot, tagged SERVICE_NAME-files).
+  # The existing restic forget below covers both DB and file snapshots — restic
+  # groups them by path so retention is applied to each independently.
+  if [[ -n "${BACKUP_PATHS:-}" ]]; then
+    info "[$SERVICE_NAME] Backing up file paths..."
+    local -a _paths
+    IFS=: read -ra _paths <<< "$BACKUP_PATHS"
+    restic backup \
+      "${_paths[@]}" \
+      --tag "${SERVICE_NAME}-files" \
+      --tag "$TIMESTAMP"
+    info "[$SERVICE_NAME] File backup complete."
+  fi
+
   # Apply retention policy to this service's repository.
   local keep_daily="${KEEP_DAILY:-7}"
   local keep_weekly="${KEEP_WEEKLY:-4}"
   local keep_monthly="${KEEP_MONTHLY:-6}"
 
-  info "[$SERVICE_NAME] Applying retention (daily=$keep_daily, weekly=$keep_weekly, monthly=$keep_monthly)…"
+  info "[$SERVICE_NAME] Applying retention (daily=$keep_daily, weekly=$keep_weekly, monthly=$keep_monthly)..."
   restic forget \
     --keep-daily   "$keep_daily"  \
     --keep-weekly  "$keep_weekly" \
@@ -293,14 +307,14 @@ verify_service() {
   local env_file="$1"
 
   local SERVICE_NAME="" RESTIC_REPOSITORY="" RESTIC_PASSWORD=""
-  local DB_HOST="" DB_PORT="" DB_NAME="" DB_USER="" DB_PASSWORD=""
-  local STDIN_FILENAME="" VERIFY_QUERY="" OPTIONAL="false"
+  local CONTAINER_NAME="" DB_NAME="" DB_USER="" DB_PASSWORD=""
+  local STDIN_FILENAME="" OPTIONAL="false"
   # shellcheck source=/dev/null
   source "$env_file"
 
   export RESTIC_REPOSITORY RESTIC_PASSWORD
 
-  info "[$SERVICE_NAME] Verifying repository integrity…"
+  info "[$SERVICE_NAME] Verifying repository integrity..."
   run restic check
   info "[$SERVICE_NAME] Repository OK."
 
@@ -327,10 +341,10 @@ main() {
     [[ -f "$target" ]] || die "Service config not found: $target"
     service_files=("$target")
   else
-    # Glob — fails gracefully if no files exist.
-    if compgen -G "$SERVICES_DIR/*.env" > /dev/null 2>&1; then
-      mapfile -t service_files < <(compgen -G "$SERVICES_DIR/*.env")
-    fi
+    # Glob — the [[ -f ]] guard handles the no-match case on all bash versions.
+    for f in "$SERVICES_DIR"/*.env; do
+      [[ -f "$f" ]] && service_files+=("$f")
+    done
     [[ ${#service_files[@]} -gt 0 ]] || die "No service configs found in $SERVICES_DIR/"
   fi
 
@@ -348,7 +362,7 @@ main() {
 
   if "$VERIFY"; then
     info "================================================================="
-    info "Running post-backup verification…"
+    info "Running post-backup verification..."
     for env_file in "${service_files[@]}"; do
       if ! ( verify_service "$env_file" ); then
         failed_services+=("$(basename "$env_file" .env) [verify]")

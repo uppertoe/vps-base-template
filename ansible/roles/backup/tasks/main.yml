@@ -18,7 +18,7 @@
 # System dependencies
 # ---------------------------------------------------------------------------
 
-- name: Install msmtp, postgresql-client dependencies
+- name: Install system dependencies
   ansible.builtin.apt:
     name:
       - bzip2
@@ -28,27 +28,6 @@
       - msmtp
       - msmtp-mta
       - python3
-    state: present
-    update_cache: true
-
-- name: Add PostgreSQL apt signing key
-  ansible.builtin.apt_key:
-    url: https://www.postgresql.org/media/keys/ACCC4CF8.asc
-    keyring: /usr/share/keyrings/postgresql.gpg
-    state: present
-
-- name: Add PostgreSQL apt repository
-  ansible.builtin.apt_repository:
-    repo: >-
-      deb [signed-by=/usr/share/keyrings/postgresql.gpg]
-      https://apt.postgresql.org/pub/repos/apt
-      {{ ansible_distribution_release }}-pgdg main
-    filename: pgdg
-    state: present
-
-- name: Install postgresql-client
-  ansible.builtin.apt:
-    name: postgresql-client-17
     state: present
     update_cache: true
 

@@ -33,7 +33,6 @@ services:
       - caddy
     environment:
       - DOMAIN=${DOMAIN}
-      - ACME_EMAIL=${ACME_EMAIL:-}
     labels:
       - "com.centurylinklabs.watchtower.enable=false"
 

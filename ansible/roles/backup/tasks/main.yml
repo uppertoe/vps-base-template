@@ -5,7 +5,7 @@
 #
 # Prerequisites:
 #   - backup/config.env must exist in your server repo (copy from config.env.example).
-#   - At least one backup/services/*.env must exist (copy from services/example.env.example).
+#   - At least one backup/services/*.env must exist (copy from services/service.env.example).
 #
 # After running this role:
 #   - Scripts are at /opt/backup/backup.sh and /opt/backup/restore.sh.

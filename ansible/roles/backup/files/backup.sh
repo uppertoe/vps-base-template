@@ -14,7 +14,7 @@
 #   Global config:   $BACKUP_CONFIG_DIR/config.env     (default: /etc/restic/config.env)
 #   Per-service:     $BACKUP_CONFIG_DIR/services/*.env  (one file per database)
 #
-#   See backup/config.env.example and backup/services/example.env.example
+#   See backup/config.env.example and backup/services/service.env.example
 #   in your server repo for templates.
 #
 # GLOBAL CONFIG VARIABLES (config.env)

@@ -27,3 +27,11 @@
     owner: "{{ deploy_user }}"
     group: "{{ deploy_user }}"
     mode: "0755"
+
+- name: Install deploy script to home directory
+  ansible.builtin.copy:
+    src: deploy
+    dest: "/home/{{ deploy_user }}/deploy"
+    owner: "{{ deploy_user }}"
+    group: "{{ deploy_user }}"
+    mode: "0755"

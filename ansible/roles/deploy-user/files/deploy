@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# deploy — pull latest changes and restart containers.
+# Run from anywhere: ~/deploy
+set -euo pipefail
+
+cd /opt/deploy
+git pull --recurse-submodules
+docker compose up -d --remove-orphans

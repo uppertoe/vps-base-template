@@ -15,12 +15,15 @@ and produces a hardening index score (0-100) with prioritised findings.
 periodically (monthly is reasonable for a production server).
 
 ```bash
+# From this repo directly
 ansible-playbook -i ansible/inventory/myserver ansible/audit-lynis.yml
+
+# From a server repo that includes this as scaffold/
+ansible-playbook -i ansible/hosts scaffold/ansible/audit-lynis.yml
 ```
 
-Reports are saved to `../reports/lynis-<hostname>-<date>/` relative to the
-playbook path, which means they land in the repo-root `reports/` directory
-when you run the command from the repo root.
+Reports are saved to the repo-root `reports/lynis-<hostname>-<date>/`
+directory in either layout.
 
 ### Interpreting the score
 
@@ -62,13 +65,21 @@ client, an internal audit, or a regulated environment). Also useful for a
 detailed breakdown of exactly which CIS controls pass and fail.
 
 ```bash
+# From this repo directly
 ansible-playbook -i ansible/inventory/myserver ansible/audit-openscap.yml
+
+# From a server repo that includes this as scaffold/
+ansible-playbook -i ansible/hosts scaffold/ansible/audit-openscap.yml
 ```
 
-Reports are saved to `../reports/openscap-<hostname>-<date>/` relative to the
-playbook path, which means they land in the repo-root `reports/` directory.
+Reports are saved to the repo-root `reports/openscap-<hostname>-<date>/`
+directory in either layout.
 Open
 `report.html` in a browser for a readable pass/fail view of every CIS rule.
+
+The playbook intentionally requires an exact matching Ubuntu or Debian
+datastream. If the installed `scap-security-guide` package only has an older
+benchmark, the run fails instead of silently using the wrong release.
 
 ### Profiles
 
@@ -123,7 +134,11 @@ Docker's own official audit tool. Runs the CIS Docker Benchmark controls
 against your live daemon and containers.
 
 ```bash
+# From this repo directly
 ansible-playbook -i ansible/inventory/myserver ansible/audit-docker.yml
+
+# From a server repo that includes this as scaffold/
+ansible-playbook -i ansible/hosts scaffold/ansible/audit-docker.yml
 ```
 
 Each output line references a CIS Docker Benchmark section number directly.

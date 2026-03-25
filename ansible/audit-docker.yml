@@ -7,9 +7,11 @@
 # Source: https://github.com/docker/docker-bench-security
 #
 # Usage:
-#   ansible-playbook -i ansible/inventory/myserver ansible/audit-docker.yml
+#   standalone: ansible-playbook -i ansible/inventory/myserver ansible/audit-docker.yml
+#   scaffold:   ansible-playbook -i ansible/hosts scaffold/ansible/audit-docker.yml
 #
-# Reports are saved locally to ../reports/docker-bench-<hostname>-<date>/
+# Reports are saved locally relative to the playbook path so they land in a
+# repo-root reports/ directory in either layout.
 #
 # Unlike the OS audit tools, this one IS meaningful in a container to some
 # extent — but run it on a real server with your actual running containers

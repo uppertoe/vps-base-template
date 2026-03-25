@@ -5,9 +5,11 @@
 # producing a hardening index score (0-100) and a prioritised list of findings.
 #
 # Usage:
-#   ansible-playbook -i ansible/inventory/myserver ansible/audit-lynis.yml
+#   standalone: ansible-playbook -i ansible/inventory/myserver ansible/audit-lynis.yml
+#   scaffold:   ansible-playbook -i ansible/hosts scaffold/ansible/audit-lynis.yml
 #
-# Reports are saved locally to ../reports/lynis-<hostname>-<date>/
+# Reports are saved locally relative to the playbook path so they land in a
+# repo-root reports/ directory in either layout.
 # Run this after provisioning, and periodically thereafter.
 #
 # Interpreting the hardening index:

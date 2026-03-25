@@ -6,9 +6,11 @@
 # Reports are in XCCDF format — machine-readable and accepted by auditors.
 #
 # Usage:
-#   ansible-playbook -i ansible/inventory/myserver ansible/audit-openscap.yml
+#   standalone: ansible-playbook -i ansible/inventory/myserver ansible/audit-openscap.yml
+#   scaffold:   ansible-playbook -i ansible/hosts scaffold/ansible/audit-openscap.yml
 #
-# Reports are saved locally to ../reports/openscap-<hostname>-<date>/
+# Reports are saved locally relative to the playbook path so they land in a
+# repo-root reports/ directory in either layout.
 # Open the HTML report in a browser for a readable view of pass/fail rules.
 #
 # Profiles available (Ubuntu 24.04):
@@ -41,51 +43,55 @@
         state: present
         update_cache: true
 
-    - name: Find Ubuntu SCAP content
-      ansible.builtin.find:
-        paths: "{{ scap_content_dir }}"
-        patterns: "ssg-ubuntu*-ds.xml"
-        file_type: file
-      register: scap_content_candidates_ubuntu
-      when: ansible_facts['distribution'] == 'Ubuntu'
-
-    - name: Find Debian SCAP content
-      ansible.builtin.find:
-        paths: "{{ scap_content_dir }}"
-        patterns: "ssg-debian*-ds.xml"
-        file_type: file
-      register: scap_content_candidates_debian
-      when: ansible_facts['distribution'] == 'Debian'
-
     - name: Set SCAP content path
       ansible.builtin.set_fact:
+        scap_content_prefix: "{{ 'ubuntu' if ansible_facts['distribution'] == 'Ubuntu' else 'debian' }}"
+        scap_content_version: "{{ ansible_facts['distribution_version'] | regex_replace('[^0-9]', '') }}"
         scap_content_path: >-
-          {{
-            (
-              (
-                scap_content_candidates_ubuntu.files
-                if ansible_facts['distribution'] == 'Ubuntu'
-                else scap_content_candidates_debian.files
-              )
-              | sort(attribute='path')
-              | map(attribute='path')
-              | list
-              | last
-            )
-            | default('', true)
-          }}
+          {{ scap_content_dir }}/ssg-{{ 'ubuntu' if ansible_facts['distribution'] == 'Ubuntu' else 'debian' }}{{ ansible_facts['distribution_version'] | regex_replace('[^0-9]', '') }}-ds.xml
+      when: ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+
+    - name: Find available SCAP content for distro
+      ansible.builtin.find:
+        paths: "{{ scap_content_dir }}"
+        patterns: "ssg-{{ scap_content_prefix }}*-ds.xml"
+        file_type: file
+      register: scap_content_candidates
+      when: ansible_facts['distribution'] in ['Ubuntu', 'Debian']
 
     - name: Verify SCAP content file exists
       ansible.builtin.stat:
         path: "{{ scap_content_path }}"
       register: scap_content_stat
+      when: ansible_facts['distribution'] in ['Ubuntu', 'Debian']
 
-    - name: Fail if SCAP content not found
+    - name: Fail if distro is unsupported
       ansible.builtin.fail:
         msg: >-
-          SCAP content not found at {{ scap_content_path }}.
-          Check that openscap-scanner, ssg-base, and ssg-debderived are installed.
-      when: not scap_content_stat.stat.exists
+          OpenSCAP audit currently supports Ubuntu and Debian only. Found
+          {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}.
+      when: ansible_facts['distribution'] not in ['Ubuntu', 'Debian']
+
+    - name: Fail if matching SCAP content not found
+      ansible.builtin.fail:
+        msg: >-
+          No SCAP content matched {{ ansible_facts['distribution'] }}
+          {{ ansible_facts['distribution_version'] }} at {{ scap_content_path }}.
+          Available {{ scap_content_prefix }} datastreams:
+          {{
+            scap_content_candidates.files
+            | map(attribute='path')
+            | sort
+            | join(', ')
+            | default('none found', true)
+          }}.
+          Install a matching scap-security-guide package or run this audit on a
+          supported distro release.
+          Falling back to a different Ubuntu or Debian benchmark would produce
+          misleading results, so this playbook stops instead.
+      when:
+        - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+        - not scap_content_stat.stat.exists
 
     - name: Create report directory on server
       ansible.builtin.file:

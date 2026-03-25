@@ -67,11 +67,12 @@ baseline_faillock_deny: 4
 baseline_faillock_unlock_time: 900
 baseline_faillock_fail_interval: 900
 baseline_timesyncd_ntp_servers:
-  - time.cloudflare.com
-  - time.google.com
+  - 0.ubuntu.pool.ntp.org
+  - 1.ubuntu.pool.ntp.org
+  - 2.ubuntu.pool.ntp.org
+  - 3.ubuntu.pool.ntp.org
 baseline_timesyncd_fallback_ntp_servers:
-  - 0.pool.ntp.org
-  - 1.pool.ntp.org
+  - ntp.ubuntu.com
 
 # -----------------------------------------------------------------------------
 # Firewall (ufw)

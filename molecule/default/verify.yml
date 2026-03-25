@@ -312,8 +312,31 @@
       ansible.builtin.assert:
         that:
           - "'umask 027' in (session_profile_raw.content | b64decode)"
-          - "'export TMOUT=900' in (session_profile_raw.content | b64decode)"
-        msg: "session hardening profile does not configure umask/TMOUT"
+        msg: "session hardening profile does not configure umask"
+
+    - name: Check dedicated TMOUT profile exists
+      ansible.builtin.stat:
+        path: /etc/profile.d/tmout.sh
+      register: tmout_profile
+
+    - name: Assert dedicated TMOUT profile exists
+      ansible.builtin.assert:
+        that:
+          - tmout_profile.stat.exists
+        msg: "dedicated TMOUT profile was not deployed"
+
+    - name: Read dedicated TMOUT profile
+      ansible.builtin.slurp:
+        src: /etc/profile.d/tmout.sh
+      register: tmout_profile_raw
+
+    - name: Assert dedicated TMOUT profile uses benchmark-compatible format
+      ansible.builtin.assert:
+        that:
+          - "'TMOUT=900' in (tmout_profile_raw.content | b64decode)"
+          - "'readonly TMOUT' in (tmout_profile_raw.content | b64decode)"
+          - "'export TMOUT' in (tmout_profile_raw.content | b64decode)"
+        msg: "dedicated TMOUT profile is missing expected settings"
 
     - name: Read /etc/profile
       ansible.builtin.slurp:
@@ -324,8 +347,7 @@
       ansible.builtin.assert:
         that:
           - "'umask 027' in (etc_profile_raw.content | b64decode)"
-          - "'export TMOUT=900' in (etc_profile_raw.content | b64decode)"
-        msg: "/etc/profile does not configure umask/TMOUT"
+        msg: "/etc/profile does not configure umask"
 
     - name: Read /etc/bash.bashrc
       ansible.builtin.slurp:
@@ -364,6 +386,12 @@
           - item.stat.mode == '0640'
         msg: "{{ item.stat.path }} is missing or too permissive"
       loop: "{{ allow_files.results }}"
+
+    - name: Assert cron.allow uses the expected group
+      ansible.builtin.assert:
+        that:
+          - allow_files.results | selectattr('stat.path', 'equalto', '/etc/cron.allow') | map(attribute='stat.gr_name') | first == 'crontab'
+        msg: "/etc/cron.allow is not group-owned by crontab"
 
     - name: Check sudo logging drop-in exists
       ansible.builtin.stat:
@@ -409,8 +437,8 @@
     - name: Assert timesyncd config includes NTP servers
       ansible.builtin.assert:
         that:
-          - "'NTP=time.cloudflare.com time.google.com' in (timesyncd_config_raw.content | b64decode)"
-          - "'FallbackNTP=0.pool.ntp.org 1.pool.ntp.org' in (timesyncd_config_raw.content | b64decode)"
+          - "'NTP=0.ubuntu.pool.ntp.org 1.ubuntu.pool.ntp.org 2.ubuntu.pool.ntp.org 3.ubuntu.pool.ntp.org' in (timesyncd_config_raw.content | b64decode)"
+          - "'FallbackNTP=ntp.ubuntu.com' in (timesyncd_config_raw.content | b64decode)"
         msg: "timesyncd config is missing expected NTP settings"
 
     # -------------------------------------------------------------------------

@@ -62,8 +62,14 @@
     marker: "# {mark} ANSIBLE MANAGED BLOCK: vps-scaffold faillock"
     insertbefore: '^auth\s+\[success=2 default=ignore\]\s+pam_unix\.so'
     block: |
-      auth required pam_faillock.so preauth
-      auth [default=die] pam_faillock.so authfail
+      auth required pam_faillock.so preauth silent audit deny={{ baseline_faillock_deny }} fail_interval={{ baseline_faillock_fail_interval }} unlock_time={{ baseline_faillock_unlock_time }}
+
+- name: Insert pam_faillock authfail line after pam_unix in common-auth
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/common-auth
+    insertafter: '^auth\s+\[success=2 default=ignore\]\s+pam_unix\.so'
+    line: "auth [default=die] pam_faillock.so authfail audit deny={{ baseline_faillock_deny }} fail_interval={{ baseline_faillock_fail_interval }} unlock_time={{ baseline_faillock_unlock_time }}"
+    state: present
 
 - name: Remove duplicate pam_faillock lines from common-account
   ansible.builtin.replace:
@@ -85,6 +91,7 @@
     marker: "# {mark} ANSIBLE MANAGED BLOCK: vps-scaffold pwquality"
     block: |
       enforcing = 1
+      enforce_for_root
       minlen = 14
       minclass = 4
       difok = 2
@@ -125,39 +132,55 @@
     create: true
     mode: "0644"
 
-- name: Set shell timeout and restrictive umask
+- name: Set restrictive umask in profile.d
   ansible.builtin.copy:
     dest: /etc/profile.d/99-vps-scaffold-session.sh
     mode: "0644"
     content: |
       umask {{ baseline_shell_umask }}
-      if ! readonly -p 2>/dev/null | grep -q ' TMOUT='; then
-        export TMOUT=${TMOUT:-{{ os_security_auto_logout }}}
-        readonly TMOUT
-      fi
 
-- name: Ensure /etc/profile enforces shell timeout and umask
+- name: Configure TMOUT in profile.d using benchmark-compatible format
+  ansible.builtin.copy:
+    dest: /etc/profile.d/tmout.sh
+    mode: "0644"
+    content: |
+      TMOUT={{ os_security_auto_logout }}
+      readonly TMOUT
+      export TMOUT
+
+- name: Ensure /etc/profile enforces umask
   ansible.builtin.blockinfile:
     path: /etc/profile
-    marker: "# {mark} ANSIBLE MANAGED BLOCK: vps-scaffold session hardening"
+    marker: "# {mark} ANSIBLE MANAGED BLOCK: vps-scaffold umask"
     block: |
       umask {{ baseline_shell_umask }}
-      if ! readonly -p 2>/dev/null | grep -q ' TMOUT='; then
-        export TMOUT=${TMOUT:-{{ os_security_auto_logout }}}
-        readonly TMOUT
-      fi
 
-- name: Ensure /etc/bash.bashrc enforces shell timeout and umask
+- name: Ensure /etc/bash.bashrc enforces umask
   ansible.builtin.blockinfile:
     path: /etc/bash.bashrc
     create: true
-    marker: "# {mark} ANSIBLE MANAGED BLOCK: vps-scaffold session hardening"
+    marker: "# {mark} ANSIBLE MANAGED BLOCK: vps-scaffold umask"
     block: |
       umask {{ baseline_shell_umask }}
-      if ! readonly -p 2>/dev/null | grep -q ' TMOUT='; then
-        export TMOUT=${TMOUT:-{{ os_security_auto_logout }}}
-        readonly TMOUT
-      fi
+
+- name: Remove legacy TMOUT block from /etc/profile
+  ansible.builtin.blockinfile:
+    path: /etc/profile
+    marker: "# {mark} ANSIBLE MANAGED BLOCK: vps-scaffold session hardening"
+    state: absent
+
+- name: Remove legacy TMOUT block from /etc/bash.bashrc
+  ansible.builtin.blockinfile:
+    path: /etc/bash.bashrc
+    marker: "# {mark} ANSIBLE MANAGED BLOCK: vps-scaffold session hardening"
+    state: absent
+
+- name: Detect crontab group when present
+  ansible.builtin.getent:
+    database: group
+    key: crontab
+  register: crontab_group
+  failed_when: false
 
 - name: Ensure at.allow exists
   ansible.builtin.copy:
@@ -172,7 +195,7 @@
     dest: /etc/cron.allow
     content: "root\n"
     owner: root
-    group: root
+    group: "{{ 'crontab' if crontab_group.ansible_facts.getent_group is defined else 'root' }}"
     mode: "0640"
 
 - name: Configure sudo logging
@@ -201,6 +224,15 @@
     block: |
       NTP={{ baseline_timesyncd_ntp_servers | join(' ') }}
       FallbackNTP={{ baseline_timesyncd_fallback_ntp_servers | join(' ') }}
+
+- name: Configure strong SSH MACs in a dedicated drop-in
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/00-vps-scaffold-hardening.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      MACs {{ ssh_macs | join(',') }}
 
 - name: Enable and start systemd-timesyncd on real hosts
   ansible.builtin.systemd:

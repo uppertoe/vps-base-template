@@ -34,12 +34,14 @@
     - /usr/share/pam-configs/vps-pwquality
     - /usr/share/pam-configs/vps-pwhistory
     - /usr/share/pam-configs/vps-faillock
+  register: removed_legacy_pam_profiles
 
 - name: Apply PAM profile changes
   ansible.builtin.command: pam-auth-update --package
   environment:
     DEBIAN_FRONTEND: noninteractive
-  changed_when: true
+  changed_when: false
+  when: removed_legacy_pam_profiles.results | selectattr('changed') | list | length > 0
 
 - name: Configure faillock policy
   ansible.builtin.copy:
@@ -50,40 +52,50 @@
       fail_interval = {{ baseline_faillock_fail_interval }}
       unlock_time = {{ baseline_faillock_unlock_time }}
 
-- name: Remove duplicate pam_faillock lines from common-auth
-  ansible.builtin.replace:
-    path: /etc/pam.d/common-auth
-    regexp: '^(auth\s+(required|\[default=die\])\s+pam_faillock\.so[^\n]*\n)+'
-    replace: ''
-
-- name: Insert pam_faillock lines into common-auth
+- name: Remove legacy managed faillock block from common-auth
   ansible.builtin.blockinfile:
     path: /etc/pam.d/common-auth
     marker: "# {mark} ANSIBLE MANAGED BLOCK: vps-scaffold faillock"
-    insertbefore: '^auth\s+\[success=2 default=ignore\]\s+pam_unix\.so'
-    block: |
-      auth required pam_faillock.so preauth silent audit deny={{ baseline_faillock_deny }} fail_interval={{ baseline_faillock_fail_interval }} unlock_time={{ baseline_faillock_unlock_time }}
+    state: absent
 
-- name: Insert pam_faillock authfail line after pam_unix in common-auth
+- name: Remove legacy pam_faillock preauth line with inline parameters
   ansible.builtin.lineinfile:
     path: /etc/pam.d/common-auth
+    regexp: '^auth required pam_faillock\.so preauth .*?(deny=|fail_interval=|unlock_time=).*$'
+    state: absent
+
+- name: Remove legacy pam_faillock authfail line with inline parameters
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/common-auth
+    regexp: '^auth \[default=die\] pam_faillock\.so authfail .*?(deny=|fail_interval=|unlock_time=).*$'
+    state: absent
+
+- name: Ensure pam_faillock preauth line is present before pam_unix
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/common-auth
+    regexp: '^auth required pam_faillock\.so preauth silent audit$'
+    line: 'auth required pam_faillock.so preauth silent audit'
+    insertbefore: '^auth\s+\[success=2 default=ignore\]\s+pam_unix\.so'
+
+- name: Ensure pam_faillock authfail line is present after pam_unix
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/common-auth
+    regexp: '^auth \[default=die\] pam_faillock\.so authfail audit$'
+    line: 'auth [default=die] pam_faillock.so authfail audit'
     insertafter: '^auth\s+\[success=2 default=ignore\]\s+pam_unix\.so'
-    line: "auth [default=die] pam_faillock.so authfail audit deny={{ baseline_faillock_deny }} fail_interval={{ baseline_faillock_fail_interval }} unlock_time={{ baseline_faillock_unlock_time }}"
-    state: present
 
-- name: Remove duplicate pam_faillock lines from common-account
-  ansible.builtin.replace:
-    path: /etc/pam.d/common-account
-    regexp: '^(account\s+required\s+pam_faillock\.so[^\n]*\n)+'
-    replace: ''
-
-- name: Insert pam_faillock line into common-account
+- name: Remove legacy managed faillock block from common-account
   ansible.builtin.blockinfile:
     path: /etc/pam.d/common-account
     marker: "# {mark} ANSIBLE MANAGED BLOCK: vps-scaffold faillock"
+    state: absent
+
+- name: Ensure pam_faillock account line is present
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/common-account
+    regexp: '^account required pam_faillock\.so$'
+    line: 'account required pam_faillock.so'
     insertbefore: '^account\s+\[success=1 new_authtok_reqd=done default=ignore\]\s+pam_unix\.so'
-    block: |
-      account required pam_faillock.so
 
 - name: Configure pwquality policy in main config
   ansible.builtin.blockinfile:
@@ -103,26 +115,37 @@
       maxrepeat = 3
       maxsequence = 3
 
-- name: Remove duplicate pam_pwquality lines from common-password
-  ansible.builtin.replace:
-    path: /etc/pam.d/common-password
-    regexp: '^password\s+requisite\s+pam_pwquality\.so[^\n]*\n'
-    replace: ''
-
-- name: Remove duplicate pam_pwhistory lines from common-password
-  ansible.builtin.replace:
-    path: /etc/pam.d/common-password
-    regexp: '^password\s+requisite\s+pam_pwhistory\.so[^\n]*\n'
-    replace: ''
-
-- name: Insert pwquality and pwhistory lines into common-password
+- name: Remove legacy managed password policy block from common-password
   ansible.builtin.blockinfile:
     path: /etc/pam.d/common-password
     marker: "# {mark} ANSIBLE MANAGED BLOCK: vps-scaffold password policy"
+    state: absent
+
+- name: Remove legacy duplicate pam_pwquality lines from common-password
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/common-password
+    regexp: '^password\s+requisite\s+pam_pwquality\.so\s+retry=3(?! enforce_for_root minlen=14 minclass=4 difok=2 dictcheck=1 dcredit=-1 ucredit=-1 lcredit=-1 ocredit=-1 maxrepeat=3 maxsequence=3$).*$'
+    state: absent
+
+- name: Remove legacy duplicate pam_pwhistory lines from common-password
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/common-password
+    regexp: '^password\s+requisite\s+pam_pwhistory\.so(?! remember={{ os_auth_pw_remember }} use_authtok enforce_for_root$).*$'
+    state: absent
+
+- name: Ensure pam_pwquality line is present
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/common-password
+    regexp: '^password requisite pam_pwquality\.so retry=3 enforce_for_root minlen=14 minclass=4 difok=2 dictcheck=1 dcredit=-1 ucredit=-1 lcredit=-1 ocredit=-1 maxrepeat=3 maxsequence=3$'
+    line: 'password requisite pam_pwquality.so retry=3 enforce_for_root minlen=14 minclass=4 difok=2 dictcheck=1 dcredit=-1 ucredit=-1 lcredit=-1 ocredit=-1 maxrepeat=3 maxsequence=3'
     insertbefore: '^password\s+\[success=1 default=ignore\]\s+pam_unix\.so'
-    block: |
-      password requisite pam_pwquality.so retry=3 enforce_for_root minlen=14 minclass=4 difok=2 dictcheck=1 dcredit=-1 ucredit=-1 lcredit=-1 ocredit=-1 maxrepeat=3 maxsequence=3
-      password requisite pam_pwhistory.so remember={{ os_auth_pw_remember }} use_authtok enforce_for_root
+
+- name: Ensure pam_pwhistory line is present
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/common-password
+    regexp: '^password requisite pam_pwhistory\.so remember={{ os_auth_pw_remember }} use_authtok enforce_for_root$'
+    line: 'password requisite pam_pwhistory.so remember={{ os_auth_pw_remember }} use_authtok enforce_for_root'
+    insertbefore: '^password\s+\[success=1 default=ignore\]\s+pam_unix\.so'
 
 - name: Set default inactive password lock for new users
   ansible.builtin.lineinfile:
@@ -230,7 +253,7 @@
     dest: /etc/ssh/sshd_config.d/00-vps-scaffold-hardening.conf
     owner: root
     group: root
-    mode: "0644"
+    mode: "0600"
     content: |
       MACs {{ ssh_macs | join(',') }}
 

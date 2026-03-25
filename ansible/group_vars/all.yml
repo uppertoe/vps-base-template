@@ -40,7 +40,8 @@ ssh_banner_path: /etc/issue.net
 ssh_macs:
   - hmac-sha2-512-etm@openssh.com
   - hmac-sha2-256-etm@openssh.com
-  - umac-128-etm@openssh.com
+  - hmac-sha2-512
+  - hmac-sha2-256
 # Only allow the deploy user to connect via SSH
 ssh_allow_users: "{{ deploy_user }}"
 

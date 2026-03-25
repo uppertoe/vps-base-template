@@ -214,6 +214,31 @@
           - ssh_banner_file.stat.mode == '0644'
         msg: "SSH banner file is missing or has unexpected permissions"
 
+    - name: Check SSH hardening drop-in exists
+      ansible.builtin.stat:
+        path: /etc/ssh/sshd_config.d/00-vps-scaffold-hardening.conf
+      register: ssh_hardening_dropin
+
+    - name: Assert SSH hardening drop-in exists
+      ansible.builtin.assert:
+        that:
+          - ssh_hardening_dropin.stat.exists
+          - ssh_hardening_dropin.stat.mode == '0600'
+        msg: "SSH hardening drop-in is missing or too permissive"
+
+    - name: Read SSH hardening drop-in
+      ansible.builtin.slurp:
+        src: /etc/ssh/sshd_config.d/00-vps-scaffold-hardening.conf
+      register: ssh_hardening_dropin_raw
+
+    - name: Assert SSH hardening drop-in configures the benchmark MAC set
+      ansible.builtin.assert:
+        that:
+          - >-
+            'MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512,hmac-sha2-256'
+            in (ssh_hardening_dropin_raw.content | b64decode)
+        msg: "SSH hardening drop-in does not configure the expected MACs"
+
     - name: Read root shadow entry
       ansible.builtin.getent:
         database: shadow
@@ -291,6 +316,21 @@
           - "'fail_interval = 900' in (faillock_config_raw.content | b64decode)"
           - "'unlock_time = 900' in (faillock_config_raw.content | b64decode)"
         msg: "faillock config is missing expected values"
+
+    - name: Read common-auth
+      ansible.builtin.slurp:
+        src: /etc/pam.d/common-auth
+      register: common_auth_raw
+
+    - name: Assert common-auth enables pam_faillock without inline parameters
+      ansible.builtin.assert:
+        that:
+          - "'auth required pam_faillock.so preauth silent audit' in (common_auth_raw.content | b64decode)"
+          - "'auth [default=die] pam_faillock.so authfail audit' in (common_auth_raw.content | b64decode)"
+          - "'deny=' not in (common_auth_raw.content | b64decode)"
+          - "'unlock_time=' not in (common_auth_raw.content | b64decode)"
+          - "'fail_interval=' not in (common_auth_raw.content | b64decode)"
+        msg: "common-auth does not use the expected single-source faillock setup"
 
     - name: Check session hardening profile exists
       ansible.builtin.stat:

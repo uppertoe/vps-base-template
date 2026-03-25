@@ -191,19 +191,34 @@
         - not openscap_use_cached_metadata
         - openscap_content_source == 'upstream'
           or not scap_packaged_content_stat.stat.exists
-        - openscap_upstream_archive_asset is not defined
+        - (openscap_upstream_archive_asset | length) == 0
 
     - name: Set upstream OpenSCAP archive facts
       ansible.builtin.set_fact:
-        openscap_upstream_archive_url: "{{ openscap_upstream_archive_asset.browser_download_url }}"
-        openscap_upstream_archive_checksum: "{{ openscap_upstream_archive_asset.digest }}"
-        openscap_upstream_archive_name: "{{ openscap_upstream_archive_asset.name }}"
+        openscap_upstream_archive_url: "{{ openscap_upstream_archive_asset.browser_download_url | default('') }}"
+        openscap_upstream_archive_checksum: "{{ openscap_upstream_archive_asset.digest | default('') }}"
+        openscap_upstream_archive_name: "{{ openscap_upstream_archive_asset.name | default('') }}"
         openscap_upstream_archive_member: "{{ openscap_upstream_archive_asset.name | regex_replace('\\.zip$', '') }}/{{ scap_datastream_name }}"
       when:
         - openscap_content_source in ['auto', 'upstream']
         - not openscap_use_cached_metadata
         - openscap_content_source == 'upstream'
           or not scap_packaged_content_stat.stat.exists
+
+    - name: Fail if upstream OpenSCAP archive metadata was incomplete
+      ansible.builtin.fail:
+        msg: >-
+          ComplianceAsCode release metadata did not include the expected zip
+          asset fields. Resolved asset:
+          {{ openscap_upstream_archive_asset | to_nice_json }}.
+      when:
+        - openscap_content_source in ['auto', 'upstream']
+        - not openscap_use_cached_metadata
+        - openscap_content_source == 'upstream'
+          or not scap_packaged_content_stat.stat.exists
+        - openscap_upstream_archive_url | length == 0
+          or openscap_upstream_archive_checksum | length == 0
+          or openscap_upstream_archive_name | length == 0
 
     - name: Cache upstream OpenSCAP metadata locally
       ansible.builtin.copy:

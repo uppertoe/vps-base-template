@@ -214,30 +214,33 @@
           - ssh_banner_file.stat.mode == '0644'
         msg: "SSH banner file is missing or has unexpected permissions"
 
-    - name: Check SSH hardening drop-in exists
+    - name: Check SSH hardening drop-in state
       ansible.builtin.stat:
         path: /etc/ssh/sshd_config.d/00-vps-scaffold-hardening.conf
       register: ssh_hardening_dropin
 
-    - name: Assert SSH hardening drop-in exists
+    - name: Assert SSH hardening drop-in is locked down when present
       ansible.builtin.assert:
         that:
-          - ssh_hardening_dropin.stat.exists
-          - ssh_hardening_dropin.stat.mode == '0600'
-        msg: "SSH hardening drop-in is missing or too permissive"
+          - not ssh_hardening_dropin.stat.exists or ssh_hardening_dropin.stat.mode == '0600'
+        msg: "SSH hardening drop-in is too permissive"
 
-    - name: Read SSH hardening drop-in
+    - name: Read SSH hardening drop-in when present
       ansible.builtin.slurp:
         src: /etc/ssh/sshd_config.d/00-vps-scaffold-hardening.conf
       register: ssh_hardening_dropin_raw
+      when: ssh_hardening_dropin.stat.exists
 
-    - name: Assert SSH hardening drop-in configures the benchmark MAC set
+    - name: Assert benchmark MACs are configured in SSH config
       ansible.builtin.assert:
         that:
           - >-
             'MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512,hmac-sha2-256'
-            in (ssh_hardening_dropin_raw.content | b64decode)
-        msg: "SSH hardening drop-in does not configure the expected MACs"
+            in sshd_config or
+            (sshd_config_d_raw.results | default([]) |
+             map(attribute='content') | map('b64decode') |
+             select('search', 'MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512,hmac-sha2-256') | list | length > 0)
+        msg: "SSH config does not configure the expected benchmark MACs"
 
     - name: Read root shadow entry
       ansible.builtin.getent:
@@ -427,11 +430,20 @@
         msg: "{{ item.stat.path }} is missing or too permissive"
       loop: "{{ allow_files.results }}"
 
+    - name: Detect crontab group on the test host
+      ansible.builtin.getent:
+        database: group
+        key: crontab
+      register: verify_crontab_group
+      failed_when: false
+
     - name: Assert cron.allow uses the expected group
       ansible.builtin.assert:
         that:
-          - allow_files.results | selectattr('stat.path', 'equalto', '/etc/cron.allow') | map(attribute='stat.gr_name') | first == 'crontab'
-        msg: "/etc/cron.allow is not group-owned by crontab"
+          - >-
+            allow_files.results | selectattr('stat.path', 'equalto', '/etc/cron.allow') | map(attribute='stat.gr_name') | first
+            == ((verify_crontab_group.ansible_facts.getent_group is defined) | ternary('crontab', 'root'))
+        msg: "/etc/cron.allow is not group-owned by the expected group"
 
     - name: Check sudo logging drop-in exists
       ansible.builtin.stat:

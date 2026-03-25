@@ -81,6 +81,19 @@ The playbook intentionally requires an exact matching Ubuntu or Debian
 datastream. If the installed `scap-security-guide` package only has an older
 benchmark, the run fails instead of silently using the wrong release.
 
+If distro packages lag behind your target release, you can opt into a pinned
+upstream datastream instead:
+
+```bash
+ansible-playbook -i ansible/hosts scaffold/ansible/audit-openscap.yml \
+  -e "openscap_content_source=upstream" \
+  -e "openscap_upstream_datastream_url=https://example.com/ssg-ubuntu2404-ds.xml" \
+  -e "openscap_upstream_datastream_checksum=sha256:replace-with-real-checksum"
+```
+
+That keeps the default path conservative while still giving you a reproducible
+way to audit newer Ubuntu releases when packaged content is behind.
+
 ### Profiles
 
 The playbook defaults to **CIS Level 1 Server** — the practical baseline for

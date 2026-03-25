@@ -29,6 +29,9 @@
 
   vars:
     openscap_profile: xccdf_org.ssgproject.content_profile_cis_level1_server
+    openscap_content_source: package
+    openscap_upstream_datastream_url: ""
+    openscap_upstream_datastream_checksum: ""
     openscap_report_dir: /tmp/openscap
     local_reports_root: >-
       {{
@@ -49,34 +52,78 @@
         state: present
         update_cache: true
 
-    - name: Set SCAP content path
+    - name: Fail if OpenSCAP content source is invalid
+      ansible.builtin.fail:
+        msg: >-
+          openscap_content_source must be either 'package' or 'upstream'.
+          Found '{{ openscap_content_source }}'.
+      when: openscap_content_source not in ['package', 'upstream']
+
+    - name: Set packaged SCAP content path
       ansible.builtin.set_fact:
         scap_content_prefix: "{{ 'ubuntu' if ansible_facts['distribution'] == 'Ubuntu' else 'debian' }}"
         scap_content_version: "{{ ansible_facts['distribution_version'] | regex_replace('[^0-9]', '') }}"
         scap_content_path: >-
           {{ scap_content_dir }}/ssg-{{ 'ubuntu' if ansible_facts['distribution'] == 'Ubuntu' else 'debian' }}{{ ansible_facts['distribution_version'] | regex_replace('[^0-9]', '') }}-ds.xml
-      when: ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+      when:
+        - openscap_content_source == 'package'
+        - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
 
-    - name: Find available SCAP content for distro
+    - name: Find available packaged SCAP content for distro
       ansible.builtin.find:
         paths: "{{ scap_content_dir }}"
         patterns: "ssg-{{ scap_content_prefix }}*-ds.xml"
         file_type: file
       register: scap_content_candidates
-      when: ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+      when:
+        - openscap_content_source == 'package'
+        - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+
+    - name: Ensure upstream SCAP cache directory exists
+      ansible.builtin.file:
+        path: /var/cache/openscap
+        state: directory
+        mode: "0755"
+      when: openscap_content_source == 'upstream'
+
+    - name: Fail if upstream datastream URL is missing
+      ansible.builtin.fail:
+        msg: >-
+          openscap_upstream_datastream_url must be set when
+          openscap_content_source=upstream.
+      when:
+        - openscap_content_source == 'upstream'
+        - openscap_upstream_datastream_url | length == 0
+
+    - name: Download upstream SCAP datastream
+      ansible.builtin.get_url:
+        url: "{{ openscap_upstream_datastream_url }}"
+        dest: "/var/cache/openscap/{{ openscap_upstream_datastream_url | basename }}"
+        checksum: "{{ openscap_upstream_datastream_checksum if openscap_upstream_datastream_checksum | length > 0 else omit }}"
+        mode: "0644"
+      when: openscap_content_source == 'upstream'
+
+    - name: Set upstream SCAP content path
+      ansible.builtin.set_fact:
+        scap_content_path: "/var/cache/openscap/{{ openscap_upstream_datastream_url | basename }}"
+      when: openscap_content_source == 'upstream'
 
     - name: Verify SCAP content file exists
       ansible.builtin.stat:
         path: "{{ scap_content_path }}"
       register: scap_content_stat
-      when: ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+      when:
+        - openscap_content_source == 'upstream'
+          or ansible_facts['distribution'] in ['Ubuntu', 'Debian']
 
     - name: Fail if distro is unsupported
       ansible.builtin.fail:
         msg: >-
           OpenSCAP audit currently supports Ubuntu and Debian only. Found
           {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}.
-      when: ansible_facts['distribution'] not in ['Ubuntu', 'Debian']
+      when:
+        - openscap_content_source == 'package'
+        - ansible_facts['distribution'] not in ['Ubuntu', 'Debian']
 
     - name: Fail if matching SCAP content not found
       ansible.builtin.fail:
@@ -96,7 +143,17 @@
           Falling back to a different Ubuntu or Debian benchmark would produce
           misleading results, so this playbook stops instead.
       when:
+        - openscap_content_source == 'package'
         - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+        - not scap_content_stat.stat.exists
+
+    - name: Fail if upstream SCAP datastream was not downloaded
+      ansible.builtin.fail:
+        msg: >-
+          Upstream SCAP datastream was expected at {{ scap_content_path }}, but
+          it was not found after download.
+      when:
+        - openscap_content_source == 'upstream'
         - not scap_content_stat.stat.exists
 
     - name: Create report directory on server
@@ -145,6 +202,8 @@
       ansible.builtin.debug:
         msg:
           - "Open {{ local_report_dir }}/report.html in a browser for full results"
+          - "SCAP content source: {{ openscap_content_source }}"
+          - "SCAP datastream: {{ scap_content_path }}"
           - "Failed rules are CIS Benchmark Level 1 requirements not currently met"
           - "Each rule links to the CIS control ID and remediation guidance"
           - "Some failures are intentional trade-offs for a public web server"

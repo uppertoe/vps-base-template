@@ -41,7 +41,6 @@
       ansible.builtin.git:
         repo: https://github.com/docker/docker-bench-security.git
         dest: /opt/docker-bench-security
-        version: main
         force: true
 
     - name: Run docker-bench-security

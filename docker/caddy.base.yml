@@ -18,6 +18,9 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    read_only: true
+    mem_limit: 256m
+    pids_limit: 256
     ports:
       - "80:80"
       - "443:443"
@@ -29,12 +32,21 @@ services:
       - ../../Caddyfile:/etc/caddy/Caddyfile:ro
       - ./run-caddy.sh:/usr/local/bin/run-caddy.sh:ro
       - caddy_data:/data          # TLS certs — persisted across restarts
+      - caddy_config:/config      # Autosave + runtime config cache
       - caddy_logs:/var/log/caddy
+    tmpfs:
+      - /tmp
     networks:
       - caddy
     environment:
       - DOMAIN=${DOMAIN}
     command: ["/bin/sh", "/usr/local/bin/run-caddy.sh"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:2019/config/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     labels:
       - "com.centurylinklabs.watchtower.enable=false"
 
@@ -44,4 +56,5 @@ networks:
 
 volumes:
   caddy_data:
+  caddy_config:
   caddy_logs:

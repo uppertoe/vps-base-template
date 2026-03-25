@@ -366,6 +366,18 @@
           - (daemon_json_raw.content | b64decode | from_json)['live-restore'] == true
         msg: "live-restore is not enabled in daemon.json"
 
+    - name: Assert Docker inter-container communication is disabled by default
+      ansible.builtin.assert:
+        that:
+          - (daemon_json_raw.content | b64decode | from_json)['icc'] == false
+        msg: "Docker daemon does not disable inter-container communication"
+
+    - name: Assert Docker userland proxy is disabled
+      ansible.builtin.assert:
+        that:
+          - (daemon_json_raw.content | b64decode | from_json)['userland-proxy'] == false
+        msg: "Docker daemon does not disable the userland proxy"
+
     - name: Check deploy user is in docker group
       ansible.builtin.command: id deploy
       register: deploy_id

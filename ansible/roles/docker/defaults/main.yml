@@ -5,6 +5,12 @@ docker_daemon_config:
   # Keep containers running if the daemon is restarted (e.g. during updates)
   live-restore: true
 
+  # Reduce implicit container-to-container traffic on the default bridge.
+  icc: false
+
+  # Avoid exposing ports through the legacy userland proxy unless needed.
+  userland-proxy: false
+
   # Prevent container processes from gaining new privileges via setuid/setgid
   # binaries. Applied as a default — individual containers can override.
   no-new-privileges: true

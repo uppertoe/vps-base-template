@@ -195,6 +195,7 @@
 - name: Configure systemd-timesyncd NTP servers in main config
   ansible.builtin.blockinfile:
     path: /etc/systemd/timesyncd.conf
+    create: true
     marker: "# {mark} ANSIBLE MANAGED BLOCK: vps-scaffold timesyncd"
     insertafter: '^\[Time\]'
     block: |

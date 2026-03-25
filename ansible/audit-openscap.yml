@@ -170,9 +170,10 @@
         openscap_upstream_archive_asset: >-
           {{
             openscap_release_api.json.assets
-            | selectattr('name', 'match', '^scap-security-guide-.*\\.zip$')
+            | selectattr('name', 'search', '\\.zip$')
             | list
             | first
+            | default({}, true)
           }}
       when:
         - openscap_content_source in ['auto', 'upstream']

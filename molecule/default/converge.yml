@@ -20,5 +20,6 @@
     - role: deploy-user
     - role: ssh-hardening
     - role: os-hardening
+    - role: baseline-hardening
     - role: docker
     - role: firewall

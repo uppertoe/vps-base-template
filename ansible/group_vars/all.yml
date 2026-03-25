@@ -29,8 +29,8 @@ ssh_x11_forwarding: false
 ssh_max_auth_retries: 3
 ssh_max_sessions: 2
 ssh_client_alive_interval: 300
-ssh_client_alive_count: 2
-ssh_login_grace_time: 30s
+ssh_client_alive_count: 3
+ssh_login_grace_time: 60
 ssh_allow_tcp_forwarding: "no"
 ssh_print_motd: false
 ssh_print_last_log: true
@@ -41,8 +41,6 @@ ssh_macs:
   - hmac-sha2-512-etm@openssh.com
   - hmac-sha2-256-etm@openssh.com
   - umac-128-etm@openssh.com
-  - hmac-sha2-512
-  - hmac-sha2-256
 # Only allow the deploy user to connect via SSH
 ssh_allow_users: "{{ deploy_user }}"
 
@@ -52,8 +50,8 @@ ssh_allow_users: "{{ deploy_user }}"
 # -----------------------------------------------------------------------------
 os_security_kernel_enable_module_loading: true
 os_security_suid_sgid_enforce: true
-os_auth_retries: 5
-os_auth_lockout_time: 600
+os_auth_retries: 4
+os_auth_lockout_time: 900
 os_auth_pw_remember: 24
 os_security_auto_logout: 900
 os_auth_pam_passwdqc_enable: false
@@ -65,7 +63,7 @@ lock_root_password: true
 # -----------------------------------------------------------------------------
 baseline_password_inactive_days: 30
 baseline_shell_umask: "027"
-baseline_faillock_deny: 5
+baseline_faillock_deny: 4
 baseline_faillock_unlock_time: 900
 baseline_faillock_fail_interval: 900
 baseline_timesyncd_ntp_servers:

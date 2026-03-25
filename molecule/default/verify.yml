@@ -136,11 +136,11 @@
       ansible.builtin.assert:
         that:
           - >-
-            'ClientAliveCountMax 2' in sshd_config or
+            'ClientAliveCountMax 3' in sshd_config or
             (sshd_config_d_raw.results | default([]) |
              map(attribute='content') | map('b64decode') |
-             select('search', 'ClientAliveCountMax 2') | list | length > 0)
-        msg: "SSH ClientAliveCountMax is not tightened to 2"
+             select('search', 'ClientAliveCountMax 3') | list | length > 0)
+        msg: "SSH ClientAliveCountMax is not tightened to 3"
 
     - name: Assert SSH client alive interval is tightened
       ansible.builtin.assert:
@@ -176,11 +176,11 @@
       ansible.builtin.assert:
         that:
           - >-
-            'LoginGraceTime 30s' in sshd_config or
+            'LoginGraceTime 60' in sshd_config or
             (sshd_config_d_raw.results | default([]) |
              map(attribute='content') | map('b64decode') |
-             select('search', 'LoginGraceTime 30s') | list | length > 0)
-        msg: "SSH LoginGraceTime is not tightened to 30s"
+             select('search', 'LoginGraceTime 60') | list | length > 0)
+        msg: "SSH LoginGraceTime is not tightened to 60"
 
     - name: Assert SSH log level is INFO
       ansible.builtin.assert:
@@ -246,7 +246,7 @@
 
     - name: Check pwquality config exists
       ansible.builtin.stat:
-        path: /etc/security/pwquality.conf.d/99-vps-scaffold.conf
+        path: /etc/security/pwquality.conf
       register: pwquality_config
 
     - name: Assert pwquality config exists
@@ -257,7 +257,7 @@
 
     - name: Read pwquality config
       ansible.builtin.slurp:
-        src: /etc/security/pwquality.conf.d/99-vps-scaffold.conf
+        src: /etc/security/pwquality.conf
       register: pwquality_config_raw
 
     - name: Assert pwquality config includes CIS-style settings
@@ -270,14 +270,27 @@
 
     - name: Check PAM faillock profile exists
       ansible.builtin.stat:
-        path: /usr/share/pam-configs/vps-faillock
+        path: /etc/security/faillock.conf
       register: pam_faillock_profile
 
     - name: Assert PAM faillock profile exists
       ansible.builtin.assert:
         that:
           - pam_faillock_profile.stat.exists
-        msg: "PAM faillock profile was not deployed"
+        msg: "faillock config was not deployed"
+
+    - name: Read faillock config
+      ansible.builtin.slurp:
+        src: /etc/security/faillock.conf
+      register: faillock_config_raw
+
+    - name: Assert faillock config uses expected values
+      ansible.builtin.assert:
+        that:
+          - "'deny = 4' in (faillock_config_raw.content | b64decode)"
+          - "'fail_interval = 900' in (faillock_config_raw.content | b64decode)"
+          - "'unlock_time = 900' in (faillock_config_raw.content | b64decode)"
+        msg: "faillock config is missing expected values"
 
     - name: Check session hardening profile exists
       ansible.builtin.stat:
@@ -379,7 +392,7 @@
 
     - name: Check timesyncd config exists
       ansible.builtin.stat:
-        path: /etc/systemd/timesyncd.conf.d/99-vps-scaffold.conf
+        path: /etc/systemd/timesyncd.conf
       register: timesyncd_config
 
     - name: Assert timesyncd config exists
@@ -390,7 +403,7 @@
 
     - name: Read timesyncd config
       ansible.builtin.slurp:
-        src: /etc/systemd/timesyncd.conf.d/99-vps-scaffold.conf
+        src: /etc/systemd/timesyncd.conf
       register: timesyncd_config_raw
 
     - name: Assert timesyncd config includes NTP servers

@@ -26,17 +26,64 @@
     - apport
   when: item in ansible_facts.packages
 
-- name: Ensure pwquality config directory exists
+- name: Remove custom PAM profiles from earlier scaffold revisions
   ansible.builtin.file:
-    path: /etc/security/pwquality.conf.d
-    state: directory
-    mode: "0755"
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /usr/share/pam-configs/vps-pwquality
+    - /usr/share/pam-configs/vps-pwhistory
+    - /usr/share/pam-configs/vps-faillock
 
-- name: Configure pwquality policy
+- name: Apply PAM profile changes
+  ansible.builtin.command: pam-auth-update --package
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  changed_when: true
+
+- name: Configure faillock policy
   ansible.builtin.copy:
-    dest: /etc/security/pwquality.conf.d/99-vps-scaffold.conf
+    dest: /etc/security/faillock.conf
     mode: "0644"
     content: |
+      deny = {{ baseline_faillock_deny }}
+      fail_interval = {{ baseline_faillock_fail_interval }}
+      unlock_time = {{ baseline_faillock_unlock_time }}
+
+- name: Remove duplicate pam_faillock lines from common-auth
+  ansible.builtin.replace:
+    path: /etc/pam.d/common-auth
+    regexp: '^(auth\s+(required|\[default=die\])\s+pam_faillock\.so[^\n]*\n)+'
+    replace: ''
+
+- name: Insert pam_faillock lines into common-auth
+  ansible.builtin.blockinfile:
+    path: /etc/pam.d/common-auth
+    marker: "# {mark} ANSIBLE MANAGED BLOCK: vps-scaffold faillock"
+    insertbefore: '^auth\s+\[success=2 default=ignore\]\s+pam_unix\.so'
+    block: |
+      auth required pam_faillock.so preauth
+      auth [default=die] pam_faillock.so authfail
+
+- name: Remove duplicate pam_faillock lines from common-account
+  ansible.builtin.replace:
+    path: /etc/pam.d/common-account
+    regexp: '^(account\s+required\s+pam_faillock\.so[^\n]*\n)+'
+    replace: ''
+
+- name: Insert pam_faillock line into common-account
+  ansible.builtin.blockinfile:
+    path: /etc/pam.d/common-account
+    marker: "# {mark} ANSIBLE MANAGED BLOCK: vps-scaffold faillock"
+    insertbefore: '^account\s+\[success=1 new_authtok_reqd=done default=ignore\]\s+pam_unix\.so'
+    block: |
+      account required pam_faillock.so
+
+- name: Configure pwquality policy in main config
+  ansible.builtin.blockinfile:
+    path: /etc/security/pwquality.conf
+    marker: "# {mark} ANSIBLE MANAGED BLOCK: vps-scaffold pwquality"
+    block: |
       enforcing = 1
       minlen = 14
       minclass = 4
@@ -49,52 +96,26 @@
       maxrepeat = 3
       maxsequence = 3
 
-- name: Configure PAM pwquality profile
-  ansible.builtin.copy:
-    dest: /usr/share/pam-configs/vps-pwquality
-    mode: "0644"
-    content: |
-      Name: vps-scaffold pwquality password strength enforcement
-      Default: yes
-      Priority: 1025
-      Conflicts: passwdqc cracklib
-      Password-Type: Primary
-      Password:
-        requisite pam_pwquality.so retry=3 enforce_for_root
+- name: Remove duplicate pam_pwquality lines from common-password
+  ansible.builtin.replace:
+    path: /etc/pam.d/common-password
+    regexp: '^password\s+requisite\s+pam_pwquality\.so[^\n]*\n'
+    replace: ''
 
-- name: Configure PAM pwhistory profile
-  ansible.builtin.copy:
-    dest: /usr/share/pam-configs/vps-pwhistory
-    mode: "0644"
-    content: |
-      Name: vps-scaffold password history enforcement
-      Default: yes
-      Priority: 1024
-      Password-Type: Primary
-      Password:
-        requisite pam_pwhistory.so remember={{ os_auth_pw_remember }} use_authtok enforce_for_root
+- name: Remove duplicate pam_pwhistory lines from common-password
+  ansible.builtin.replace:
+    path: /etc/pam.d/common-password
+    regexp: '^password\s+requisite\s+pam_pwhistory\.so[^\n]*\n'
+    replace: ''
 
-- name: Configure PAM faillock profile
-  ansible.builtin.copy:
-    dest: /usr/share/pam-configs/vps-faillock
-    mode: "0644"
-    content: |
-      Name: vps-scaffold failed login lockout
-      Default: yes
-      Priority: 1023
-      Auth-Type: Primary
-      Auth:
-        required pam_faillock.so preauth silent audit deny={{ baseline_faillock_deny }} fail_interval={{ baseline_faillock_fail_interval }} unlock_time={{ baseline_faillock_unlock_time }}
-        [default=die] pam_faillock.so authfail audit deny={{ baseline_faillock_deny }} fail_interval={{ baseline_faillock_fail_interval }} unlock_time={{ baseline_faillock_unlock_time }}
-      Account-Type: Primary
-      Account:
-        required pam_faillock.so
-
-- name: Apply PAM profile changes
-  ansible.builtin.command: pam-auth-update --package
-  environment:
-    DEBIAN_FRONTEND: noninteractive
-  changed_when: false
+- name: Insert pwquality and pwhistory lines into common-password
+  ansible.builtin.blockinfile:
+    path: /etc/pam.d/common-password
+    marker: "# {mark} ANSIBLE MANAGED BLOCK: vps-scaffold password policy"
+    insertbefore: '^password\s+\[success=1 default=ignore\]\s+pam_unix\.so'
+    block: |
+      password requisite pam_pwquality.so retry=3 enforce_for_root minlen=14 minclass=4 difok=2 dictcheck=1 dcredit=-1 ucredit=-1 lcredit=-1 ocredit=-1 maxrepeat=3 maxsequence=3
+      password requisite pam_pwhistory.so remember={{ os_auth_pw_remember }} use_authtok enforce_for_root
 
 - name: Set default inactive password lock for new users
   ansible.builtin.lineinfile:
@@ -160,18 +181,17 @@
       Defaults use_pty
       Defaults timestamp_timeout=0
 
-- name: Ensure systemd-timesyncd config directory exists
+- name: Remove timesyncd drop-in from earlier scaffold revisions
   ansible.builtin.file:
-    path: /etc/systemd/timesyncd.conf.d
-    state: directory
-    mode: "0755"
+    path: /etc/systemd/timesyncd.conf.d/99-vps-scaffold.conf
+    state: absent
 
-- name: Configure systemd-timesyncd NTP servers
-  ansible.builtin.copy:
-    dest: /etc/systemd/timesyncd.conf.d/99-vps-scaffold.conf
-    mode: "0644"
-    content: |
-      [Time]
+- name: Configure systemd-timesyncd NTP servers in main config
+  ansible.builtin.blockinfile:
+    path: /etc/systemd/timesyncd.conf
+    marker: "# {mark} ANSIBLE MANAGED BLOCK: vps-scaffold timesyncd"
+    insertafter: '^\[Time\]'
+    block: |
       NTP={{ baseline_timesyncd_ntp_servers | join(' ') }}
       FallbackNTP={{ baseline_timesyncd_fallback_ntp_servers | join(' ') }}
 

@@ -5,4 +5,10 @@ set -euo pipefail
 
 cd /opt/deploy
 git pull --recurse-submodules
+
+# Keep server and app env files readable only by the deploy user.
+find . \
+  \( -path './.env' -o -path './apps/*/.env' -o -path './backup/config.env' -o -path './backup/services/*.env' \) \
+  -type f -exec chmod 600 {} +
+
 docker compose up -d --pull always --remove-orphans

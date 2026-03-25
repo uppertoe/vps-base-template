@@ -114,6 +114,18 @@ wait_for_postgres() {
   return 1
 }
 
+ensure_database_exists() {
+  local db_name="$1"
+  local exists=""
+
+  exists="$(_psql --dbname postgres --tuples-only \
+    --command "SELECT 1 FROM pg_database WHERE datname = '${db_name}'" | tr -d ' ')"
+
+  if [[ "$exists" != "1" ]]; then
+    _psql --dbname postgres --command "CREATE DATABASE \"${db_name}\";" > /dev/null
+  fi
+}
+
 snapshot_count() {
   local repo_path="$1" password="$2"
   RESTIC_PASSWORD="$password" restic -r "$repo_path" snapshots --json 2>/dev/null \
@@ -141,6 +153,10 @@ setup() {
     > /dev/null
 
   wait_for_postgres
+
+  # CI can occasionally report PostgreSQL ready before POSTGRES_DB has been
+  # fully created, so make that step explicit before seeding fixtures.
+  ensure_database_exists "$PG_DB"
 
   # Seed the test database
   _psql --dbname "$PG_DB" < "$SCRIPT_DIR/seed.sql"

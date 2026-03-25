@@ -164,22 +164,29 @@
         - openscap_content_source == 'upstream'
           or not scap_packaged_content_stat.stat.exists
 
-    - name: Select upstream OpenSCAP release archive
+    - name: Set upstream OpenSCAP release tag
       ansible.builtin.set_fact:
         openscap_upstream_release_tag: "{{ openscap_release_api.json.tag_name }}"
-        openscap_upstream_archive_asset: >-
-          {{
-            openscap_release_api.json.assets
-            | selectattr('name', 'search', '\\.zip$')
-            | list
-            | first
-            | default({}, true)
-          }}
+        openscap_upstream_archive_asset: {}
       when:
         - openscap_content_source in ['auto', 'upstream']
         - not openscap_use_cached_metadata
         - openscap_content_source == 'upstream'
           or not scap_packaged_content_stat.stat.exists
+
+    - name: Select upstream OpenSCAP zip archive asset
+      ansible.builtin.set_fact:
+        openscap_upstream_archive_asset: "{{ item }}"
+      loop: "{{ openscap_release_api.json.assets | default([]) }}"
+      loop_control:
+        label: "{{ item.name | default('unnamed-asset') }}"
+      when:
+        - openscap_content_source in ['auto', 'upstream']
+        - not openscap_use_cached_metadata
+        - openscap_content_source == 'upstream'
+          or not scap_packaged_content_stat.stat.exists
+        - item.name is defined
+        - item.name.endswith('.zip')
 
     - name: Fail if no upstream OpenSCAP archive asset was found
       ansible.builtin.fail:

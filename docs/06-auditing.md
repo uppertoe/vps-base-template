@@ -77,22 +77,32 @@ directory in either layout.
 Open
 `report.html` in a browser for a readable pass/fail view of every CIS rule.
 
-The playbook intentionally requires an exact matching Ubuntu or Debian
-datastream. If the installed `scap-security-guide` package only has an older
-benchmark, the run fails instead of silently using the wrong release.
+The playbook defaults to `openscap_content_source=auto`:
+- use the distro-packaged datastream when there is an exact match
+- otherwise resolve the latest upstream ComplianceAsCode release archive,
+  extract the matching datastream, and cache its URL/checksum metadata in
+  `reports/openscap-source.json`
 
-If distro packages lag behind your target release, you can opt into a pinned
-upstream datastream instead:
+Once that metadata file exists, later runs reuse it so the audit stays
+reproducible unless you deliberately refresh it.
+
+If you want to bypass packaged content and force the cached upstream path
+immediately:
 
 ```bash
 ansible-playbook -i ansible/hosts scaffold/ansible/audit-openscap.yml \
-  -e "openscap_content_source=upstream" \
-  -e "openscap_upstream_datastream_url=https://example.com/ssg-ubuntu2404-ds.xml" \
-  -e "openscap_upstream_datastream_checksum=sha256:replace-with-real-checksum"
+  -e "openscap_content_source=upstream"
 ```
 
-That keeps the default path conservative while still giving you a reproducible
-way to audit newer Ubuntu releases when packaged content is behind.
+To deliberately refresh the pinned upstream source metadata:
+
+```bash
+ansible-playbook -i ansible/hosts scaffold/ansible/audit-openscap.yml \
+  -e "openscap_refresh_upstream_content=true"
+```
+
+That keeps the default path conservative while still giving you a reproducible,
+first-run-discovered upstream fallback when packaged content is behind.
 
 ### Profiles
 

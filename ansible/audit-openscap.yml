@@ -29,9 +29,9 @@
 
   vars:
     openscap_profile: xccdf_org.ssgproject.content_profile_cis_level1_server
-    openscap_content_source: package
-    openscap_upstream_datastream_url: ""
-    openscap_upstream_datastream_checksum: ""
+    openscap_content_source: auto
+    openscap_refresh_upstream_content: false
+    openscap_upstream_release_api: https://api.github.com/repos/ComplianceAsCode/content/releases/latest
     openscap_report_dir: /tmp/openscap
     local_reports_root: >-
       {{
@@ -40,6 +40,7 @@
         else (playbook_dir | dirname)
       }}
     local_report_dir: "{{ local_reports_root }}/reports/openscap-{{ inventory_hostname }}-{{ ansible_facts['date_time']['date'] }}"
+    local_upstream_metadata_file: "{{ local_reports_root }}/reports/openscap-source.json"
     scap_content_dir: /usr/share/xml/scap/ssg/content
 
   tasks:
@@ -55,18 +56,23 @@
     - name: Fail if OpenSCAP content source is invalid
       ansible.builtin.fail:
         msg: >-
-          openscap_content_source must be either 'package' or 'upstream'.
+          openscap_content_source must be one of 'auto', 'package', or 'upstream'.
           Found '{{ openscap_content_source }}'.
-      when: openscap_content_source not in ['package', 'upstream']
+      when: openscap_content_source not in ['auto', 'package', 'upstream']
 
-    - name: Set packaged SCAP content path
+    - name: Set SCAP datastream naming facts
       ansible.builtin.set_fact:
         scap_content_prefix: "{{ 'ubuntu' if ansible_facts['distribution'] == 'Ubuntu' else 'debian' }}"
         scap_content_version: "{{ ansible_facts['distribution_version'] | regex_replace('[^0-9]', '') }}"
-        scap_content_path: >-
-          {{ scap_content_dir }}/ssg-{{ 'ubuntu' if ansible_facts['distribution'] == 'Ubuntu' else 'debian' }}{{ ansible_facts['distribution_version'] | regex_replace('[^0-9]', '') }}-ds.xml
+        scap_datastream_name: >-
+          ssg-{{ 'ubuntu' if ansible_facts['distribution'] == 'Ubuntu' else 'debian' }}{{ ansible_facts['distribution_version'] | regex_replace('[^0-9]', '') }}-ds.xml
       when:
-        - openscap_content_source == 'package'
+        - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+
+    - name: Set packaged SCAP content path
+      ansible.builtin.set_fact:
+        scap_packaged_content_path: "{{ scap_content_dir }}/{{ scap_datastream_name }}"
+      when:
         - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
 
     - name: Find available packaged SCAP content for distro
@@ -76,60 +82,156 @@
         file_type: file
       register: scap_content_candidates
       when:
-        - openscap_content_source == 'package'
         - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
 
-    - name: Ensure upstream SCAP cache directory exists
-      ansible.builtin.file:
-        path: /var/cache/openscap
-        state: directory
-        mode: "0755"
-      when: openscap_content_source == 'upstream'
-
-    - name: Fail if upstream datastream URL is missing
-      ansible.builtin.fail:
-        msg: >-
-          openscap_upstream_datastream_url must be set when
-          openscap_content_source=upstream.
-      when:
-        - openscap_content_source == 'upstream'
-        - openscap_upstream_datastream_url | length == 0
-
-    - name: Download upstream SCAP datastream
-      ansible.builtin.get_url:
-        url: "{{ openscap_upstream_datastream_url }}"
-        dest: "/var/cache/openscap/{{ openscap_upstream_datastream_url | basename }}"
-        checksum: "{{ openscap_upstream_datastream_checksum if openscap_upstream_datastream_checksum | length > 0 else omit }}"
-        mode: "0644"
-      when: openscap_content_source == 'upstream'
-
-    - name: Set upstream SCAP content path
-      ansible.builtin.set_fact:
-        scap_content_path: "/var/cache/openscap/{{ openscap_upstream_datastream_url | basename }}"
-      when: openscap_content_source == 'upstream'
-
-    - name: Verify SCAP content file exists
+    - name: Verify packaged SCAP content file exists
       ansible.builtin.stat:
-        path: "{{ scap_content_path }}"
-      register: scap_content_stat
+        path: "{{ scap_packaged_content_path }}"
+      register: scap_packaged_content_stat
       when:
-        - openscap_content_source == 'upstream'
-          or ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+        - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
 
     - name: Fail if distro is unsupported
       ansible.builtin.fail:
         msg: >-
           OpenSCAP audit currently supports Ubuntu and Debian only. Found
           {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}.
-      when:
-        - openscap_content_source == 'package'
-        - ansible_facts['distribution'] not in ['Ubuntu', 'Debian']
+      when: ansible_facts['distribution'] not in ['Ubuntu', 'Debian']
 
-    - name: Fail if matching SCAP content not found
+    - name: Ensure local reports directory exists
+      ansible.builtin.file:
+        path: "{{ local_reports_root }}/reports"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      become: false
+
+    - name: Check for cached upstream OpenSCAP metadata
+      ansible.builtin.stat:
+        path: "{{ local_upstream_metadata_file }}"
+      register: openscap_metadata_file_stat
+      delegate_to: localhost
+      become: false
+
+    - name: Read cached upstream OpenSCAP metadata
+      ansible.builtin.slurp:
+        src: "{{ local_upstream_metadata_file }}"
+      register: openscap_metadata_file_raw
+      delegate_to: localhost
+      become: false
+      when:
+        - openscap_metadata_file_stat.stat.exists
+        - not openscap_refresh_upstream_content
+
+    - name: Parse cached upstream OpenSCAP metadata
+      ansible.builtin.set_fact:
+        openscap_cached_metadata: "{{ openscap_metadata_file_raw.content | b64decode | from_json }}"
+      when:
+        - openscap_metadata_file_stat.stat.exists
+        - not openscap_refresh_upstream_content
+
+    - name: Determine whether cached upstream metadata can be reused
+      ansible.builtin.set_fact:
+        openscap_use_cached_metadata: >-
+          {{
+            openscap_metadata_file_stat.stat.exists
+            and not openscap_refresh_upstream_content
+            and (openscap_cached_metadata.datastream_name | default('')) == scap_datastream_name
+            and (openscap_cached_metadata.archive_url | default('')) | length > 0
+            and (openscap_cached_metadata.archive_checksum | default('')) | length > 0
+            and (openscap_cached_metadata.archive_member | default('')) | length > 0
+          }}
+
+    - name: Set upstream facts from cached metadata
+      ansible.builtin.set_fact:
+        openscap_upstream_release_tag: "{{ openscap_cached_metadata.release_tag }}"
+        openscap_upstream_archive_url: "{{ openscap_cached_metadata.archive_url }}"
+        openscap_upstream_archive_checksum: "{{ openscap_cached_metadata.archive_checksum }}"
+        openscap_upstream_archive_name: "{{ openscap_cached_metadata.archive_name }}"
+        openscap_upstream_archive_member: "{{ openscap_cached_metadata.archive_member }}"
+      when: openscap_use_cached_metadata
+
+    - name: Query latest ComplianceAsCode release metadata
+      ansible.builtin.uri:
+        url: "{{ openscap_upstream_release_api }}"
+        return_content: true
+      register: openscap_release_api
+      delegate_to: localhost
+      become: false
+      when:
+        - openscap_content_source in ['auto', 'upstream']
+        - not openscap_use_cached_metadata
+        - openscap_content_source == 'upstream'
+          or not scap_packaged_content_stat.stat.exists
+
+    - name: Select upstream OpenSCAP release archive
+      ansible.builtin.set_fact:
+        openscap_upstream_release_tag: "{{ openscap_release_api.json.tag_name }}"
+        openscap_upstream_archive_asset: >-
+          {{
+            openscap_release_api.json.assets
+            | selectattr('name', 'match', '^scap-security-guide-.*\\.zip$')
+            | list
+            | first
+          }}
+      when:
+        - openscap_content_source in ['auto', 'upstream']
+        - not openscap_use_cached_metadata
+        - openscap_content_source == 'upstream'
+          or not scap_packaged_content_stat.stat.exists
+
+    - name: Fail if no upstream OpenSCAP archive asset was found
+      ansible.builtin.fail:
+        msg: >-
+          Could not find a ComplianceAsCode zip release asset via
+          {{ openscap_upstream_release_api }}.
+      when:
+        - openscap_content_source in ['auto', 'upstream']
+        - not openscap_use_cached_metadata
+        - openscap_content_source == 'upstream'
+          or not scap_packaged_content_stat.stat.exists
+        - openscap_upstream_archive_asset is not defined
+
+    - name: Set upstream OpenSCAP archive facts
+      ansible.builtin.set_fact:
+        openscap_upstream_archive_url: "{{ openscap_upstream_archive_asset.browser_download_url }}"
+        openscap_upstream_archive_checksum: "{{ openscap_upstream_archive_asset.digest }}"
+        openscap_upstream_archive_name: "{{ openscap_upstream_archive_asset.name }}"
+        openscap_upstream_archive_member: "{{ openscap_upstream_archive_asset.name | regex_replace('\\.zip$', '') }}/{{ scap_datastream_name }}"
+      when:
+        - openscap_content_source in ['auto', 'upstream']
+        - not openscap_use_cached_metadata
+        - openscap_content_source == 'upstream'
+          or not scap_packaged_content_stat.stat.exists
+
+    - name: Cache upstream OpenSCAP metadata locally
+      ansible.builtin.copy:
+        dest: "{{ local_upstream_metadata_file }}"
+        mode: "0644"
+        content: |
+          {
+            "source": "ComplianceAsCode",
+            "release_tag": {{ openscap_upstream_release_tag | to_json }},
+            "archive_name": {{ openscap_upstream_archive_name | to_json }},
+            "archive_url": {{ openscap_upstream_archive_url | to_json }},
+            "archive_checksum": {{ openscap_upstream_archive_checksum | to_json }},
+            "archive_member": {{ openscap_upstream_archive_member | to_json }},
+            "datastream_name": {{ scap_datastream_name | to_json }},
+            "resolved_at": {{ ansible_date_time.iso8601 | to_json }}
+          }
+      delegate_to: localhost
+      become: false
+      when:
+        - openscap_content_source in ['auto', 'upstream']
+        - not openscap_use_cached_metadata
+        - openscap_content_source == 'upstream'
+          or not scap_packaged_content_stat.stat.exists
+
+    - name: Fail if matching packaged SCAP content not found
       ansible.builtin.fail:
         msg: >-
           No SCAP content matched {{ ansible_facts['distribution'] }}
-          {{ ansible_facts['distribution_version'] }} at {{ scap_content_path }}.
+          {{ ansible_facts['distribution_version'] }} at {{ scap_packaged_content_path }}.
           Available {{ scap_content_prefix }} datastreams:
           {{
             scap_content_candidates.files
@@ -138,23 +240,121 @@
             | join(', ')
             | default('none found', true)
           }}.
-          Install a matching scap-security-guide package or run this audit on a
-          supported distro release.
-          Falling back to a different Ubuntu or Debian benchmark would produce
-          misleading results, so this playbook stops instead.
+          Set openscap_content_source=upstream to resolve and cache a pinned
+          upstream datastream automatically, or install a matching distro package.
       when:
         - openscap_content_source == 'package'
-        - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
-        - not scap_content_stat.stat.exists
+        - not scap_packaged_content_stat.stat.exists
 
-    - name: Fail if upstream SCAP datastream was not downloaded
-      ansible.builtin.fail:
-        msg: >-
-          Upstream SCAP datastream was expected at {{ scap_content_path }}, but
-          it was not found after download.
+    - name: Set SCAP content path to packaged datastream
+      ansible.builtin.set_fact:
+        scap_content_path: "{{ scap_packaged_content_path }}"
+        scap_content_source_used: package
+      when:
+        - openscap_content_source == 'package'
+          or (
+            openscap_content_source == 'auto'
+            and not openscap_use_cached_metadata
+            and scap_packaged_content_stat.stat.exists
+          )
+
+    - name: Ensure upstream OpenSCAP cache directory exists
+      ansible.builtin.file:
+        path: /var/cache/openscap
+        state: directory
+        mode: "0755"
       when:
         - openscap_content_source == 'upstream'
-        - not scap_content_stat.stat.exists
+          or openscap_use_cached_metadata
+          or (
+            openscap_content_source == 'auto'
+            and not scap_packaged_content_stat.stat.exists
+          )
+
+    - name: Install unzip for upstream OpenSCAP archive extraction
+      ansible.builtin.apt:
+        name: unzip
+        state: present
+        update_cache: true
+      when:
+        - openscap_content_source == 'upstream'
+          or openscap_use_cached_metadata
+          or (
+            openscap_content_source == 'auto'
+            and not scap_packaged_content_stat.stat.exists
+          )
+
+    - name: Download upstream OpenSCAP release archive
+      ansible.builtin.get_url:
+        url: "{{ openscap_upstream_archive_url }}"
+        dest: "/var/cache/openscap/{{ openscap_upstream_archive_name }}"
+        checksum: "{{ openscap_upstream_archive_checksum }}"
+        mode: "0644"
+      when:
+        - openscap_content_source == 'upstream'
+          or openscap_use_cached_metadata
+          or (
+            openscap_content_source == 'auto'
+            and not scap_packaged_content_stat.stat.exists
+          )
+
+    - name: Extract upstream OpenSCAP datastream from release archive
+      ansible.builtin.shell:
+        cmd: >-
+          unzip -p /var/cache/openscap/{{ openscap_upstream_archive_name }}
+          {{ openscap_upstream_archive_member | quote }}
+          > /var/cache/openscap/{{ scap_datastream_name | quote }}
+      args:
+        creates: "/var/cache/openscap/{{ scap_datastream_name }}"
+      when:
+        - openscap_content_source == 'upstream'
+          or openscap_use_cached_metadata
+          or (
+            openscap_content_source == 'auto'
+            and not scap_packaged_content_stat.stat.exists
+          )
+
+    - name: Set SCAP content path to upstream datastream
+      ansible.builtin.set_fact:
+        scap_content_path: "/var/cache/openscap/{{ scap_datastream_name }}"
+        scap_content_source_used: upstream
+      when:
+        - openscap_content_source == 'upstream'
+          or openscap_use_cached_metadata
+          or (
+            openscap_content_source == 'auto'
+            and not scap_packaged_content_stat.stat.exists
+          )
+
+    - name: Verify selected SCAP content file exists
+      ansible.builtin.stat:
+        path: "{{ scap_content_path }}"
+      register: scap_content_stat
+
+    - name: Fail if selected SCAP datastream was not available
+      ansible.builtin.fail:
+        msg: >-
+          SCAP datastream was expected at {{ scap_content_path }}, but it was
+          not found after resolution.
+      when: not scap_content_stat.stat.exists
+
+    - name: Refresh metadata file status after write
+      ansible.builtin.stat:
+        path: "{{ local_upstream_metadata_file }}"
+      register: openscap_metadata_file_stat
+      delegate_to: localhost
+      become: false
+      when:
+        - scap_content_source_used == 'upstream'
+
+    - name: Fail if upstream OpenSCAP metadata was not recorded locally
+      ansible.builtin.fail:
+        msg: >-
+          Expected cached upstream metadata at {{ local_upstream_metadata_file }},
+          but it was not created.
+      when:
+        - scap_content_source_used == 'upstream'
+        - not openscap_metadata_file_stat.stat.exists
 
     - name: Create report directory on server
       ansible.builtin.file:
@@ -202,8 +402,9 @@
       ansible.builtin.debug:
         msg:
           - "Open {{ local_report_dir }}/report.html in a browser for full results"
-          - "SCAP content source: {{ openscap_content_source }}"
+          - "SCAP content source: {{ scap_content_source_used }}"
           - "SCAP datastream: {{ scap_content_path }}"
+          - "Cached upstream metadata: {{ local_upstream_metadata_file }}"
           - "Failed rules are CIS Benchmark Level 1 requirements not currently met"
           - "Each rule links to the CIS control ID and remediation guidance"
           - "Some failures are intentional trade-offs for a public web server"

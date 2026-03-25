@@ -27,6 +27,8 @@ ssh_gss_api_authentication: "no"
 ssh_kerberos_authentication: "no"
 ssh_x11_forwarding: false
 ssh_max_auth_tries: 3
+ssh_max_sessions: 2
+ssh_client_alive_count: 2
 ssh_allow_tcp_forwarding: "no"
 ssh_print_motd: false
 ssh_print_last_log: true

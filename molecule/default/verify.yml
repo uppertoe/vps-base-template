@@ -132,6 +132,26 @@
              select('search', 'AllowUsers deploy') | list | length > 0)
         msg: "SSH is not restricted to the deploy user"
 
+    - name: Assert SSH client alive count is tightened
+      ansible.builtin.assert:
+        that:
+          - >-
+            'ClientAliveCountMax 2' in sshd_config or
+            (sshd_config_d_raw.results | default([]) |
+             map(attribute='content') | map('b64decode') |
+             select('search', 'ClientAliveCountMax 2') | list | length > 0)
+        msg: "SSH ClientAliveCountMax is not tightened to 2"
+
+    - name: Assert SSH max sessions is tightened
+      ansible.builtin.assert:
+        that:
+          - >-
+            'MaxSessions 2' in sshd_config or
+            (sshd_config_d_raw.results | default([]) |
+             map(attribute='content') | map('b64decode') |
+             select('search', 'MaxSessions 2') | list | length > 0)
+        msg: "SSH MaxSessions is not tightened to 2"
+
     - name: Read root shadow entry
       ansible.builtin.getent:
         database: shadow

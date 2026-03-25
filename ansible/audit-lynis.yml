@@ -7,7 +7,7 @@
 # Usage:
 #   ansible-playbook -i ansible/inventory/myserver ansible/audit-lynis.yml
 #
-# Reports are saved locally to ./reports/lynis-<hostname>-<date>/
+# Reports are saved locally to ../reports/lynis-<hostname>-<date>/
 # Run this after provisioning, and periodically thereafter.
 #
 # Interpreting the hardening index:
@@ -28,7 +28,7 @@
 
   vars:
     lynis_report_dir: "/var/log/lynis"
-    local_report_dir: "reports/lynis-{{ inventory_hostname }}-{{ ansible_date_time.date }}"
+    local_report_dir: "../reports/lynis-{{ inventory_hostname }}-{{ ansible_facts['date_time']['date'] }}"
 
   tasks:
     - name: Install Lynis

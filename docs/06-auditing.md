@@ -18,7 +18,9 @@ periodically (monthly is reasonable for a production server).
 ansible-playbook -i ansible/inventory/myserver ansible/audit-lynis.yml
 ```
 
-Reports are saved to `reports/lynis-<hostname>-<date>/`.
+Reports are saved to `../reports/lynis-<hostname>-<date>/` relative to the
+playbook path, which means they land in the repo-root `reports/` directory
+when you run the command from the repo root.
 
 ### Interpreting the score
 
@@ -63,7 +65,9 @@ detailed breakdown of exactly which CIS controls pass and fail.
 ansible-playbook -i ansible/inventory/myserver ansible/audit-openscap.yml
 ```
 
-Reports are saved to `reports/openscap-<hostname>-<date>/`. Open
+Reports are saved to `../reports/openscap-<hostname>-<date>/` relative to the
+playbook path, which means they land in the repo-root `reports/` directory.
+Open
 `report.html` in a browser for a readable pass/fail view of every CIS rule.
 
 ### Profiles

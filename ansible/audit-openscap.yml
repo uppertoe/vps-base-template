@@ -8,7 +8,7 @@
 # Usage:
 #   ansible-playbook -i ansible/inventory/myserver ansible/audit-openscap.yml
 #
-# Reports are saved locally to ./reports/openscap-<hostname>-<date>/
+# Reports are saved locally to ../reports/openscap-<hostname>-<date>/
 # Open the HTML report in a browser for a readable view of pass/fail rules.
 #
 # Profiles available (Ubuntu 24.04):
@@ -28,7 +28,7 @@
   vars:
     openscap_profile: xccdf_org.ssgproject.content_profile_cis_level1_server
     openscap_report_dir: /tmp/openscap
-    local_report_dir: "reports/openscap-{{ inventory_hostname }}-{{ ansible_date_time.date }}"
+    local_report_dir: "../reports/openscap-{{ inventory_hostname }}-{{ ansible_facts['date_time']['date'] }}"
 
     # SCAP content path varies by distro/version — set automatically below
     scap_content_ubuntu: /usr/share/xml/scap/ssg/content/ssg-ubuntu2404-ds.xml
@@ -38,7 +38,6 @@
     - name: Install OpenSCAP scanner and security guide
       ansible.builtin.apt:
         name:
-          - libopenscap8
           - openscap-scanner
           - ssg-base
           - ssg-debderived

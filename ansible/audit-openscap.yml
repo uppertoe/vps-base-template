@@ -70,7 +70,7 @@
               | sort(attribute='path')
               | map(attribute='path')
               | list
-              | first
+              | last
             )
             | default('', true)
           }}

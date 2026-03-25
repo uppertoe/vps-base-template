@@ -98,6 +98,23 @@ _psql() {
     psql --username "$PG_USER" --no-password "$@"
 }
 
+psql_retry() {
+  local attempts=0
+  while true; do
+    if _psql "$@"; then
+      return 0
+    fi
+
+    attempts=$((attempts + 1))
+    if [[ "$attempts" -ge 20 ]]; then
+      echo "ERROR: PostgreSQL did not accept stable psql connections in time." >&2
+      return 1
+    fi
+
+    sleep 1
+  done
+}
+
 wait_for_postgres() {
   echo -n "Waiting for PostgreSQL"
   for _ in $(seq 1 30); do
@@ -118,11 +135,11 @@ ensure_database_exists() {
   local db_name="$1"
   local exists=""
 
-  exists="$(_psql --dbname postgres --tuples-only \
+  exists="$(psql_retry --dbname postgres --tuples-only \
     --command "SELECT 1 FROM pg_database WHERE datname = '${db_name}'" | tr -d ' ')"
 
   if [[ "$exists" != "1" ]]; then
-    _psql --dbname postgres --command "CREATE DATABASE \"${db_name}\";" > /dev/null
+    psql_retry --dbname postgres --command "CREATE DATABASE \"${db_name}\";" > /dev/null
   fi
 }
 
@@ -159,7 +176,7 @@ setup() {
   ensure_database_exists "$PG_DB"
 
   # Seed the test database
-  _psql --dbname "$PG_DB" < "$SCRIPT_DIR/seed.sql"
+  psql_retry --dbname "$PG_DB" < "$SCRIPT_DIR/seed.sql"
   echo "Test database seeded (3 users)."
 
   # Write global config

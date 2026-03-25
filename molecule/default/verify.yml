@@ -132,6 +132,17 @@
              select('search', 'AllowUsers deploy') | list | length > 0)
         msg: "SSH is not restricted to the deploy user"
 
+    - name: Read root shadow entry
+      ansible.builtin.getent:
+        database: shadow
+        key: root
+
+    - name: Assert root password is locked
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.getent_shadow.root[0] is match('^[!*]')
+        msg: "root password is not locked"
+
     # -------------------------------------------------------------------------
     # Docker
     # Note: Docker CE installation is skipped in Molecule (molecule-notest tag)

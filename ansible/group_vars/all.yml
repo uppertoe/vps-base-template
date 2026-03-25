@@ -41,6 +41,8 @@ os_security_kernel_enable_module_loading: true
 os_security_suid_sgid_enforce: true
 os_auth_retries: 5
 os_auth_lockout_time: 600
+os_auditd_enabled: false
+lock_root_password: true
 
 # -----------------------------------------------------------------------------
 # Firewall (ufw)

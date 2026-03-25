@@ -10,3 +10,18 @@
   ansible.builtin.include_role:
     name: devsec.hardening.os_hardening
   when: ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
+- name: Lock root password
+  ansible.builtin.user:
+    name: root
+    password_lock: "{{ lock_root_password }}"
+
+- name: Remove auditd when host auditing is disabled
+  ansible.builtin.apt:
+    name: auditd
+    state: absent
+    purge: true
+    autoremove: true
+  when:
+    - not os_auditd_enabled | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']

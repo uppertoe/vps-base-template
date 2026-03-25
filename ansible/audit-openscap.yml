@@ -29,10 +29,7 @@
     openscap_profile: xccdf_org.ssgproject.content_profile_cis_level1_server
     openscap_report_dir: /tmp/openscap
     local_report_dir: "../reports/openscap-{{ inventory_hostname }}-{{ ansible_facts['date_time']['date'] }}"
-
-    # SCAP content path varies by distro/version — set automatically below
-    scap_content_ubuntu: /usr/share/xml/scap/ssg/content/ssg-ubuntu2404-ds.xml
-    scap_content_debian: /usr/share/xml/scap/ssg/content/ssg-debian12-ds.xml
+    scap_content_dir: /usr/share/xml/scap/ssg/content
 
   tasks:
     - name: Install OpenSCAP scanner and security guide
@@ -44,15 +41,39 @@
         state: present
         update_cache: true
 
-    - name: Set SCAP content path for Ubuntu
-      ansible.builtin.set_fact:
-        scap_content_path: "{{ scap_content_ubuntu }}"
-      when: ansible_distribution == 'Ubuntu'
+    - name: Find Ubuntu SCAP content
+      ansible.builtin.find:
+        paths: "{{ scap_content_dir }}"
+        patterns: "ssg-ubuntu*-ds.xml"
+        file_type: file
+      register: scap_content_candidates_ubuntu
+      when: ansible_facts['distribution'] == 'Ubuntu'
 
-    - name: Set SCAP content path for Debian
+    - name: Find Debian SCAP content
+      ansible.builtin.find:
+        paths: "{{ scap_content_dir }}"
+        patterns: "ssg-debian*-ds.xml"
+        file_type: file
+      register: scap_content_candidates_debian
+      when: ansible_facts['distribution'] == 'Debian'
+
+    - name: Set SCAP content path
       ansible.builtin.set_fact:
-        scap_content_path: "{{ scap_content_debian }}"
-      when: ansible_distribution == 'Debian'
+        scap_content_path: >-
+          {{
+            (
+              (
+                scap_content_candidates_ubuntu.files
+                if ansible_facts['distribution'] == 'Ubuntu'
+                else scap_content_candidates_debian.files
+              )
+              | sort(attribute='path')
+              | map(attribute='path')
+              | list
+              | first
+            )
+            | default('', true)
+          }}
 
     - name: Verify SCAP content file exists
       ansible.builtin.stat:
@@ -63,7 +84,7 @@
       ansible.builtin.fail:
         msg: >-
           SCAP content not found at {{ scap_content_path }}.
-          Check that ssg-debderived is installed and the distro version matches.
+          Check that openscap-scanner, ssg-base, and ssg-debderived are installed.
       when: not scap_content_stat.stat.exists
 
     - name: Create report directory on server

@@ -95,6 +95,22 @@ ansible/hosts     # contains server IP
 docker-compose.override.yml
 ```
 
+## Where Secrets Live
+
+There are two secret workflows in the current template:
+
+- Runtime secrets are server-local:
+  - `.env`
+  - `apps/*/.env`
+  Edit these in `/opt/deploy` on the VPS, because Docker Compose reads them
+  directly from the deployed checkout.
+
+- Backup secrets are Ansible-managed:
+  - `backup/config.env`
+  - `backup/services/*.env`
+  Edit these locally in your server repo on your laptop, then run the backup
+  playbook so Ansible copies them to `/etc/restic/` on the server.
+
 ## Provisioning
 
 See [03-provisioning-a-server.md](03-provisioning-a-server.md) for the full

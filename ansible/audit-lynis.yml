@@ -30,7 +30,13 @@
 
   vars:
     lynis_report_dir: "/var/log/lynis"
-    local_report_dir: "../reports/lynis-{{ inventory_hostname }}-{{ ansible_facts['date_time']['date'] }}"
+    local_reports_root: >-
+      {{
+        (playbook_dir | dirname | dirname)
+        if (playbook_dir | dirname | basename) == 'scaffold'
+        else (playbook_dir | dirname)
+      }}
+    local_report_dir: "{{ local_reports_root }}/reports/lynis-{{ inventory_hostname }}-{{ ansible_facts['date_time']['date'] }}"
 
   tasks:
     - name: Install Lynis

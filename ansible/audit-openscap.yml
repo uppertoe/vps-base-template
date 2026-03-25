@@ -30,7 +30,13 @@
   vars:
     openscap_profile: xccdf_org.ssgproject.content_profile_cis_level1_server
     openscap_report_dir: /tmp/openscap
-    local_report_dir: "../reports/openscap-{{ inventory_hostname }}-{{ ansible_facts['date_time']['date'] }}"
+    local_reports_root: >-
+      {{
+        (playbook_dir | dirname | dirname)
+        if (playbook_dir | dirname | basename) == 'scaffold'
+        else (playbook_dir | dirname)
+      }}
+    local_report_dir: "{{ local_reports_root }}/reports/openscap-{{ inventory_hostname }}-{{ ansible_facts['date_time']['date'] }}"
     scap_content_dir: /usr/share/xml/scap/ssg/content
 
   tasks:

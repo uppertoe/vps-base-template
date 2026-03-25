@@ -23,7 +23,13 @@
   become: true
 
   vars:
-    local_report_dir: "../reports/docker-bench-{{ inventory_hostname }}-{{ ansible_facts['date_time']['date'] }}"
+    local_reports_root: >-
+      {{
+        (playbook_dir | dirname | dirname)
+        if (playbook_dir | dirname | basename) == 'scaffold'
+        else (playbook_dir | dirname)
+      }}
+    local_report_dir: "{{ local_reports_root }}/reports/docker-bench-{{ inventory_hostname }}-{{ ansible_facts['date_time']['date'] }}"
 
   tasks:
     - name: Install git (required to clone docker-bench-security)

@@ -131,8 +131,10 @@
     mode: "0644"
     content: |
       umask {{ baseline_shell_umask }}
-      export TMOUT={{ os_security_auto_logout }}
-      readonly TMOUT
+      if ! readonly -p 2>/dev/null | grep -q ' TMOUT='; then
+        export TMOUT=${TMOUT:-{{ os_security_auto_logout }}}
+        readonly TMOUT
+      fi
 
 - name: Ensure /etc/profile enforces shell timeout and umask
   ansible.builtin.blockinfile:
@@ -140,8 +142,10 @@
     marker: "# {mark} ANSIBLE MANAGED BLOCK: vps-scaffold session hardening"
     block: |
       umask {{ baseline_shell_umask }}
-      export TMOUT={{ os_security_auto_logout }}
-      readonly TMOUT
+      if ! readonly -p 2>/dev/null | grep -q ' TMOUT='; then
+        export TMOUT=${TMOUT:-{{ os_security_auto_logout }}}
+        readonly TMOUT
+      fi
 
 - name: Ensure /etc/bash.bashrc enforces shell timeout and umask
   ansible.builtin.blockinfile:
@@ -150,8 +154,10 @@
     marker: "# {mark} ANSIBLE MANAGED BLOCK: vps-scaffold session hardening"
     block: |
       umask {{ baseline_shell_umask }}
-      export TMOUT={{ os_security_auto_logout }}
-      readonly TMOUT
+      if ! readonly -p 2>/dev/null | grep -q ' TMOUT='; then
+        export TMOUT=${TMOUT:-{{ os_security_auto_logout }}}
+        readonly TMOUT
+      fi
 
 - name: Ensure at.allow exists
   ansible.builtin.copy:

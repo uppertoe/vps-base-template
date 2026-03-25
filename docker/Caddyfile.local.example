@@ -9,5 +9,3 @@
 {
     local_certs
 }
-
-import /srv/repo/apps/*/*.caddy

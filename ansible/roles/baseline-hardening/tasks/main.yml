@@ -1,0 +1,142 @@
+---
+- name: Gather installed package facts
+  ansible.builtin.package_facts:
+    manager: auto
+
+- name: Install baseline hardening packages
+  ansible.builtin.apt:
+    name:
+      - libpam-pwquality
+    state: present
+    update_cache: true
+
+- name: Remove packages we do not need on a minimal VPS
+  ansible.builtin.apt:
+    name: "{{ item }}"
+    state: absent
+    purge: true
+    autoremove: true
+  loop:
+    - ftp
+    - tnftp
+    - telnet
+    - inetutils-telnet
+    - rsync
+    - apport
+  when: item in ansible_facts.packages
+
+- name: Ensure pwquality config directory exists
+  ansible.builtin.file:
+    path: /etc/security/pwquality.conf.d
+    state: directory
+    mode: "0755"
+
+- name: Configure pwquality policy
+  ansible.builtin.copy:
+    dest: /etc/security/pwquality.conf.d/99-vps-scaffold.conf
+    mode: "0644"
+    content: |
+      minlen = 14
+      minclass = 4
+      difok = 2
+      dcredit = -1
+      ucredit = -1
+      lcredit = -1
+      ocredit = -1
+      maxrepeat = 3
+      maxsequence = 3
+
+- name: Configure PAM pwquality profile
+  ansible.builtin.copy:
+    dest: /usr/share/pam-configs/vps-pwquality
+    mode: "0644"
+    content: |
+      Name: vps-scaffold pwquality password strength enforcement
+      Default: yes
+      Priority: 1025
+      Conflicts: passwdqc cracklib
+      Password-Type: Primary
+      Password:
+        requisite pam_pwquality.so retry=3 enforce_for_root
+
+- name: Configure PAM pwhistory profile
+  ansible.builtin.copy:
+    dest: /usr/share/pam-configs/vps-pwhistory
+    mode: "0644"
+    content: |
+      Name: vps-scaffold password history enforcement
+      Default: yes
+      Priority: 1024
+      Password-Type: Primary
+      Password:
+        requisite pam_pwhistory.so remember={{ os_auth_pw_remember }} use_authtok enforce_for_root
+
+- name: Apply PAM profile changes
+  ansible.builtin.command: pam-auth-update --package
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  changed_when: false
+
+- name: Set default inactive password lock for new users
+  ansible.builtin.lineinfile:
+    path: /etc/default/useradd
+    regexp: '^INACTIVE='
+    line: "INACTIVE={{ baseline_password_inactive_days }}"
+    create: true
+    mode: "0644"
+
+- name: Set shell timeout and restrictive umask
+  ansible.builtin.copy:
+    dest: /etc/profile.d/99-vps-scaffold-session.sh
+    mode: "0644"
+    content: |
+      umask 027
+      export TMOUT={{ os_security_auto_logout }}
+      readonly TMOUT
+
+- name: Ensure at.allow exists
+  ansible.builtin.copy:
+    dest: /etc/at.allow
+    content: "root\n"
+    owner: root
+    group: root
+    mode: "0640"
+
+- name: Ensure cron.allow exists
+  ansible.builtin.copy:
+    dest: /etc/cron.allow
+    content: "root\n"
+    owner: root
+    group: root
+    mode: "0640"
+
+- name: Configure sudo logging
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/01-vps-scaffold-logging
+    owner: root
+    group: root
+    mode: "0440"
+    validate: /usr/sbin/visudo -cf %s
+    content: |
+      Defaults logfile="/var/log/sudo.log"
+
+- name: Ensure systemd-timesyncd config directory exists
+  ansible.builtin.file:
+    path: /etc/systemd/timesyncd.conf.d
+    state: directory
+    mode: "0755"
+
+- name: Configure systemd-timesyncd NTP servers
+  ansible.builtin.copy:
+    dest: /etc/systemd/timesyncd.conf.d/99-vps-scaffold.conf
+    mode: "0644"
+    content: |
+      [Time]
+      NTP={{ baseline_timesyncd_ntp_servers | join(' ') }}
+
+- name: Enable and start systemd-timesyncd on real hosts
+  ansible.builtin.systemd:
+    name: systemd-timesyncd
+    enabled: true
+    state: started
+  when: ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']

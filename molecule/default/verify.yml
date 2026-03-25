@@ -152,6 +152,58 @@
              select('search', 'MaxSessions 2') | list | length > 0)
         msg: "SSH MaxSessions is not tightened to 2"
 
+    - name: Assert SSH max auth retries is tightened
+      ansible.builtin.assert:
+        that:
+          - >-
+            'MaxAuthTries 3' in sshd_config or
+            (sshd_config_d_raw.results | default([]) |
+             map(attribute='content') | map('b64decode') |
+             select('search', 'MaxAuthTries 3') | list | length > 0)
+        msg: "SSH MaxAuthTries is not tightened to 3"
+
+    - name: Assert SSH login grace time is tightened
+      ansible.builtin.assert:
+        that:
+          - >-
+            'LoginGraceTime 30s' in sshd_config or
+            (sshd_config_d_raw.results | default([]) |
+             map(attribute='content') | map('b64decode') |
+             select('search', 'LoginGraceTime 30s') | list | length > 0)
+        msg: "SSH LoginGraceTime is not tightened to 30s"
+
+    - name: Assert SSH log level is INFO
+      ansible.builtin.assert:
+        that:
+          - >-
+            'LogLevel INFO' in sshd_config or
+            (sshd_config_d_raw.results | default([]) |
+             map(attribute='content') | map('b64decode') |
+             select('search', 'LogLevel INFO') | list | length > 0)
+        msg: "SSH LogLevel is not set to INFO"
+
+    - name: Assert SSH banner is enabled
+      ansible.builtin.assert:
+        that:
+          - >-
+            'Banner /etc/ssh/banner.txt' in sshd_config or
+            (sshd_config_d_raw.results | default([]) |
+             map(attribute='content') | map('b64decode') |
+             select('search', 'Banner /etc/ssh/banner.txt') | list | length > 0)
+        msg: "SSH banner is not enabled"
+
+    - name: Check SSH banner file exists
+      ansible.builtin.stat:
+        path: /etc/ssh/banner.txt
+      register: ssh_banner_file
+
+    - name: Assert SSH banner file exists
+      ansible.builtin.assert:
+        that:
+          - ssh_banner_file.stat.exists
+          - ssh_banner_file.stat.mode == '0644'
+        msg: "SSH banner file is missing or has unexpected permissions"
+
     - name: Read root shadow entry
       ansible.builtin.getent:
         database: shadow
@@ -162,6 +214,114 @@
         that:
           - ansible_facts.getent_shadow.root[0] is match('^[!*]')
         msg: "root password is not locked"
+
+    # -------------------------------------------------------------------------
+    # Baseline hardening
+    # -------------------------------------------------------------------------
+    - name: Gather package facts
+      ansible.builtin.package_facts:
+        manager: auto
+
+    - name: Assert libpam-pwquality is installed
+      ansible.builtin.assert:
+        that:
+          - "'libpam-pwquality' in ansible_facts.packages"
+        msg: "libpam-pwquality is not installed"
+
+    - name: Check pwquality config exists
+      ansible.builtin.stat:
+        path: /etc/security/pwquality.conf.d/99-vps-scaffold.conf
+      register: pwquality_config
+
+    - name: Assert pwquality config exists
+      ansible.builtin.assert:
+        that:
+          - pwquality_config.stat.exists
+        msg: "pwquality config was not deployed"
+
+    - name: Check session hardening profile exists
+      ansible.builtin.stat:
+        path: /etc/profile.d/99-vps-scaffold-session.sh
+      register: session_profile
+
+    - name: Assert session hardening profile exists
+      ansible.builtin.assert:
+        that:
+          - session_profile.stat.exists
+        msg: "session hardening profile was not deployed"
+
+    - name: Read session hardening profile
+      ansible.builtin.slurp:
+        src: /etc/profile.d/99-vps-scaffold-session.sh
+      register: session_profile_raw
+
+    - name: Assert session hardening profile configures TMOUT and umask
+      ansible.builtin.assert:
+        that:
+          - "'umask 027' in (session_profile_raw.content | b64decode)"
+          - "'export TMOUT=900' in (session_profile_raw.content | b64decode)"
+        msg: "session hardening profile does not configure umask/TMOUT"
+
+    - name: Read /etc/default/useradd
+      ansible.builtin.slurp:
+        src: /etc/default/useradd
+      register: useradd_defaults_raw
+
+    - name: Assert default inactive days are configured
+      ansible.builtin.assert:
+        that:
+          - "'INACTIVE=30' in (useradd_defaults_raw.content | b64decode)"
+        msg: "default inactive password lock is not configured"
+
+    - name: Check allow-list files exist
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - /etc/at.allow
+        - /etc/cron.allow
+      register: allow_files
+
+    - name: Assert allow-list files are locked down
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.mode == '0640'
+        msg: "{{ item.stat.path }} is missing or too permissive"
+      loop: "{{ allow_files.results }}"
+
+    - name: Check sudo logging drop-in exists
+      ansible.builtin.stat:
+        path: /etc/sudoers.d/01-vps-scaffold-logging
+      register: sudo_logging_dropin
+
+    - name: Assert sudo logging drop-in exists
+      ansible.builtin.assert:
+        that:
+          - sudo_logging_dropin.stat.exists
+          - sudo_logging_dropin.stat.mode == '0440'
+        msg: "sudo logging drop-in is missing"
+
+    - name: Read sudo logging drop-in
+      ansible.builtin.slurp:
+        src: /etc/sudoers.d/01-vps-scaffold-logging
+      register: sudo_logging_dropin_raw
+
+    - name: Assert sudo logging is configured
+      ansible.builtin.assert:
+        that:
+          - "'Defaults logfile=\"/var/log/sudo.log\"' in (sudo_logging_dropin_raw.content | b64decode)"
+        msg: "sudo logging is not configured"
+
+    - name: Check timesyncd config exists
+      ansible.builtin.stat:
+        path: /etc/systemd/timesyncd.conf.d/99-vps-scaffold.conf
+      register: timesyncd_config
+
+    - name: Assert timesyncd config exists
+      ansible.builtin.assert:
+        that:
+          - timesyncd_config.stat.exists
+        msg: "timesyncd config was not deployed"
 
     # -------------------------------------------------------------------------
     # Docker

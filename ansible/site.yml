@@ -19,6 +19,8 @@
       tags: [hardening, ssh]
     - role: os-hardening
       tags: [hardening, os]
+    - role: baseline-hardening
+      tags: [hardening, baseline]
     - role: docker
       tags: [docker]
     - role: firewall

@@ -24,9 +24,9 @@ services:
       - "443:443/udp"   # HTTP/3 (QUIC)
     volumes:
       # Mount repo root so the glob can reach apps/*/*.caddy
-      - .:/srv/repo:ro
+      - ../..:/srv/repo:ro
       # Caddyfile mounted explicitly for clarity
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ../../Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data          # TLS certs — persisted across restarts
       - caddy_logs:/var/log/caddy
     networks:

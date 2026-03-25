@@ -116,18 +116,28 @@ psql_retry() {
 }
 
 wait_for_postgres() {
+  local stable_checks=0
   echo -n "Waiting for PostgreSQL"
-  for _ in $(seq 1 30); do
-    if docker exec "$PG_CONTAINER" \
-         pg_isready --username "$PG_USER" --dbname "$PG_DB" --quiet 2>/dev/null; then
-      echo " ready."
-      return 0
+
+  for _ in $(seq 1 60); do
+    if _psql --dbname postgres --tuples-only --command "SELECT 1" > /dev/null 2>&1 &&
+       _psql --dbname "$PG_DB" --tuples-only --command "SELECT 1" > /dev/null 2>&1; then
+      stable_checks=$((stable_checks + 1))
+      if [[ "$stable_checks" -ge 3 ]]; then
+        echo " ready."
+        return 0
+      fi
+    else
+      stable_checks=0
     fi
+
     sleep 1
     echo -n "."
   done
+
   echo ""
-  echo "ERROR: PostgreSQL did not become ready in time." >&2
+  echo "ERROR: PostgreSQL did not become stably ready in time." >&2
+  docker logs "$PG_CONTAINER" 2>&1 | tail -n 50 >&2 || true
   return 1
 }
 
@@ -135,12 +145,26 @@ ensure_database_exists() {
   local db_name="$1"
   local exists=""
 
-  exists="$(psql_retry --dbname postgres --tuples-only \
-    --command "SELECT 1 FROM pg_database WHERE datname = '${db_name}'" | tr -d ' ')"
+  exists="$(_psql --dbname postgres --tuples-only \
+    --command "SELECT 1 FROM pg_database WHERE datname = '${db_name}'" 2>/dev/null | tr -d ' ')"
 
-  if [[ "$exists" != "1" ]]; then
-    psql_retry --dbname postgres --command "CREATE DATABASE \"${db_name}\";" > /dev/null
+  if [[ "$exists" == "1" ]]; then
+    return 0
   fi
+
+  if _psql --dbname postgres --command "CREATE DATABASE \"${db_name}\";" > /dev/null 2>&1; then
+    return 0
+  fi
+
+  exists="$(_psql --dbname postgres --tuples-only \
+    --command "SELECT 1 FROM pg_database WHERE datname = '${db_name}'" 2>/dev/null | tr -d ' ')"
+
+  if [[ "$exists" == "1" ]]; then
+    return 0
+  fi
+
+  echo "ERROR: database '${db_name}' was not available after PostgreSQL startup." >&2
+  return 1
 }
 
 snapshot_count() {

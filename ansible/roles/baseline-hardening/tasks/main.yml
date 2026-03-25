@@ -6,6 +6,7 @@
 - name: Install baseline hardening packages
   ansible.builtin.apt:
     name:
+      - apparmor-utils
       - libpam-pwquality
     state: present
     update_cache: true
@@ -36,9 +37,11 @@
     dest: /etc/security/pwquality.conf.d/99-vps-scaffold.conf
     mode: "0644"
     content: |
+      enforcing = 1
       minlen = 14
       minclass = 4
       difok = 2
+      dictcheck = 1
       dcredit = -1
       ucredit = -1
       lcredit = -1
@@ -71,6 +74,22 @@
       Password:
         requisite pam_pwhistory.so remember={{ os_auth_pw_remember }} use_authtok enforce_for_root
 
+- name: Configure PAM faillock profile
+  ansible.builtin.copy:
+    dest: /usr/share/pam-configs/vps-faillock
+    mode: "0644"
+    content: |
+      Name: vps-scaffold failed login lockout
+      Default: yes
+      Priority: 1023
+      Auth-Type: Primary
+      Auth:
+        required pam_faillock.so preauth silent audit deny={{ baseline_faillock_deny }} fail_interval={{ baseline_faillock_fail_interval }} unlock_time={{ baseline_faillock_unlock_time }}
+        [default=die] pam_faillock.so authfail audit deny={{ baseline_faillock_deny }} fail_interval={{ baseline_faillock_fail_interval }} unlock_time={{ baseline_faillock_unlock_time }}
+      Account-Type: Primary
+      Account:
+        required pam_faillock.so
+
 - name: Apply PAM profile changes
   ansible.builtin.command: pam-auth-update --package
   environment:
@@ -90,7 +109,26 @@
     dest: /etc/profile.d/99-vps-scaffold-session.sh
     mode: "0644"
     content: |
-      umask 027
+      umask {{ baseline_shell_umask }}
+      export TMOUT={{ os_security_auto_logout }}
+      readonly TMOUT
+
+- name: Ensure /etc/profile enforces shell timeout and umask
+  ansible.builtin.blockinfile:
+    path: /etc/profile
+    marker: "# {mark} ANSIBLE MANAGED BLOCK: vps-scaffold session hardening"
+    block: |
+      umask {{ baseline_shell_umask }}
+      export TMOUT={{ os_security_auto_logout }}
+      readonly TMOUT
+
+- name: Ensure /etc/bash.bashrc enforces shell timeout and umask
+  ansible.builtin.blockinfile:
+    path: /etc/bash.bashrc
+    create: true
+    marker: "# {mark} ANSIBLE MANAGED BLOCK: vps-scaffold session hardening"
+    block: |
+      umask {{ baseline_shell_umask }}
       export TMOUT={{ os_security_auto_logout }}
       readonly TMOUT
 
@@ -119,6 +157,8 @@
     validate: /usr/sbin/visudo -cf %s
     content: |
       Defaults logfile="/var/log/sudo.log"
+      Defaults use_pty
+      Defaults timestamp_timeout=0
 
 - name: Ensure systemd-timesyncd config directory exists
   ansible.builtin.file:
@@ -133,6 +173,7 @@
     content: |
       [Time]
       NTP={{ baseline_timesyncd_ntp_servers | join(' ') }}
+      FallbackNTP={{ baseline_timesyncd_fallback_ntp_servers | join(' ') }}
 
 - name: Enable and start systemd-timesyncd on real hosts
   ansible.builtin.systemd:

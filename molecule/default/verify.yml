@@ -142,6 +142,16 @@
              select('search', 'ClientAliveCountMax 2') | list | length > 0)
         msg: "SSH ClientAliveCountMax is not tightened to 2"
 
+    - name: Assert SSH client alive interval is tightened
+      ansible.builtin.assert:
+        that:
+          - >-
+            'ClientAliveInterval 300' in sshd_config or
+            (sshd_config_d_raw.results | default([]) |
+             map(attribute='content') | map('b64decode') |
+             select('search', 'ClientAliveInterval 300') | list | length > 0)
+        msg: "SSH ClientAliveInterval is not tightened to 300"
+
     - name: Assert SSH max sessions is tightened
       ansible.builtin.assert:
         that:
@@ -186,15 +196,15 @@
       ansible.builtin.assert:
         that:
           - >-
-            'Banner /etc/ssh/banner.txt' in sshd_config or
+            'Banner /etc/issue.net' in sshd_config or
             (sshd_config_d_raw.results | default([]) |
              map(attribute='content') | map('b64decode') |
-             select('search', 'Banner /etc/ssh/banner.txt') | list | length > 0)
+             select('search', 'Banner /etc/issue.net') | list | length > 0)
         msg: "SSH banner is not enabled"
 
     - name: Check SSH banner file exists
       ansible.builtin.stat:
-        path: /etc/ssh/banner.txt
+        path: /etc/issue.net
       register: ssh_banner_file
 
     - name: Assert SSH banner file exists
@@ -228,6 +238,12 @@
           - "'libpam-pwquality' in ansible_facts.packages"
         msg: "libpam-pwquality is not installed"
 
+    - name: Assert apparmor-utils is installed
+      ansible.builtin.assert:
+        that:
+          - "'apparmor-utils' in ansible_facts.packages"
+        msg: "apparmor-utils is not installed"
+
     - name: Check pwquality config exists
       ansible.builtin.stat:
         path: /etc/security/pwquality.conf.d/99-vps-scaffold.conf
@@ -238,6 +254,30 @@
         that:
           - pwquality_config.stat.exists
         msg: "pwquality config was not deployed"
+
+    - name: Read pwquality config
+      ansible.builtin.slurp:
+        src: /etc/security/pwquality.conf.d/99-vps-scaffold.conf
+      register: pwquality_config_raw
+
+    - name: Assert pwquality config includes CIS-style settings
+      ansible.builtin.assert:
+        that:
+          - "'enforcing = 1' in (pwquality_config_raw.content | b64decode)"
+          - "'dictcheck = 1' in (pwquality_config_raw.content | b64decode)"
+          - "'minlen = 14' in (pwquality_config_raw.content | b64decode)"
+        msg: "pwquality config is missing expected settings"
+
+    - name: Check PAM faillock profile exists
+      ansible.builtin.stat:
+        path: /usr/share/pam-configs/vps-faillock
+      register: pam_faillock_profile
+
+    - name: Assert PAM faillock profile exists
+      ansible.builtin.assert:
+        that:
+          - pam_faillock_profile.stat.exists
+        msg: "PAM faillock profile was not deployed"
 
     - name: Check session hardening profile exists
       ansible.builtin.stat:
@@ -261,6 +301,29 @@
           - "'umask 027' in (session_profile_raw.content | b64decode)"
           - "'export TMOUT=900' in (session_profile_raw.content | b64decode)"
         msg: "session hardening profile does not configure umask/TMOUT"
+
+    - name: Read /etc/profile
+      ansible.builtin.slurp:
+        src: /etc/profile
+      register: etc_profile_raw
+
+    - name: Assert /etc/profile configures TMOUT and umask
+      ansible.builtin.assert:
+        that:
+          - "'umask 027' in (etc_profile_raw.content | b64decode)"
+          - "'export TMOUT=900' in (etc_profile_raw.content | b64decode)"
+        msg: "/etc/profile does not configure umask/TMOUT"
+
+    - name: Read /etc/bash.bashrc
+      ansible.builtin.slurp:
+        src: /etc/bash.bashrc
+      register: bash_bashrc_raw
+
+    - name: Assert /etc/bash.bashrc configures umask
+      ansible.builtin.assert:
+        that:
+          - "'umask 027' in (bash_bashrc_raw.content | b64decode)"
+        msg: "/etc/bash.bashrc does not configure umask"
 
     - name: Read /etc/default/useradd
       ansible.builtin.slurp:
@@ -310,6 +373,8 @@
       ansible.builtin.assert:
         that:
           - "'Defaults logfile=\"/var/log/sudo.log\"' in (sudo_logging_dropin_raw.content | b64decode)"
+          - "'Defaults use_pty' in (sudo_logging_dropin_raw.content | b64decode)"
+          - "'Defaults timestamp_timeout=0' in (sudo_logging_dropin_raw.content | b64decode)"
         msg: "sudo logging is not configured"
 
     - name: Check timesyncd config exists
@@ -322,6 +387,18 @@
         that:
           - timesyncd_config.stat.exists
         msg: "timesyncd config was not deployed"
+
+    - name: Read timesyncd config
+      ansible.builtin.slurp:
+        src: /etc/systemd/timesyncd.conf.d/99-vps-scaffold.conf
+      register: timesyncd_config_raw
+
+    - name: Assert timesyncd config includes NTP servers
+      ansible.builtin.assert:
+        that:
+          - "'NTP=time.cloudflare.com time.google.com' in (timesyncd_config_raw.content | b64decode)"
+          - "'FallbackNTP=0.pool.ntp.org 1.pool.ntp.org' in (timesyncd_config_raw.content | b64decode)"
+        msg: "timesyncd config is missing expected NTP settings"
 
     # -------------------------------------------------------------------------
     # Docker

@@ -28,6 +28,7 @@ ssh_kerberos_authentication: "no"
 ssh_x11_forwarding: false
 ssh_max_auth_retries: 3
 ssh_max_sessions: 2
+ssh_client_alive_interval: 300
 ssh_client_alive_count: 2
 ssh_login_grace_time: 30s
 ssh_allow_tcp_forwarding: "no"
@@ -35,6 +36,7 @@ ssh_print_motd: false
 ssh_print_last_log: true
 sshd_log_level: INFO
 ssh_banner: true
+ssh_banner_path: /etc/issue.net
 ssh_macs:
   - hmac-sha2-512-etm@openssh.com
   - hmac-sha2-256-etm@openssh.com
@@ -62,9 +64,16 @@ lock_root_password: true
 # Baseline hardening (custom repository defaults)
 # -----------------------------------------------------------------------------
 baseline_password_inactive_days: 30
+baseline_shell_umask: "027"
+baseline_faillock_deny: 5
+baseline_faillock_unlock_time: 900
+baseline_faillock_fail_interval: 900
 baseline_timesyncd_ntp_servers:
   - time.cloudflare.com
   - time.google.com
+baseline_timesyncd_fallback_ntp_servers:
+  - 0.pool.ntp.org
+  - 1.pool.ntp.org
 
 # -----------------------------------------------------------------------------
 # Firewall (ufw)

@@ -2,3 +2,4 @@
 #
 # App routing snippets from apps/*/*.caddy are appended automatically when
 # the Caddy container starts. Adding an app requires no changes here.
+# Default site compression (`encode zstd gzip`) is injected automatically.

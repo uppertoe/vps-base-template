@@ -29,7 +29,7 @@ provisioner:
   name: ansible
   env:
     ANSIBLE_ROLES_PATH: "../../ansible/roles"
-    ANSIBLE_COLLECTIONS_PATH: "/tmp/ansible/collections:/usr/share/ansible/collections"
+    ANSIBLE_COLLECTIONS_PATH: "~/.ansible/collections:/tmp/ansible/collections:/usr/share/ansible/collections"
   inventory:
     links:
       group_vars: ../../ansible/group_vars

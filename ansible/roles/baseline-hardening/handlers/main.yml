@@ -13,6 +13,9 @@
   ansible.builtin.systemd:
     name: auditd
     state: restarted
+  when:
+    - os_auditd_enabled | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
 
 - name: Update grub
   ansible.builtin.command: update-grub

@@ -319,7 +319,9 @@
       -w /etc/sudoers -p wa -k scope
       -w /etc/sudoers.d -p wa -k scope
   notify: Restart auditd
-  when: os_auditd_enabled | bool
+  when:
+    - os_auditd_enabled | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
 
 - name: Check whether an AIDE database already exists
   ansible.builtin.stat:

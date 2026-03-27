@@ -29,147 +29,92 @@
     - apport
   when: item in ansible_facts.packages
 
-- name: Remove custom PAM profiles from earlier scaffold revisions
-  ansible.builtin.file:
-    path: "{{ item }}"
-    state: absent
-  loop:
-    - /usr/share/pam-configs/vps-pwquality
-    - /usr/share/pam-configs/vps-pwhistory
-    - /usr/share/pam-configs/vps-faillock
-  register: removed_legacy_pam_profiles
+- name: Apply authentication and password policy
+  block:
+    - name: Configure faillock policy
+      ansible.builtin.copy:
+        dest: /etc/security/faillock.conf
+        mode: "0644"
+        content: |
+          deny = {{ baseline_faillock_deny }}
+          fail_interval = {{ baseline_faillock_fail_interval }}
+          unlock_time = {{ baseline_faillock_unlock_time }}
 
-- name: Apply PAM profile changes
-  ansible.builtin.command: pam-auth-update --package
-  environment:
-    DEBIAN_FRONTEND: noninteractive
-  changed_when: false
-  when: removed_legacy_pam_profiles.results | selectattr('changed') | list | length > 0
+    - name: Remove nullok from pam_unix auth rules
+      ansible.builtin.replace:
+        path: "{{ item }}"
+        regexp: '\snullok\b'
+        replace: ''
+      loop:
+        - /etc/pam.d/common-auth
+        - /etc/pam.d/common-password
 
-- name: Configure faillock policy
-  ansible.builtin.copy:
-    dest: /etc/security/faillock.conf
-    mode: "0644"
-    content: |
-      deny = {{ baseline_faillock_deny }}
-      fail_interval = {{ baseline_faillock_fail_interval }}
-      unlock_time = {{ baseline_faillock_unlock_time }}
+    - name: Ensure pam_faillock preauth line is present before pam_unix
+      ansible.builtin.lineinfile:
+        path: /etc/pam.d/common-auth
+        regexp: '^auth required pam_faillock\.so preauth silent audit$'
+        line: 'auth required pam_faillock.so preauth silent audit'
+        insertbefore: '^auth\s+\[success=2 default=ignore\]\s+pam_unix\.so'
 
-- name: Remove nullok from pam_unix auth rules
-  ansible.builtin.replace:
-    path: "{{ item }}"
-    regexp: '\snullok\b'
-    replace: ''
-  loop:
-    - /etc/pam.d/common-auth
-    - /etc/pam.d/common-password
+    - name: Ensure pam_faillock authfail line is present after pam_unix
+      ansible.builtin.lineinfile:
+        path: /etc/pam.d/common-auth
+        regexp: '^auth \[default=die\] pam_faillock\.so authfail audit$'
+        line: 'auth [default=die] pam_faillock.so authfail audit'
+        insertafter: '^auth\s+\[success=2 default=ignore\]\s+pam_unix\.so'
 
-- name: Ensure dedicated su-restriction group exists and is empty
-  ansible.builtin.group:
-    name: sugroup
-    state: present
+    - name: Ensure pam_faillock account line is present
+      ansible.builtin.lineinfile:
+        path: /etc/pam.d/common-account
+        regexp: '^account required pam_faillock\.so$'
+        line: 'account required pam_faillock.so'
+        insertbefore: '^account\s+\[success=1 new_authtok_reqd=done default=ignore\]\s+pam_unix\.so'
 
-- name: Remove legacy managed faillock block from common-auth
-  ansible.builtin.blockinfile:
-    path: /etc/pam.d/common-auth
-    marker: "# {mark} ANSIBLE MANAGED BLOCK: vps-scaffold faillock"
-    state: absent
+    - name: Configure pwquality policy in main config
+      ansible.builtin.blockinfile:
+        path: /etc/security/pwquality.conf
+        marker: "# {mark} ANSIBLE MANAGED BLOCK: vps-scaffold pwquality"
+        block: |
+          enforcing = 1
+          enforce_for_root
+          minlen = 14
+          minclass = 4
+          difok = 2
+          dictcheck = 1
+          dcredit = -1
+          ucredit = -1
+          lcredit = -1
+          ocredit = -1
+          maxrepeat = 3
+          maxsequence = 3
 
-- name: Remove legacy pam_faillock preauth line with inline parameters
-  ansible.builtin.lineinfile:
-    path: /etc/pam.d/common-auth
-    regexp: '^auth required pam_faillock\.so preauth .*?(deny=|fail_interval=|unlock_time=).*$'
-    state: absent
+    - name: Ensure pam_pwquality line is present
+      ansible.builtin.lineinfile:
+        path: /etc/pam.d/common-password
+        regexp: '^password requisite pam_pwquality\.so retry=3 enforce_for_root minlen=14 minclass=4 difok=2 dictcheck=1 dcredit=-1 ucredit=-1 lcredit=-1 ocredit=-1 maxrepeat=3 maxsequence=3$'
+        line: 'password requisite pam_pwquality.so retry=3 enforce_for_root minlen=14 minclass=4 difok=2 dictcheck=1 dcredit=-1 ucredit=-1 lcredit=-1 ocredit=-1 maxrepeat=3 maxsequence=3'
+        insertbefore: '^password\s+\[success=1 default=ignore\]\s+pam_unix\.so'
 
-- name: Remove legacy pam_faillock authfail line with inline parameters
-  ansible.builtin.lineinfile:
-    path: /etc/pam.d/common-auth
-    regexp: '^auth \[default=die\] pam_faillock\.so authfail .*?(deny=|fail_interval=|unlock_time=).*$'
-    state: absent
+    - name: Ensure pam_pwhistory line is present
+      ansible.builtin.lineinfile:
+        path: /etc/pam.d/common-password
+        regexp: '^password requisite pam_pwhistory\.so remember={{ os_auth_pw_remember }} use_authtok enforce_for_root$'
+        line: 'password requisite pam_pwhistory.so remember={{ os_auth_pw_remember }} use_authtok enforce_for_root'
+        insertbefore: '^password\s+\[success=1 default=ignore\]\s+pam_unix\.so'
 
-- name: Ensure pam_faillock preauth line is present before pam_unix
-  ansible.builtin.lineinfile:
-    path: /etc/pam.d/common-auth
-    regexp: '^auth required pam_faillock\.so preauth silent audit$'
-    line: 'auth required pam_faillock.so preauth silent audit'
-    insertbefore: '^auth\s+\[success=2 default=ignore\]\s+pam_unix\.so'
+- name: Apply account and session policy
+  block:
+    - name: Ensure dedicated su-restriction group exists and is empty
+      ansible.builtin.group:
+        name: sugroup
+        state: present
 
-- name: Ensure pam_faillock authfail line is present after pam_unix
-  ansible.builtin.lineinfile:
-    path: /etc/pam.d/common-auth
-    regexp: '^auth \[default=die\] pam_faillock\.so authfail audit$'
-    line: 'auth [default=die] pam_faillock.so authfail audit'
-    insertafter: '^auth\s+\[success=2 default=ignore\]\s+pam_unix\.so'
-
-- name: Remove legacy managed faillock block from common-account
-  ansible.builtin.blockinfile:
-    path: /etc/pam.d/common-account
-    marker: "# {mark} ANSIBLE MANAGED BLOCK: vps-scaffold faillock"
-    state: absent
-
-- name: Ensure pam_faillock account line is present
-  ansible.builtin.lineinfile:
-    path: /etc/pam.d/common-account
-    regexp: '^account required pam_faillock\.so$'
-    line: 'account required pam_faillock.so'
-    insertbefore: '^account\s+\[success=1 new_authtok_reqd=done default=ignore\]\s+pam_unix\.so'
-
-- name: Restrict su to the dedicated pam_wheel group
-  ansible.builtin.lineinfile:
-    path: /etc/pam.d/su
-    regexp: '^auth\s+required\s+pam_wheel\.so\b.*$'
-    line: 'auth required pam_wheel.so use_uid group=sugroup'
-    insertafter: '^auth\s+sufficient\s+pam_rootok\.so'
-
-- name: Configure pwquality policy in main config
-  ansible.builtin.blockinfile:
-    path: /etc/security/pwquality.conf
-    marker: "# {mark} ANSIBLE MANAGED BLOCK: vps-scaffold pwquality"
-    block: |
-      enforcing = 1
-      enforce_for_root
-      minlen = 14
-      minclass = 4
-      difok = 2
-      dictcheck = 1
-      dcredit = -1
-      ucredit = -1
-      lcredit = -1
-      ocredit = -1
-      maxrepeat = 3
-      maxsequence = 3
-
-- name: Remove legacy managed password policy block from common-password
-  ansible.builtin.blockinfile:
-    path: /etc/pam.d/common-password
-    marker: "# {mark} ANSIBLE MANAGED BLOCK: vps-scaffold password policy"
-    state: absent
-
-- name: Remove legacy duplicate pam_pwquality lines from common-password
-  ansible.builtin.lineinfile:
-    path: /etc/pam.d/common-password
-    regexp: '^password\s+requisite\s+pam_pwquality\.so\s+retry=3(?! enforce_for_root minlen=14 minclass=4 difok=2 dictcheck=1 dcredit=-1 ucredit=-1 lcredit=-1 ocredit=-1 maxrepeat=3 maxsequence=3$).*$'
-    state: absent
-
-- name: Remove legacy duplicate pam_pwhistory lines from common-password
-  ansible.builtin.lineinfile:
-    path: /etc/pam.d/common-password
-    regexp: '^password\s+requisite\s+pam_pwhistory\.so(?! remember={{ os_auth_pw_remember }} use_authtok enforce_for_root$).*$'
-    state: absent
-
-- name: Ensure pam_pwquality line is present
-  ansible.builtin.lineinfile:
-    path: /etc/pam.d/common-password
-    regexp: '^password requisite pam_pwquality\.so retry=3 enforce_for_root minlen=14 minclass=4 difok=2 dictcheck=1 dcredit=-1 ucredit=-1 lcredit=-1 ocredit=-1 maxrepeat=3 maxsequence=3$'
-    line: 'password requisite pam_pwquality.so retry=3 enforce_for_root minlen=14 minclass=4 difok=2 dictcheck=1 dcredit=-1 ucredit=-1 lcredit=-1 ocredit=-1 maxrepeat=3 maxsequence=3'
-    insertbefore: '^password\s+\[success=1 default=ignore\]\s+pam_unix\.so'
-
-- name: Ensure pam_pwhistory line is present
-  ansible.builtin.lineinfile:
-    path: /etc/pam.d/common-password
-    regexp: '^password requisite pam_pwhistory\.so remember={{ os_auth_pw_remember }} use_authtok enforce_for_root$'
-    line: 'password requisite pam_pwhistory.so remember={{ os_auth_pw_remember }} use_authtok enforce_for_root'
-    insertbefore: '^password\s+\[success=1 default=ignore\]\s+pam_unix\.so'
+    - name: Restrict su to the dedicated pam_wheel group
+      ansible.builtin.lineinfile:
+        path: /etc/pam.d/su
+        regexp: '^auth\s+required\s+pam_wheel\.so\b.*$'
+        line: 'auth required pam_wheel.so use_uid group=sugroup'
+        insertafter: '^auth\s+sufficient\s+pam_rootok\.so'
 
 - name: Set default inactive password lock for new users
   ansible.builtin.lineinfile:
@@ -209,18 +154,6 @@
     marker: "# {mark} ANSIBLE MANAGED BLOCK: vps-scaffold umask"
     block: |
       umask {{ baseline_shell_umask }}
-
-- name: Remove legacy TMOUT block from /etc/profile
-  ansible.builtin.blockinfile:
-    path: /etc/profile
-    marker: "# {mark} ANSIBLE MANAGED BLOCK: vps-scaffold session hardening"
-    state: absent
-
-- name: Remove legacy TMOUT block from /etc/bash.bashrc
-  ansible.builtin.blockinfile:
-    path: /etc/bash.bashrc
-    marker: "# {mark} ANSIBLE MANAGED BLOCK: vps-scaffold session hardening"
-    state: absent
 
 - name: Detect crontab group when present
   ansible.builtin.getent:
@@ -279,49 +212,46 @@
     - Restart rsyslog
   when: baseline_enable_journald_syslog_forwarding | bool
 
-- name: Ensure rsyslog is enabled and started on real hosts
-  ansible.builtin.systemd:
-    name: rsyslog
-    enabled: true
-    state: started
+- name: Apply audit and logging services on real hosts
+  block:
+    - name: Ensure rsyslog is enabled and started on real hosts
+      ansible.builtin.systemd:
+        name: rsyslog
+        enabled: true
+        state: started
+
+    - name: Ensure AppArmor is enabled and started on real hosts
+      ansible.builtin.systemd:
+        name: apparmor
+        enabled: true
+        state: started
+
+    - name: Ensure auditd is enabled and started on real hosts
+      ansible.builtin.systemd:
+        name: auditd
+        enabled: true
+        state: started
+      when: os_auditd_enabled | bool
+
+    - name: Configure audit rules for Docker and privileged configuration paths
+      ansible.builtin.copy:
+        dest: /etc/audit/rules.d/99-vps-scaffold.rules
+        owner: root
+        group: root
+        mode: "0640"
+        content: |
+          -w /usr/bin/docker -p wa -k docker
+          -w /usr/bin/containerd -p wa -k docker
+          -w /usr/bin/runc -p wa -k docker
+          -w /etc/docker -p wa -k docker
+          -w /var/lib/docker -p wa -k docker
+          -w /etc/ssh/sshd_config -p wa -k sshd
+          -w /etc/ssh/sshd_config.d -p wa -k sshd
+          -w /etc/sudoers -p wa -k scope
+          -w /etc/sudoers.d -p wa -k scope
+      notify: Restart auditd
+      when: os_auditd_enabled | bool
   when: ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
-
-- name: Ensure AppArmor is enabled and started on real hosts
-  ansible.builtin.systemd:
-    name: apparmor
-    enabled: true
-    state: started
-  when: ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
-
-- name: Ensure auditd is enabled and started on real hosts
-  ansible.builtin.systemd:
-    name: auditd
-    enabled: true
-    state: started
-  when:
-    - os_auditd_enabled | bool
-    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
-
-- name: Configure audit rules for Docker and privileged configuration paths
-  ansible.builtin.copy:
-    dest: /etc/audit/rules.d/99-vps-scaffold.rules
-    owner: root
-    group: root
-    mode: "0640"
-    content: |
-      -w /usr/bin/docker -p wa -k docker
-      -w /usr/bin/containerd -p wa -k docker
-      -w /usr/bin/runc -p wa -k docker
-      -w /etc/docker -p wa -k docker
-      -w /var/lib/docker -p wa -k docker
-      -w /etc/ssh/sshd_config -p wa -k sshd
-      -w /etc/ssh/sshd_config.d -p wa -k sshd
-      -w /etc/sudoers -p wa -k scope
-      -w /etc/sudoers.d -p wa -k scope
-  notify: Restart auditd
-  when:
-    - os_auditd_enabled | bool
-    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
 
 - name: Check whether an AIDE database already exists
   ansible.builtin.stat:
@@ -394,11 +324,6 @@
       install {{ item }} /bin/false
       blacklist {{ item }}
   loop: "{{ baseline_disabled_kernel_modules }}"
-
-- name: Remove timesyncd drop-in from earlier scaffold revisions
-  ansible.builtin.file:
-    path: /etc/systemd/timesyncd.conf.d/99-vps-scaffold.conf
-    state: absent
 
 - name: Configure systemd-timesyncd NTP servers in main config
   ansible.builtin.blockinfile:

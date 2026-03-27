@@ -59,6 +59,10 @@ os_auth_pam_passwdqc_enable: false
 os_auditd_enabled: true
 lock_root_password: true
 
+# Enable this per server when workloads such as Redis require
+# vm.overcommit_memory=1 on the host.
+host_vm_overcommit_memory_enabled: false
+
 # -----------------------------------------------------------------------------
 # Baseline hardening (custom repository defaults)
 # -----------------------------------------------------------------------------

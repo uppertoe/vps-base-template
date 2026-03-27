@@ -11,6 +11,17 @@
     name: devsec.hardening.os_hardening
   when: ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
 
+- name: Enable kernel memory overcommit for Redis-style workloads
+  ansible.posix.sysctl:
+    name: vm.overcommit_memory
+    value: "1"
+    state: present
+    reload: true
+    sysctl_file: /etc/sysctl.d/99-vps-scaffold.conf
+  when:
+    - host_vm_overcommit_memory_enabled | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
 - name: Lock root password
   ansible.builtin.user:
     name: root

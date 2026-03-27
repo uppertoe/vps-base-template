@@ -155,6 +155,28 @@
     block: |
       umask {{ baseline_shell_umask }}
 
+- name: Restrict interactive user initialization file permissions
+  ansible.builtin.shell: |
+    set -eu
+    while IFS=: read -r _ _ _ _ _ home shell; do
+      case "$shell" in
+        */nologin|*/false|"")
+          continue
+          ;;
+      esac
+      [ -d "$home" ] || continue
+      find "$home" -maxdepth 1 -type f \
+        \( -name '.bash_profile' -o -name '.bash_login' -o -name '.profile' -o -name '.bashrc' -o -name '.zprofile' -o -name '.zshrc' -o -name '.kshrc' -o -name '.cshrc' \) \
+        -perm /037 -print0
+    done < /etc/passwd | while IFS= read -r -d '' file; do
+      chmod u=rwX,g=r,o= "$file"
+      printf '%s\n' "$file"
+    done
+  args:
+    executable: /bin/bash
+  register: baseline_init_file_permissions
+  changed_when: baseline_init_file_permissions.stdout != ""
+
 - name: Detect crontab group when present
   ansible.builtin.getent:
     database: group
@@ -225,6 +247,14 @@
         name: apparmor
         enabled: true
         state: started
+
+    - name: Ensure AppArmor profiles are in enforce mode
+      ansible.builtin.shell: |
+        set -eu
+        find /etc/apparmor.d -maxdepth 1 -type f ! -name 'README' -print0 | xargs -0r aa-enforce
+      args:
+        executable: /bin/bash
+      changed_when: false
 
     - name: Ensure auditd is enabled and started on real hosts
       ansible.builtin.systemd:

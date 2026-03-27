@@ -11,6 +11,18 @@
     name: devsec.hardening.os_hardening
   when: ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
 
+- name: Apply safe host networking sysctls
+  ansible.posix.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    state: present
+    reload: true
+    sysctl_file: /etc/sysctl.d/99-vps-scaffold.conf
+  loop: "{{ baseline_host_sysctls | dict2items }}"
+  when:
+    - not molecule_test | default(false) | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
 - name: Enable kernel memory overcommit for Redis-style workloads
   ansible.posix.sysctl:
     name: vm.overcommit_memory

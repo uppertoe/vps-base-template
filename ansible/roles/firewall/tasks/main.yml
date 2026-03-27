@@ -14,6 +14,35 @@
     direction: outgoing
     policy: allow
 
+- name: Set default routed policy to deny
+  community.general.ufw:
+    direction: routed
+    policy: deny
+
+- name: Allow loopback traffic in
+  community.general.ufw:
+    rule: allow
+    direction: in
+    interface: lo
+
+- name: Allow loopback traffic out
+  community.general.ufw:
+    rule: allow
+    direction: out
+    interface: lo
+
+- name: Deny spoofed IPv4 loopback traffic
+  community.general.ufw:
+    rule: deny
+    direction: in
+    from_ip: 127.0.0.0/8
+
+- name: Deny spoofed IPv6 loopback traffic
+  community.general.ufw:
+    rule: deny
+    direction: in
+    from_ip: "::1"
+
 - name: Allow TCP ports
   community.general.ufw:
     rule: allow

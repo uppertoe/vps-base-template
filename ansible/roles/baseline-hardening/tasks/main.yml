@@ -6,8 +6,11 @@
 - name: Install baseline hardening packages
   ansible.builtin.apt:
     name:
+      - aide
+      - auditd
       - apparmor-utils
       - libpam-pwquality
+      - rsyslog
     state: present
     update_cache: true
 
@@ -51,6 +54,20 @@
       deny = {{ baseline_faillock_deny }}
       fail_interval = {{ baseline_faillock_fail_interval }}
       unlock_time = {{ baseline_faillock_unlock_time }}
+
+- name: Remove nullok from pam_unix auth rules
+  ansible.builtin.replace:
+    path: "{{ item }}"
+    regexp: '\snullok\b'
+    replace: ''
+  loop:
+    - /etc/pam.d/common-auth
+    - /etc/pam.d/common-password
+
+- name: Ensure dedicated su-restriction group exists and is empty
+  ansible.builtin.group:
+    name: sugroup
+    state: present
 
 - name: Remove legacy managed faillock block from common-auth
   ansible.builtin.blockinfile:
@@ -96,6 +113,13 @@
     regexp: '^account required pam_faillock\.so$'
     line: 'account required pam_faillock.so'
     insertbefore: '^account\s+\[success=1 new_authtok_reqd=done default=ignore\]\s+pam_unix\.so'
+
+- name: Restrict su to the dedicated pam_wheel group
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/su
+    regexp: '^auth\s+required\s+pam_wheel\.so\b.*$'
+    line: 'auth required pam_wheel.so use_uid group=sugroup'
+    insertafter: '^auth\s+sufficient\s+pam_rootok\.so'
 
 - name: Configure pwquality policy in main config
   ansible.builtin.blockinfile:
@@ -232,6 +256,134 @@
       Defaults logfile="/var/log/sudo.log"
       Defaults use_pty
       Defaults timestamp_timeout=0
+
+- name: Create journald drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/journald.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Configure journald to forward logs to rsyslog
+  ansible.builtin.copy:
+    dest: /etc/systemd/journald.conf.d/99-vps-scaffold-forwarding.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Journal]
+      ForwardToSyslog=yes
+  notify:
+    - Restart systemd-journald
+    - Restart rsyslog
+  when: baseline_enable_journald_syslog_forwarding | bool
+
+- name: Ensure rsyslog is enabled and started on real hosts
+  ansible.builtin.systemd:
+    name: rsyslog
+    enabled: true
+    state: started
+  when: ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
+- name: Ensure AppArmor is enabled and started on real hosts
+  ansible.builtin.systemd:
+    name: apparmor
+    enabled: true
+    state: started
+  when: ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
+- name: Ensure auditd is enabled and started on real hosts
+  ansible.builtin.systemd:
+    name: auditd
+    enabled: true
+    state: started
+  when:
+    - os_auditd_enabled | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
+- name: Configure audit rules for Docker and privileged configuration paths
+  ansible.builtin.copy:
+    dest: /etc/audit/rules.d/99-vps-scaffold.rules
+    owner: root
+    group: root
+    mode: "0640"
+    content: |
+      -w /usr/bin/docker -p wa -k docker
+      -w /usr/bin/containerd -p wa -k docker
+      -w /usr/bin/runc -p wa -k docker
+      -w /etc/docker -p wa -k docker
+      -w /var/lib/docker -p wa -k docker
+      -w /etc/ssh/sshd_config -p wa -k sshd
+      -w /etc/ssh/sshd_config.d -p wa -k sshd
+      -w /etc/sudoers -p wa -k scope
+      -w /etc/sudoers.d -p wa -k scope
+  notify: Restart auditd
+  when: os_auditd_enabled | bool
+
+- name: Check whether an AIDE database already exists
+  ansible.builtin.stat:
+    path: /var/lib/aide/aide.db
+  register: aide_db_file
+  when:
+    - baseline_enable_aide | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
+- name: Check whether a compressed AIDE database already exists
+  ansible.builtin.stat:
+    path: /var/lib/aide/aide.db.gz
+  register: aide_db_gz_file
+  when:
+    - baseline_enable_aide | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
+- name: Initialize AIDE database on first run
+  ansible.builtin.shell: |
+    set -eu
+    aideinit --yes
+    if [ -f /var/lib/aide/aide.db.new ]; then
+      cp /var/lib/aide/aide.db.new /var/lib/aide/aide.db
+    fi
+    if [ -f /var/lib/aide/aide.db.new.gz ]; then
+      cp /var/lib/aide/aide.db.new.gz /var/lib/aide/aide.db.gz
+    fi
+  when:
+    - baseline_enable_aide | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+    - not aide_db_file.stat.exists
+    - not aide_db_gz_file.stat.exists
+
+- name: Create grub drop-in directory
+  ansible.builtin.file:
+    path: /etc/default/grub.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Configure AppArmor at boot via grub drop-in
+  ansible.builtin.copy:
+    dest: /etc/default/grub.d/99-vps-scaffold-apparmor.cfg
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      GRUB_CMDLINE_LINUX="$GRUB_CMDLINE_LINUX apparmor=1 security=apparmor"
+  notify: Update grub
+  when:
+    - baseline_enable_apparmor_boot | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
+- name: Disable rarely used kernel modules
+  ansible.builtin.copy:
+    dest: "/etc/modprobe.d/{{ item }}.conf"
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      install {{ item }} /bin/false
+      blacklist {{ item }}
+  loop: "{{ baseline_disabled_kernel_modules }}"
 
 - name: Remove timesyncd drop-in from earlier scaffold revisions
   ansible.builtin.file:

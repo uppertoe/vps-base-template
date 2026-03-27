@@ -56,17 +56,27 @@ os_auth_lockout_time: 900
 os_auth_pw_remember: 24
 os_security_auto_logout: 900
 os_auth_pam_passwdqc_enable: false
-os_auditd_enabled: false
+os_auditd_enabled: true
 lock_root_password: true
 
 # -----------------------------------------------------------------------------
 # Baseline hardening (custom repository defaults)
 # -----------------------------------------------------------------------------
+baseline_enable_aide: true
+baseline_enable_apparmor_boot: true
+baseline_enable_journald_syslog_forwarding: true
 baseline_password_inactive_days: 30
 baseline_shell_umask: "027"
 baseline_faillock_deny: 4
 baseline_faillock_unlock_time: 900
 baseline_faillock_fail_interval: 900
+baseline_disabled_kernel_modules:
+  - cramfs
+  - freevxfs
+  - hfs
+  - hfsplus
+  - jffs2
+  - usb-storage
 baseline_timesyncd_ntp_servers:
   - 0.ubuntu.pool.ntp.org
   - 1.ubuntu.pool.ntp.org

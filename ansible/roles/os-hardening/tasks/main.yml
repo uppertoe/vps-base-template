@@ -20,6 +20,7 @@
     sysctl_file: /etc/sysctl.d/99-vps-scaffold.conf
   when:
     - host_vm_overcommit_memory_enabled | bool
+    - not molecule_test | default(false) | bool
     - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
 
 - name: Lock root password

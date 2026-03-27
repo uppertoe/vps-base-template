@@ -374,6 +374,14 @@
     - baseline_enable_apparmor_boot | bool
     - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
 
+- name: Ensure modprobe.d directory exists
+  ansible.builtin.file:
+    path: /etc/modprobe.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
 - name: Disable rarely used kernel modules
   ansible.builtin.copy:
     dest: "/etc/modprobe.d/{{ item }}.conf"

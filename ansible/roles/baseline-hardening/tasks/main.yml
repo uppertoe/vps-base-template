@@ -161,7 +161,7 @@
       esac
       [ -d "$home" ] || continue
       find "$home" -maxdepth 1 -type f \
-        \( -name '.bash_profile' -o -name '.bash_login' -o -name '.profile' -o -name '.bashrc' -o -name '.zprofile' -o -name '.zshrc' -o -name '.kshrc' -o -name '.cshrc' \) \
+        \( -name '.bash_profile' -o -name '.bash_login' -o -name '.bash_logout' -o -name '.profile' -o -name '.bashrc' -o -name '.zprofile' -o -name '.zshrc' -o -name '.kshrc' -o -name '.cshrc' \) \
         -perm /037 -print0
     done < /etc/passwd | while IFS= read -r -d '' file; do
       chmod u=rwX,g=r,o= "$file"
@@ -171,6 +171,68 @@
     executable: /bin/bash
   register: baseline_init_file_permissions
   changed_when: baseline_init_file_permissions.stdout != ""
+
+- name: Ensure root PATH directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop: "{{ baseline_root_path_directories }}"
+
+- name: Normalize ownership of report-sensitive log files
+  ansible.builtin.shell: |
+    set -eu
+    find -P /var/log -type f -regextype posix-extended \
+      ! -user root ! -user syslog \
+      ! -name 'gdm' ! -name 'gdm3' \
+      ! -name 'sssd' ! -name 'SSSD' \
+      ! -name 'auth.log' ! -name 'messages' ! -name 'syslog' \
+      ! -path '/var/log/apt/*' \
+      ! -path '/var/log/landscape/*' \
+      ! -path '/var/log/gdm/*' \
+      ! -path '/var/log/gdm3/*' \
+      ! -path '/var/log/sssd/*' \
+      ! -path '/var/log/[bw]tmp*' \
+      ! -path '/var/log/cloud-init.log*' \
+      ! -regex '.*\.journal[~]?' \
+      ! -regex '.*/lastlog(\.[^/]+)?$' \
+      ! -regex '.*/localmessages(.*)' \
+      ! -regex '.*/secure(.*)' \
+      ! -regex '.*/waagent.log(.*)' \
+      -print0 | while IFS= read -r -d '' file; do
+        chown --no-dereference root "$file"
+        printf '%s\n' "$file"
+      done
+  args:
+    executable: /bin/bash
+  register: baseline_var_log_ownership
+  changed_when: baseline_var_log_ownership.stdout != ""
+
+- name: Normalize permissions of report-sensitive log files
+  ansible.builtin.shell: |
+    set -eu
+    find -P /var/log -perm /u+xs,g+xws,o+xwrt \
+      ! -name 'history.log*' \
+      ! -name 'eipp.log.xz*' \
+      ! -name '[bw]tmp' \
+      ! -name '[bw]tmp.*' \
+      ! -name '[bw]tmp-*' \
+      ! -name 'lastlog' \
+      ! -name 'lastlog.*' \
+      ! -name 'cloud-init.log*' \
+      ! -name 'localmessages*' \
+      ! -name 'waagent.log*' \
+      -type f -regextype posix-extended -regex '.*' -print0 \
+      | while IFS= read -r -d '' file; do
+          chmod u-xs,g-xws,o-xwrt "$file"
+          printf '%s\n' "$file"
+        done
+  args:
+    executable: /bin/bash
+  register: baseline_var_log_permissions
+  changed_when: baseline_var_log_permissions.stdout != ""
 
 - name: Detect crontab group when present
   ansible.builtin.getent:

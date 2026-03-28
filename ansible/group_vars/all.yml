@@ -125,6 +125,8 @@ baseline_timesyncd_ntp_servers:
   - 3.ubuntu.pool.ntp.org
 baseline_timesyncd_fallback_ntp_servers:
   - ntp.ubuntu.com
+baseline_root_path_directories:
+  - /snap/bin
 baseline_host_sysctls:
   net.ipv4.conf.all.log_martians: "1"
   net.ipv4.conf.default.log_martians: "1"

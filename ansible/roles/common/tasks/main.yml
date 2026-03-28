@@ -141,13 +141,26 @@
     - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
     - not common_swapfile_stat.stat.exists
 
-- name: Ensure managed swapfile is active and persistent
-  ansible.posix.mount:
-    path: none
-    src: "{{ host_swapfile_path }}"
-    fstype: swap
-    opts: sw
-    state: mounted
+- name: Check active swap devices and files
+  ansible.builtin.command:
+    cmd: swapon --show=NAME --noheadings
+  register: common_active_swaps
+  changed_when: false
   when:
     - host_swapfile_enabled | bool
     - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
+- name: Ensure managed swapfile is persistent in fstab
+  ansible.builtin.lineinfile:
+    path: /etc/fstab
+    regexp: "^{{ host_swapfile_path | regex_escape() }}\\s+none\\s+swap\\s+sw\\s+0\\s+0$"
+    line: "{{ host_swapfile_path }} none swap sw 0 0"
+    state: present
+
+- name: Ensure managed swapfile is active
+  ansible.builtin.command:
+    cmd: "swapon {{ host_swapfile_path }}"
+  when:
+    - host_swapfile_enabled | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+    - host_swapfile_path not in common_active_swaps.stdout_lines

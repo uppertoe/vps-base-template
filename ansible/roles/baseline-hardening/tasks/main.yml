@@ -311,6 +311,7 @@
     fi
   when:
     - baseline_enable_aide | bool
+    - baseline_initialize_aide_database | bool
     - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
     - not aide_db_file.stat.exists
     - not aide_db_gz_file.stat.exists

@@ -22,7 +22,7 @@ provides everything specific to that VPS.
 
 | Path | Purpose |
 |------|---------|
-| `ansible/roles/common` | Base packages, auto-updates, fail2ban SSH protection |
+| `ansible/roles/common` | Base packages, auto-updates, fail2ban, swapfile, monitoring, earlyoom |
 | `ansible/roles/deploy-user` | Non-root deploy user, SSH key, sudoers |
 | `ansible/roles/ssh-hardening` | Hardens sshd (wraps dev-sec.io) |
 | `ansible/roles/os-hardening` | Kernel-level hardening (wraps dev-sec.io) |
@@ -30,7 +30,7 @@ provides everything specific to that VPS.
 | `ansible/roles/firewall` | UFW — allow 22, 80, 443 only |
 | `ansible/roles/backup` | Hourly PostgreSQL → Restic backups + weekly verification |
 | `ansible/bootstrap.yml` | Run once as root — creates deploy user |
-| `ansible/site.yml` | Idempotent — hardening, Docker, firewall |
+| `ansible/site.yml` | Idempotent — hardening, Docker, firewall; slower maintenance steps opt-in via vars |
 | `ansible/audit-*.yml` | Lynis, OpenSCAP, docker-bench security audits |
 | `docker/caddy.base.yml` | Base Caddy service — included by server repos |
 | `molecule/default/` | Role deployment tests — Ubuntu 24.04 + Debian 12 |
@@ -68,7 +68,7 @@ Workflow file: `.github/workflows/ci.yml`
 vps-base-template/
 ├── ansible/
 │   ├── roles/
-│   │   ├── common/          # base packages, auto-updates, fail2ban
+│   │   ├── common/          # base packages, auto-updates, fail2ban, swap, monitoring, earlyoom
 │   │   ├── deploy-user/     # non-root user + SSH key + sudoers
 │   │   ├── ssh-hardening/   # wraps dev-sec.io ssh_hardening
 │   │   ├── os-hardening/    # wraps dev-sec.io os_hardening

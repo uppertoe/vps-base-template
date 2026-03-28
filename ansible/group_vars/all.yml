@@ -17,6 +17,35 @@ deploy_user_public_key: "{{ lookup('file', ((ansible_ssh_private_key_file | defa
 server_timezone: UTC
 
 # -----------------------------------------------------------------------------
+# Host resource guardrails
+# -----------------------------------------------------------------------------
+# Skip these on normal re-runs if you want a faster day-to-day site play.
+# Turn them on explicitly for maintenance windows.
+common_run_safe_upgrade: false
+baseline_initialize_aide_database: false
+
+# Enable a managed swapfile on real hosts. With size set to "auto", the role
+# chooses a size from detected RAM:
+#   <= 2 GB RAM  -> 4 GB swap
+#   <= 4 GB RAM  -> 4 GB swap
+#   <= 8 GB RAM  -> RAM-sized swap
+#   >  8 GB RAM  -> 4 GB swap
+host_swapfile_enabled: true
+host_swapfile_path: /swapfile
+host_swapfile_size_mb: auto
+
+# Lightweight host monitoring for post-incident analysis on small VPSes.
+host_monitoring_enabled: true
+host_monitoring_packages:
+  - atop
+  - sysstat
+
+# Kill large processes before the kernel reaches full OOM thrash.
+host_earlyoom_enabled: true
+host_earlyoom_min_free_mem_percent: 5
+host_earlyoom_min_free_swap_percent: 10
+
+# -----------------------------------------------------------------------------
 # SSH hardening (passed to devsec.hardening.ssh_hardening)
 # See: https://github.com/dev-sec/ansible-collection-hardening
 # -----------------------------------------------------------------------------

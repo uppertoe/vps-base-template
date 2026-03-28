@@ -115,6 +115,18 @@ firewall. Safe to re-run at any time — all roles are idempotent.
 ansible-playbook -i ansible/inventory/myserver ansible/site.yml
 ```
 
+This playbook defaults to the fast day-to-day path:
+- safe apt upgrades are skipped unless you opt in
+- first-run AIDE database initialization is skipped unless you opt in
+
+For a fuller maintenance run, enable them explicitly:
+
+```bash
+ansible-playbook -i ansible/inventory/myserver ansible/site.yml \
+  -e common_run_safe_upgrade=true \
+  -e baseline_initialize_aide_database=true
+```
+
 **What this does:**
 - Hardens SSH (disables root login, password auth, restricts to deploy user)
 - Applies OS-level kernel hardening (dev-sec.io)
@@ -146,6 +158,14 @@ will be applied on the next run:
 
 ```bash
 ansible-playbook -i ansible/inventory/myserver ansible/site.yml
+```
+
+To include the slower maintenance steps on a re-run:
+
+```bash
+ansible-playbook -i ansible/inventory/myserver ansible/site.yml \
+  -e common_run_safe_upgrade=true \
+  -e baseline_initialize_aide_database=true
 ```
 
 To apply only specific roles:

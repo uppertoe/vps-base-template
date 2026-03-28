@@ -7,11 +7,24 @@
 - name: Upgrade all packages to latest safe versions
   ansible.builtin.apt:
     upgrade: safe
+  when: common_run_safe_upgrade | bool
 
 - name: Install common packages
   ansible.builtin.apt:
     name: "{{ common_packages }}"
     state: present
+
+- name: Install lightweight host monitoring packages
+  ansible.builtin.apt:
+    name: "{{ host_monitoring_packages }}"
+    state: present
+  when: host_monitoring_enabled | bool
+
+- name: Install earlyoom
+  ansible.builtin.apt:
+    name: earlyoom
+    state: present
+  when: host_earlyoom_enabled | bool
 
 - name: Configure automatic security updates
   ansible.builtin.copy:
@@ -37,3 +50,104 @@
     name: fail2ban
     enabled: true
     state: started
+
+- name: Enable sysstat data collection
+  ansible.builtin.lineinfile:
+    path: /etc/default/sysstat
+    regexp: '^ENABLED='
+    line: 'ENABLED="true"'
+    create: true
+    mode: "0644"
+  when: host_monitoring_enabled | bool
+
+- name: Enable and start monitoring services on real hosts
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop:
+    - atop
+    - sysstat
+  when:
+    - host_monitoring_enabled | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
+- name: Configure earlyoom thresholds
+  ansible.builtin.copy:
+    dest: /etc/default/earlyoom
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      EARLYOOM_ARGS="-m {{ host_earlyoom_min_free_mem_percent }} -s {{ host_earlyoom_min_free_swap_percent }}"
+  when: host_earlyoom_enabled | bool
+
+- name: Enable and start earlyoom on real hosts
+  ansible.builtin.systemd:
+    name: earlyoom
+    enabled: true
+    state: started
+  when:
+    - host_earlyoom_enabled | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
+- name: Determine managed swapfile size
+  ansible.builtin.set_fact:
+    common_swapfile_size_mb_effective: >-
+      {%- if host_swapfile_size_mb != 'auto' -%}
+      {{ host_swapfile_size_mb | int }}
+      {%- elif (ansible_facts.memtotal_mb | int) <= 4096 -%}
+      4096
+      {%- elif (ansible_facts.memtotal_mb | int) <= 8192 -%}
+      {{ ansible_facts.memtotal_mb | int }}
+      {%- else -%}
+      4096
+      {%- endif -%}
+  when:
+    - host_swapfile_enabled | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
+- name: Check whether managed swapfile exists
+  ansible.builtin.stat:
+    path: "{{ host_swapfile_path }}"
+  register: common_swapfile_stat
+  when:
+    - host_swapfile_enabled | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
+- name: Allocate managed swapfile
+  ansible.builtin.command:
+    cmd: "fallocate -l {{ common_swapfile_size_mb_effective }}M {{ host_swapfile_path }}"
+  when:
+    - host_swapfile_enabled | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+    - not common_swapfile_stat.stat.exists
+
+- name: Set managed swapfile permissions
+  ansible.builtin.file:
+    path: "{{ host_swapfile_path }}"
+    owner: root
+    group: root
+    mode: "0600"
+  when:
+    - host_swapfile_enabled | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
+- name: Format managed swapfile
+  ansible.builtin.command:
+    cmd: "mkswap {{ host_swapfile_path }}"
+  when:
+    - host_swapfile_enabled | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+    - not common_swapfile_stat.stat.exists
+
+- name: Ensure managed swapfile is active and persistent
+  ansible.posix.mount:
+    path: none
+    src: "{{ host_swapfile_path }}"
+    fstype: swap
+    opts: sw
+    state: mounted
+  when:
+    - host_swapfile_enabled | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']

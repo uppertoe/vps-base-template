@@ -123,6 +123,14 @@
     group: root
     mode: "0700"
 
+- name: Create restic cache directory
+  ansible.builtin.file:
+    path: /var/cache/restic
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
 - name: Deploy global config (config.env)
   ansible.builtin.copy:
     src: "{{ backup_config_src }}/config.env"

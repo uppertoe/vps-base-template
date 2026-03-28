@@ -80,14 +80,20 @@ done
 CONFIG_DIR="${BACKUP_CONFIG_DIR:-/etc/restic}"
 GLOBAL_CONFIG="$CONFIG_DIR/config.env"
 SERVICES_DIR="$CONFIG_DIR/services"
+RESTIC_CACHE_DIR="${RESTIC_CACHE_DIR:-/var/cache/restic}"
 
 # Source global config (provides AWS creds, SMTP, retention defaults).
 # When run via systemd the EnvironmentFile directive also loads these, but
 # sourcing here makes the script self-contained for manual runs.
 if [[ -f "$GLOBAL_CONFIG" ]]; then
+  set -a
   # shellcheck source=/dev/null
   source "$GLOBAL_CONFIG"
+  set +a
 fi
+
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$RESTIC_CACHE_DIR}"
+export HOME="${HOME:-/root}"
 
 # ---------------------------------------------------------------------------
 # Logging

@@ -85,11 +85,17 @@ done
 CONFIG_DIR="${BACKUP_CONFIG_DIR:-/etc/restic}"
 GLOBAL_CONFIG="$CONFIG_DIR/config.env"
 SERVICES_DIR="$CONFIG_DIR/services"
+RESTIC_CACHE_DIR="${RESTIC_CACHE_DIR:-/var/cache/restic}"
 
 if [[ -f "$GLOBAL_CONFIG" ]]; then
+  set -a
   # shellcheck source=/dev/null
   source "$GLOBAL_CONFIG"
+  set +a
 fi
+
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$RESTIC_CACHE_DIR}"
+export HOME="${HOME:-/root}"
 
 # ---------------------------------------------------------------------------
 # Logging

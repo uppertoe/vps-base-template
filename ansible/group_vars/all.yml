@@ -98,6 +98,14 @@ host_vm_overcommit_memory_enabled: false
 baseline_enable_aide: true
 baseline_enable_apparmor_boot: true
 baseline_enable_journald_syslog_forwarding: true
+baseline_journald_system_max_use: 300M
+baseline_journald_system_keep_free: 500M
+baseline_journald_max_file_sec: 1month
+baseline_auditd_max_log_file_mb: 25
+baseline_auditd_num_logs: 8
+baseline_auditd_max_log_file_action: ROTATE
+baseline_auditd_space_left_action: SYSLOG
+baseline_auditd_admin_space_left_action: SUSPEND
 baseline_password_inactive_days: 30
 baseline_shell_umask: "027"
 baseline_faillock_deny: 4

@@ -229,6 +229,19 @@
     - Restart rsyslog
   when: baseline_enable_journald_syslog_forwarding | bool
 
+- name: Configure journald retention limits
+  ansible.builtin.copy:
+    dest: /etc/systemd/journald.conf.d/99-vps-scaffold-retention.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Journal]
+      SystemMaxUse={{ baseline_journald_system_max_use }}
+      SystemKeepFree={{ baseline_journald_system_keep_free }}
+      MaxFileSec={{ baseline_journald_max_file_sec }}
+  notify: Restart systemd-journald
+
 - name: Apply audit and logging services on real hosts
   block:
     - name: Ensure rsyslog is enabled and started on real hosts
@@ -256,6 +269,19 @@
         name: auditd
         enabled: true
         state: started
+      when: os_auditd_enabled | bool
+
+    - name: Configure auditd retention policy
+      ansible.builtin.blockinfile:
+        path: /etc/audit/auditd.conf
+        marker: "# {mark} ANSIBLE MANAGED BLOCK: vps-scaffold retention"
+        block: |
+          max_log_file = {{ baseline_auditd_max_log_file_mb }}
+          num_logs = {{ baseline_auditd_num_logs }}
+          max_log_file_action = {{ baseline_auditd_max_log_file_action }}
+          space_left_action = {{ baseline_auditd_space_left_action }}
+          admin_space_left_action = {{ baseline_auditd_admin_space_left_action }}
+      notify: Restart auditd
       when: os_auditd_enabled | bool
 
     - name: Stat Docker Bench audit watch candidates

@@ -6,3 +6,8 @@ firewall_allowed_tcp_ports:
 
 firewall_allowed_udp_ports:
   - "443"  # HTTP/3 (QUIC)
+
+docker_firewall_enabled: true
+docker_firewall_bridge_interfaces:
+  - docker0
+  - br+

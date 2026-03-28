@@ -1,0 +1,18 @@
+---
+baseline_docker_audit_watch_candidates:
+  - /usr/bin/docker
+  - /usr/bin/containerd
+  - /usr/bin/containerd-shim-runc-v2
+  - /usr/bin/runc
+  - /run/containerd
+  - /var/lib/docker
+  - /etc/docker
+  - /etc/default/docker
+  - /etc/docker/daemon.json
+  - /etc/containerd/config.toml
+  - /lib/systemd/system/docker.service
+  - /usr/lib/systemd/system/docker.service
+  - /lib/systemd/system/docker.socket
+  - /usr/lib/systemd/system/docker.socket
+  - /var/run/docker.sock
+  - /run/containerd/containerd.sock

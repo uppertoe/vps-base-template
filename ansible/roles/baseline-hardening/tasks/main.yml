@@ -5,12 +5,7 @@
 
 - name: Install baseline hardening packages
   ansible.builtin.apt:
-    name:
-      - aide
-      - auditd
-      - apparmor-utils
-      - libpam-pwquality
-      - rsyslog
+    name: "{{ ['aide', 'apparmor-utils', 'libpam-pwquality', 'rsyslog'] + (['auditd'] if os_auditd_enabled | bool else []) }}"
     state: present
     update_cache: true
 
@@ -263,22 +258,31 @@
         state: started
       when: os_auditd_enabled | bool
 
-    - name: Configure audit rules for Docker and privileged configuration paths
-      ansible.builtin.copy:
+    - name: Stat Docker Bench audit watch candidates
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop: "{{ baseline_docker_audit_watch_candidates }}"
+      register: baseline_docker_audit_candidate_stats
+      when: os_auditd_enabled | bool
+
+    - name: Build Docker Bench audit watch list from existing host paths
+      ansible.builtin.set_fact:
+        baseline_existing_docker_audit_paths: >-
+          {{
+            baseline_docker_audit_candidate_stats.results
+            | selectattr('stat.exists')
+            | map(attribute='stat.path')
+            | list
+          }}
+      when: os_auditd_enabled | bool
+
+    - name: Configure audit rules for Docker Bench and privileged configuration paths
+      ansible.builtin.template:
+        src: 99-vps-scaffold.rules.j2
         dest: /etc/audit/rules.d/99-vps-scaffold.rules
         owner: root
         group: root
         mode: "0640"
-        content: |
-          -w /usr/bin/docker -p wa -k docker
-          -w /usr/bin/containerd -p wa -k docker
-          -w /usr/bin/runc -p wa -k docker
-          -w /etc/docker -p wa -k docker
-          -w /var/lib/docker -p wa -k docker
-          -w /etc/ssh/sshd_config -p wa -k sshd
-          -w /etc/ssh/sshd_config.d -p wa -k sshd
-          -w /etc/sudoers -p wa -k scope
-          -w /etc/sudoers.d -p wa -k scope
       notify: Restart auditd
       when: os_auditd_enabled | bool
   when: ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']

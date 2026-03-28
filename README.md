@@ -27,13 +27,13 @@ provides everything specific to that VPS.
 | `ansible/roles/ssh-hardening` | Hardens sshd (wraps dev-sec.io) |
 | `ansible/roles/os-hardening` | Kernel-level hardening (wraps dev-sec.io) |
 | `ansible/roles/docker` | Docker CE + compose plugin + weekly prune timer |
-| `ansible/roles/firewall` | UFW — allow 22, 80, 443 only |
+| `ansible/roles/firewall` | UFW + Docker-aware filtering for published ports |
 | `ansible/roles/backup` | Hourly PostgreSQL → Restic backups + weekly verification |
 | `ansible/bootstrap.yml` | Run once as root — creates deploy user |
-| `ansible/site.yml` | Idempotent — hardening, Docker, firewall; slower maintenance steps opt-in via vars |
+| `ansible/site.yml` | Idempotent — hardening, Docker, firewall; slower compliance steps opt-in via vars |
 | `ansible/audit-*.yml` | Lynis, OpenSCAP, docker-bench security audits |
 | `docker/caddy.base.yml` | Base Caddy service — included by server repos |
-| `molecule/default/` | Role deployment tests — Ubuntu 24.04 + Debian 12 |
+| `molecule/default/` | Role deployment tests — Ubuntu 24.04 |
 | `molecule/backup/` | Backup role deployment test |
 | `backup/tests/integration/` | End-to-end backup + restore script tests |
 
@@ -73,7 +73,7 @@ vps-base-template/
 │   │   ├── ssh-hardening/   # wraps dev-sec.io ssh_hardening
 │   │   ├── os-hardening/    # wraps dev-sec.io os_hardening
 │   │   ├── docker/          # Docker CE + compose plugin + weekly prune timer
-│   │   ├── firewall/        # ufw — allow 22, 80, 443 only
+│   │   ├── firewall/        # ufw + Docker-aware published-port filtering
 │   │   └── backup/          # hourly PostgreSQL → Restic backups + weekly verification
 │   ├── bootstrap.yml
 │   ├── site.yml
@@ -91,7 +91,7 @@ vps-base-template/
 │   ├── Caddyfile.example
 │   └── Caddyfile.local.example
 ├── molecule/
-│   ├── default/             # Ubuntu 24.04 + Debian 12 — all roles
+│   ├── default/             # Ubuntu 24.04 — all roles
 │   └── backup/              # Ubuntu 24.04 — backup role deployment
 └── docs/
 ```

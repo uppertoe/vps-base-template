@@ -1,0 +1,9 @@
+---
+- name: Apply docker-aware firewall
+  ansible.builtin.systemd:
+    name: vps-scaffold-docker-firewall
+    state: restarted
+    daemon_reload: true
+  when:
+    - docker_firewall_enabled | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']

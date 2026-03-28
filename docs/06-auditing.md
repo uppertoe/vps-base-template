@@ -137,6 +137,51 @@ public web server. Common intentional failures to understand and document:
 For each failure, decide: fix it, accept the risk (and document why), or note
 it as a known trade-off. The HTML report includes the rationale for each rule.
 
+### Audit Mapping For This Scaffold
+
+The most useful way to read the OpenSCAP and Docker Bench reports is to map
+each warning to one of three buckets: enforced by the scaffold, enabled via an
+explicit maintenance run, or accepted as an intentional exception.
+
+| Audit finding | What the scanner is looking for | Scaffold response |
+|---------------|---------------------------------|------------------|
+| `aide_build_database` | A built AIDE database present on disk | Run `site.yml` once with `-e baseline_initialize_aide_database=true` during a maintenance window |
+| `file_permission_user_init_files` | User init files at mode `0740` or stricter | Enforced by `baseline-hardening` on each real-host run |
+| `all_apparmor_profiles_in_enforce_complain_mode` | AppArmor profiles loaded in `enforce` or `complain` mode | Enforced by `baseline-hardening` on real hosts |
+| `sysctl_net_ipv4_conf_*_log_martians` | Runtime + persistent sysctls set to `1` | Enforced via `baseline_host_sysctls` |
+| `sysctl_net_ipv4_conf_*_rp_filter` | Runtime + persistent sysctls set to `1` | Enforced via `baseline_host_sysctls` |
+| `set_ufw_default_rule` | Default incoming deny policy | Enforced by the firewall role |
+| `set_ufw_loopback_traffic` | Explicit loopback allow + spoofed loopback deny | Enforced by the firewall role |
+| `ufw_rules_for_open_ports` | Rules for every open non-loopback port | Enforced by the firewall role, plus Docker-aware `DOCKER-USER` filtering for published container ports |
+| Docker Bench `1.1.3`–`1.1.18` | Audit watches on Docker/containerd files, sockets, and service units | Enforced by `baseline-hardening` using the exact host paths Docker Bench flags |
+| Docker Bench `2.2` | Restricted traffic between containers on the default bridge | Enforced with Docker daemon `icc: false` |
+| Docker Bench `2.16` | `userland-proxy` disabled | Enforced with Docker daemon `userland-proxy: false` |
+
+Common intentional exceptions:
+
+| Audit finding | Why we do not force it by default |
+|---------------|----------------------------------|
+| `/tmp` on separate partition | Requires a different disk or partitioning model at VPS creation time |
+| `grub2_password` / `grub2_uefi_password` | Heavy-handed for typical VPS workflows |
+| `sysctl_net_ipv4_ip_forward` | Docker hosts generally require forwarding |
+| `service_nftables_enabled` / `package_ufw_removed` | This scaffold intentionally uses UFW plus Docker-aware `DOCKER-USER` rules rather than direct nftables management |
+| Docker Bench `1.1.2` | `deploy` is intentionally in the `docker` group for the current deployment model |
+| Docker Bench `5.8` | Public Caddy instances must bind ports `80` and `443` |
+
+### Full Compliance Run
+
+The default `site.yml` path keeps long-running maintenance steps off normal
+re-runs. For a compliance-oriented pass, enable them explicitly:
+
+```bash
+ansible-playbook -i ansible/hosts scaffold/ansible/site.yml \
+  -e common_run_safe_upgrade=true \
+  -e baseline_initialize_aide_database=true
+```
+
+That gives OpenSCAP the AIDE state it expects while keeping day-to-day runs
+faster.
+
 ---
 
 ## Important: run against a real VPS, not Molecule
@@ -165,6 +210,17 @@ ansible-playbook -i ansible/hosts scaffold/ansible/audit-docker.yml
 ```
 
 Each output line references a CIS Docker Benchmark section number directly.
+
+The scaffold intentionally focuses on the host and daemon controls that can be
+applied safely across many Dockerised apps:
+- daemon defaults like `icc: false`, `no-new-privileges`, `live-restore`, and
+  `userland-proxy: false`
+- auditd watches for the host paths Docker Bench checks explicitly
+- Docker-aware filtering for published ports via `DOCKER-USER`
+
+Container-specific controls such as non-root users, CPU limits, read-only root
+filesystems, and service-level health checks still need to be handled in each
+server repo's `docker-compose.yml`.
 
 ---
 

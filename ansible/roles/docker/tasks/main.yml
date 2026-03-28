@@ -58,7 +58,9 @@
     dest: /etc/docker/daemon.json
     content: "{{ docker_daemon_config | to_nice_json }}\n"
     mode: "0644"
-  notify: Restart docker
+  notify:
+    - Restart docker
+    - Apply docker-aware firewall
 
 - name: Enable and start Docker service
   ansible.builtin.systemd:

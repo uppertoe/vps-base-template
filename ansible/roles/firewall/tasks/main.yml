@@ -60,3 +60,92 @@
 - name: Enable ufw (non-destructive — existing SSH session is preserved)
   community.general.ufw:
     state: enabled
+
+- name: Install Docker-aware firewall helper script
+  ansible.builtin.copy:
+    dest: /usr/local/sbin/vps-scaffold-docker-firewall
+    owner: root
+    group: root
+    mode: "0755"
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      if ! command -v iptables >/dev/null 2>&1; then
+        exit 0
+      fi
+
+      if ! iptables -S DOCKER-USER >/dev/null 2>&1; then
+        exit 0
+      fi
+
+      iptables -N VPS-SCAFFOLD-DOCKER-USER 2>/dev/null || true
+      iptables -C DOCKER-USER -j VPS-SCAFFOLD-DOCKER-USER 2>/dev/null || iptables -I DOCKER-USER 1 -j VPS-SCAFFOLD-DOCKER-USER
+      iptables -F VPS-SCAFFOLD-DOCKER-USER
+      iptables -A VPS-SCAFFOLD-DOCKER-USER -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN
+      {% for iface in docker_firewall_bridge_interfaces %}
+      iptables -A VPS-SCAFFOLD-DOCKER-USER -i {{ iface }} -j RETURN
+      {% endfor %}
+      {% for port in firewall_allowed_tcp_ports %}
+      iptables -A VPS-SCAFFOLD-DOCKER-USER -p tcp -m conntrack --ctorigdstport {{ port }} -j RETURN
+      {% endfor %}
+      {% for port in firewall_allowed_udp_ports %}
+      iptables -A VPS-SCAFFOLD-DOCKER-USER -p udp -m conntrack --ctorigdstport {{ port }} -j RETURN
+      {% endfor %}
+      iptables -A VPS-SCAFFOLD-DOCKER-USER -j DROP
+
+      if command -v ip6tables >/dev/null 2>&1 && ip6tables -S DOCKER-USER >/dev/null 2>&1; then
+        ip6tables -N VPS-SCAFFOLD-DOCKER-USER 2>/dev/null || true
+        ip6tables -C DOCKER-USER -j VPS-SCAFFOLD-DOCKER-USER 2>/dev/null || ip6tables -I DOCKER-USER 1 -j VPS-SCAFFOLD-DOCKER-USER
+        ip6tables -F VPS-SCAFFOLD-DOCKER-USER
+        ip6tables -A VPS-SCAFFOLD-DOCKER-USER -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN
+      {% for iface in docker_firewall_bridge_interfaces %}
+        ip6tables -A VPS-SCAFFOLD-DOCKER-USER -i {{ iface }} -j RETURN
+      {% endfor %}
+      {% for port in firewall_allowed_tcp_ports %}
+        ip6tables -A VPS-SCAFFOLD-DOCKER-USER -p tcp -m conntrack --ctorigdstport {{ port }} -j RETURN
+      {% endfor %}
+      {% for port in firewall_allowed_udp_ports %}
+        ip6tables -A VPS-SCAFFOLD-DOCKER-USER -p udp -m conntrack --ctorigdstport {{ port }} -j RETURN
+      {% endfor %}
+        ip6tables -A VPS-SCAFFOLD-DOCKER-USER -j DROP
+      fi
+  notify: Apply docker-aware firewall
+  when:
+    - docker_firewall_enabled | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
+- name: Install Docker-aware firewall systemd unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/vps-scaffold-docker-firewall.service
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Apply VPS scaffold Docker-aware firewall rules
+      After=docker.service
+      Requires=docker.service
+      PartOf=docker.service
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/vps-scaffold-docker-firewall
+      RemainAfterExit=yes
+
+      [Install]
+      WantedBy=multi-user.target
+  notify: Apply docker-aware firewall
+  when:
+    - docker_firewall_enabled | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
+- name: Enable and start Docker-aware firewall
+  ansible.builtin.systemd:
+    name: vps-scaffold-docker-firewall
+    enabled: true
+    state: started
+    daemon_reload: true
+  when:
+    - docker_firewall_enabled | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']

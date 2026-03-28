@@ -1,0 +1,7 @@
+{% for path in baseline_existing_docker_audit_paths %}
+-w {{ path }} -p wa -k docker
+{% endfor %}
+-w /etc/ssh/sshd_config -p wa -k sshd
+-w /etc/ssh/sshd_config.d -p wa -k sshd
+-w /etc/sudoers -p wa -k scope
+-w /etc/sudoers.d -p wa -k scope

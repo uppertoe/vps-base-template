@@ -26,6 +26,8 @@
 # PER-SERVICE VARIABLES (services/NAME.env)
 #   SERVICE_NAME      Identifier used in tags and log messages.
 #   CONTAINER_NAME    Docker container running PostgreSQL for this service.
+#                     May be either the exact container name or the Compose
+#                     service/container stem (e.g. jw_postgres).
 #   RESTIC_REPOSITORY Restic repository URL (e.g. s3:s3.amazonaws.com/bucket/svc).
 #   RESTIC_PASSWORD   Encryption passphrase for this service's repository.
 #   DB_NAME           Database name inside the container.
@@ -111,6 +113,39 @@ run() {
   else
     "$@"
   fi
+}
+
+resolve_container_name() {
+  local requested="$1"
+
+  if docker inspect "$requested" >/dev/null 2>&1; then
+    echo "$requested"
+    return 0
+  fi
+
+  local -a matches=()
+  local name=""
+  while IFS= read -r name; do
+    [[ -n "$name" ]] || continue
+    case "$name" in
+      "$requested"|"$requested"-*|*"-$requested"|*"-$requested-"*)
+        matches+=("$name")
+        ;;
+    esac
+  done < <(docker ps -a --format '{{.Names}}')
+
+  if [[ ${#matches[@]} -eq 1 ]]; then
+    echo "${matches[0]}"
+    return 0
+  fi
+
+  if [[ ${#matches[@]} -gt 1 ]]; then
+    warn "[$requested] Multiple container matches found: ${matches[*]}"
+    return 1
+  fi
+
+  warn "[$requested] No matching Docker container found."
+  return 1
 }
 
 # ---------------------------------------------------------------------------
@@ -212,6 +247,7 @@ backup_service() {
   local SERVICE_NAME="" CONTAINER_NAME="" DB_NAME="" DB_USER="" DB_PASSWORD=""
   local RESTIC_REPOSITORY="" RESTIC_PASSWORD="" STDIN_FILENAME="" BACKUP_PATHS=""
   local OPTIONAL="false"
+  local RESOLVED_CONTAINER_NAME=""
 
   # shellcheck source=/dev/null
   source "$env_file"
@@ -226,22 +262,31 @@ backup_service() {
   done
   [[ $missing -eq 0 ]] || return 1
 
+  if ! RESOLVED_CONTAINER_NAME="$(resolve_container_name "$CONTAINER_NAME")"; then
+    if [[ "$OPTIONAL" == "true" ]]; then
+      warn "[$SERVICE_NAME] Container '$CONTAINER_NAME' is not available — skipping (OPTIONAL=true)."
+      return 0
+    fi
+    warn "[$SERVICE_NAME] Container '$CONTAINER_NAME' could not be resolved."
+    return 1
+  fi
+
   info "--- Service: $SERVICE_NAME ---"
 
   # If OPTIONAL=true, check container is running before attempting the backup.
   if [[ "$OPTIONAL" == "true" ]]; then
     local running
-    running="$(docker inspect --format '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null || echo 'false')"
+    running="$(docker inspect --format '{{.State.Running}}' "$RESOLVED_CONTAINER_NAME" 2>/dev/null || echo 'false')"
     if [[ "$running" != "true" ]]; then
-      warn "[$SERVICE_NAME] Container '$CONTAINER_NAME' is not running — skipping (OPTIONAL=true)."
+      warn "[$SERVICE_NAME] Container '$RESOLVED_CONTAINER_NAME' is not running — skipping (OPTIONAL=true)."
       return 0
     fi
   fi
 
-  info "[$SERVICE_NAME] Backing up ${DB_NAME} from container ${CONTAINER_NAME}..."
+  info "[$SERVICE_NAME] Backing up ${DB_NAME} from container ${RESOLVED_CONTAINER_NAME}..."
 
   if "$DRY_RUN"; then
-    echo "DRY-RUN: docker exec $CONTAINER_NAME pg_dump $DB_NAME | restic backup --stdin --stdin-filename $STDIN_FILENAME --tag $SERVICE_NAME"
+    echo "DRY-RUN: docker exec $RESOLVED_CONTAINER_NAME pg_dump $DB_NAME | restic backup --stdin --stdin-filename $STDIN_FILENAME --tag $SERVICE_NAME"
     return 0
   fi
 
@@ -251,14 +296,17 @@ backup_service() {
   # Initialise the repository if this is the first run.
   if ! restic snapshots --no-lock &>/dev/null; then
     info "[$SERVICE_NAME] Initialising new Restic repository at ${RESTIC_REPOSITORY}..."
-    restic init
+    if ! restic init; then
+      warn "[$SERVICE_NAME] Failed to initialise Restic repository."
+      return 1
+    fi
   fi
 
   # Dump the database via docker exec directly into restic (no temp file).
   # Using the container's own pg_dump avoids version mismatches.
-  docker exec \
+  if ! docker exec \
       -e PGPASSWORD="${DB_PASSWORD:-}" \
-      "$CONTAINER_NAME" \
+      "$RESOLVED_CONTAINER_NAME" \
       pg_dump \
         --username "$DB_USER" \
         --no-password \
@@ -267,7 +315,10 @@ backup_service() {
         --stdin \
         --stdin-filename "$STDIN_FILENAME" \
         --tag "$SERVICE_NAME" \
-        --tag "$TIMESTAMP"
+        --tag "$TIMESTAMP"; then
+    warn "[$SERVICE_NAME] Database backup failed."
+    return 1
+  fi
 
   info "[$SERVICE_NAME] Backup complete."
 
@@ -278,10 +329,13 @@ backup_service() {
     info "[$SERVICE_NAME] Backing up file paths..."
     local -a _paths
     IFS=: read -ra _paths <<< "$BACKUP_PATHS"
-    restic backup \
+    if ! restic backup \
       "${_paths[@]}" \
       --tag "${SERVICE_NAME}-files" \
-      --tag "$TIMESTAMP"
+      --tag "$TIMESTAMP"; then
+      warn "[$SERVICE_NAME] File backup failed."
+      return 1
+    fi
     info "[$SERVICE_NAME] File backup complete."
   fi
 
@@ -291,11 +345,14 @@ backup_service() {
   local keep_monthly="${KEEP_MONTHLY:-6}"
 
   info "[$SERVICE_NAME] Applying retention (daily=$keep_daily, weekly=$keep_weekly, monthly=$keep_monthly)..."
-  restic forget \
+  if ! restic forget \
     --keep-daily   "$keep_daily"  \
     --keep-weekly  "$keep_weekly" \
     --keep-monthly "$keep_monthly" \
-    --prune
+    --prune; then
+    warn "[$SERVICE_NAME] Retention application failed."
+    return 1
+  fi
   info "[$SERVICE_NAME] Retention applied."
 }
 
@@ -315,11 +372,17 @@ verify_service() {
   export RESTIC_REPOSITORY RESTIC_PASSWORD
 
   info "[$SERVICE_NAME] Verifying repository integrity..."
-  run restic check
+  if ! run restic check; then
+    warn "[$SERVICE_NAME] Repository verification failed."
+    return 1
+  fi
   info "[$SERVICE_NAME] Repository OK."
 
   info "[$SERVICE_NAME] Recent snapshots:"
-  restic snapshots --latest 5
+  if ! restic snapshots --latest 5; then
+    warn "[$SERVICE_NAME] Failed to list recent snapshots."
+    return 1
+  fi
 }
 
 # ---------------------------------------------------------------------------

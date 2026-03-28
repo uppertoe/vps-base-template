@@ -108,6 +108,39 @@ run() {
   fi
 }
 
+resolve_container_name() {
+  local requested="$1"
+
+  if docker inspect "$requested" >/dev/null 2>&1; then
+    echo "$requested"
+    return 0
+  fi
+
+  local -a matches=()
+  local name=""
+  while IFS= read -r name; do
+    [[ -n "$name" ]] || continue
+    case "$name" in
+      "$requested"|"$requested"-*|*"-$requested"|*"-$requested-"*)
+        matches+=("$name")
+        ;;
+    esac
+  done < <(docker ps -a --format '{{.Names}}')
+
+  if [[ ${#matches[@]} -eq 1 ]]; then
+    echo "${matches[0]}"
+    return 0
+  fi
+
+  if [[ ${#matches[@]} -gt 1 ]]; then
+    warn "[$requested] Multiple container matches found: ${matches[*]}"
+    return 1
+  fi
+
+  warn "[$requested] No matching Docker container found."
+  return 1
+}
+
 # ---------------------------------------------------------------------------
 # Per-service state — updated by restore_service(), read by _rollback_db.
 # Not declared local so the ERR trap can access them from any call depth.
@@ -214,6 +247,7 @@ confirm_destructive() {
 
 restore_service() {
   local env_file="$1"
+  local resolved_container_name=""
 
   # Reset per-service state. Not declared local — _rollback_db must see these.
   ROLLBACK_DB=""
@@ -234,6 +268,12 @@ restore_service() {
     fi
   done
   [[ $missing -eq 0 ]] || return 1
+
+  if ! resolved_container_name="$(resolve_container_name "$CONTAINER_NAME")"; then
+    warn "[$SERVICE_NAME] Container '$CONTAINER_NAME' could not be resolved."
+    return 1
+  fi
+  CONTAINER_NAME="$resolved_container_name"
 
   export RESTIC_REPOSITORY RESTIC_PASSWORD
 

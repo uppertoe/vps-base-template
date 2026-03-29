@@ -363,6 +363,74 @@ EOF
   _psql --dbname postgres --command "DROP DATABASE IF EXISTS \"$sentinel_db\";" > /dev/null
 }
 
+test_restore_live_db_with_active_session_fails_cleanly() {
+  header "test_restore_live_db_with_active_session_fails_cleanly"
+
+  local sentinel_db="rename_blocked_db"
+  _psql --dbname postgres --command "DROP DATABASE IF EXISTS \"$sentinel_db\";" > /dev/null
+  _psql --dbname postgres --command "CREATE DATABASE \"$sentinel_db\";" > /dev/null
+  _psql --dbname "$sentinel_db" --command \
+    "CREATE TABLE sentinel (val INT); INSERT INTO sentinel VALUES (7);" > /dev/null
+
+  cat > "$CONFIG_DIR/services/rename-blocked.env" <<EOF
+SERVICE_NAME=rename-blocked
+CONTAINER_NAME=${PG_CONTAINER}
+RESTIC_REPOSITORY=${RESTIC_REPO_DIR}/rename-blocked
+RESTIC_PASSWORD=rename-blocked-password
+DB_NAME=${sentinel_db}
+DB_USER=${PG_USER}
+DB_PASSWORD=${PG_PASSWORD}
+STDIN_FILENAME=rename-blocked.sql
+OPTIONAL=false
+EOF
+
+  docker exec -d -e PGPASSWORD="$PG_PASSWORD" "$PG_CONTAINER" \
+    psql --username "$PG_USER" --no-password --dbname "$sentinel_db" \
+    --command "SELECT pg_sleep(15);" > /dev/null
+
+  local attempts=0
+  local session_count=0
+  while [[ "$attempts" -lt 20 ]]; do
+    session_count="$(_psql --dbname postgres --tuples-only --command \
+      "SELECT COUNT(*) FROM pg_stat_activity WHERE datname = '${sentinel_db}' AND pid <> pg_backend_pid();" \
+      | tr -d ' ')" || session_count=0
+    if [[ "$session_count" -ge 1 ]]; then
+      break
+    fi
+    attempts=$((attempts + 1))
+    sleep 1
+  done
+
+  local output="" exit_code=0
+  output="$(RESTORE_NO_CONFIRM=true BACKUP_CONFIG_DIR="$CONFIG_DIR" \
+    "$RESTORE_SCRIPT" --service rename-blocked 2>&1)" || exit_code=$?
+
+  local original_exists rollback_count val
+  original_exists="$(_psql --dbname postgres --tuples-only \
+    --command "SELECT COUNT(*) FROM pg_database WHERE datname = '${sentinel_db}'" | tr -d ' ')"
+  rollback_count="$(_psql --dbname postgres --tuples-only \
+    --command "SELECT COUNT(*) FROM pg_database WHERE datname LIKE '${sentinel_db}_pre_restore_%'" | tr -d ' ')"
+  val="$(_psql --dbname "$sentinel_db" --tuples-only \
+    --command "SELECT val FROM sentinel LIMIT 1" | tr -d ' ')"
+
+  _psql --dbname postgres --command \
+    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${sentinel_db}' AND pid <> pg_backend_pid();" \
+    > /dev/null
+
+  rm -f "$CONFIG_DIR/services/rename-blocked.env"
+  _psql --dbname postgres --command "DROP DATABASE IF EXISTS \"$sentinel_db\";" > /dev/null
+
+  if [[ "$exit_code" -eq 0 ]]; then
+    fail "rename_blocked: restore should have failed but exited 0"
+  elif [[ "$original_exists" != "1" || "$rollback_count" != "0" || "$val" != "7" ]]; then
+    fail "rename_blocked: expected original db to remain untouched (exists=$original_exists rollback_count=$rollback_count val=$val)"
+  elif [[ "$output" == *"Rollback source"* ]]; then
+    fail "rename_blocked: restore reported a rollback source even though rename never succeeded"
+  else
+    pass "rename_blocked: active session blocked rename without creating fake rollback state"
+  fi
+}
+
 test_partial_failure_continues() {
   header "test_partial_failure_continues"
 
@@ -577,6 +645,7 @@ test_retention_runs_clean
 test_restore_into_alternate_db
 test_verify_passes
 test_restore_rollback_on_failure
+test_restore_live_db_with_active_session_fails_cleanly
 test_partial_failure_continues
 test_optional_service_skips_stopped_container
 test_list_snapshots

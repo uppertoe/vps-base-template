@@ -24,6 +24,9 @@
 # SAFETY
 #   When restoring to the live database, the script prints a warning and
 #   requires interactive confirmation unless RESTORE_NO_CONFIRM=true is set.
+#   Keep the PostgreSQL container running for restore.sh to use via docker exec.
+#   Stop app containers and any other clients first so the live database has
+#   no active connections before the script tries to rename it for rollback.
 #
 # FILE PATHS
 #   If a service config sets BACKUP_PATHS, the most recent file snapshot
@@ -147,6 +150,11 @@ resolve_container_name() {
   return 1
 }
 
+container_is_running() {
+  local container_name="$1"
+  [[ "$(docker inspect --format '{{.State.Running}}' "$container_name" 2>/dev/null || echo 'false')" == "true" ]]
+}
+
 # ---------------------------------------------------------------------------
 # Per-service state — updated by restore_service(), read by _rollback_db.
 # Not declared local so the ERR trap can access them from any call depth.
@@ -247,6 +255,16 @@ confirm_destructive() {
   [[ "$confirmation" == "$target" ]] || die "Confirmation did not match — aborting."
 }
 
+log_live_restore_prereqs() {
+  local target="$1" real="$2"
+  [[ "$target" == "$real" ]] || return 0
+
+  warn "Live restore prerequisites:"
+  warn "  - Keep the PostgreSQL container running for docker exec."
+  warn "  - Stop app containers and any other database clients first."
+  warn "  - Restore will fail if the live database still has active sessions."
+}
+
 # ---------------------------------------------------------------------------
 # Per-service restore
 # ---------------------------------------------------------------------------
@@ -281,6 +299,12 @@ restore_service() {
   fi
   CONTAINER_NAME="$resolved_container_name"
 
+  if ! container_is_running "$CONTAINER_NAME"; then
+    warn "[$SERVICE_NAME] Container '$CONTAINER_NAME' is not running."
+    warn "[$SERVICE_NAME] Keep the PostgreSQL container up for restore.sh and stop app containers instead."
+    return 1
+  fi
+
   export RESTIC_REPOSITORY RESTIC_PASSWORD
 
   # TARGET_DB: honour --target for single-service runs, else use the real DB name.
@@ -295,6 +319,7 @@ restore_service() {
   "$DRY_RUN" && info "  (dry-run mode — no changes will be made)"
   info "================================================================="
 
+  log_live_restore_prereqs "$TARGET_DB" "$DB_NAME"
   confirm_destructive "$TARGET_DB" "$DB_NAME"
 
   if "$DRY_RUN"; then
@@ -306,10 +331,11 @@ restore_service() {
 
   # Preserve the existing database for rollback.
   if db_exists "$TARGET_DB"; then
-    ROLLBACK_DB="${TARGET_DB}_pre_restore_$(date -u +%Y%m%dT%H%M%SZ)"
-    info "Preserving '$TARGET_DB' -> '$ROLLBACK_DB' for rollback safety..."
+    local rollback_db="${TARGET_DB}_pre_restore_$(date -u +%Y%m%dT%H%M%SZ)"
+    info "Preserving '$TARGET_DB' -> '$rollback_db' for rollback safety..."
     _psql_admin postgres \
-      --command "ALTER DATABASE \"$TARGET_DB\" RENAME TO \"$ROLLBACK_DB\";"
+      --command "ALTER DATABASE \"$TARGET_DB\" RENAME TO \"$rollback_db\";"
+    ROLLBACK_DB="$rollback_db"
   fi
 
   info "Creating database '$TARGET_DB'..."

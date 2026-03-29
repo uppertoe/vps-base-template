@@ -165,7 +165,6 @@ _setup_msmtp() {
 
   {
     echo "defaults"
-    echo "logfile /tmp/msmtp.log"
     if [[ "$tls" == "on" ]]; then
       echo "tls on"
       echo "tls_starttls on"
@@ -211,7 +210,7 @@ send_notification() {
        | msmtp --file="$config_file" "$recipient"; then
     info "Notification sent to $recipient."
   else
-    warn "Failed to send notification — check /tmp/msmtp.log."
+    warn "Failed to send notification."
   fi
 
   rm -f "$config_file"

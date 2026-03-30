@@ -13,8 +13,9 @@ backup_scripts_dest: /opt/backup
 backup_schedule: "hourly"
 
 # When to run repository verification (restic check + snapshot listing).
-# Keep this less frequent than backups to avoid unnecessary storage churn.
-backup_verify_schedule: "weekly"
+# Keep this less frequent than backups and offset from the top-of-hour backup
+# schedule so weekly prune/check work is less likely to overlap.
+backup_verify_schedule: "Sun *-*-* 03:17:00"
 
 # Restic version to install from the official GitHub releases.
 # Check https://github.com/restic/restic/releases for the latest.

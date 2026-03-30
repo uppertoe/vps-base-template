@@ -11,7 +11,7 @@
 #   - Scripts are at /opt/backup/backup.sh and /opt/backup/restore.sh.
 #   - Config is at /etc/restic/config.env and /etc/restic/services/*.env.
 #   - backup.timer runs at the configured backup schedule (hourly by default).
-#   - backup-verify.timer runs periodic repository checks (weekly by default).
+#   - backup-verify.timer runs periodic repository checks on an off-hour weekly schedule by default.
 #   - Run `systemctl start backup.service` to trigger a backup immediately.
 # =============================================================================
 

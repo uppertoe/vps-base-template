@@ -28,7 +28,7 @@ provides everything specific to that VPS.
 | `ansible/roles/os-hardening` | Kernel-level hardening (wraps dev-sec.io) |
 | `ansible/roles/docker` | Docker CE + compose plugin + weekly prune timer |
 | `ansible/roles/firewall` | UFW + Docker-aware filtering for published ports |
-| `ansible/roles/backup` | Hourly PostgreSQL → Restic backups + weekly verification |
+| `ansible/roles/backup` | Hourly PostgreSQL → Restic backups + off-hour weekly verification |
 | `ansible/bootstrap.yml` | Run once as root — creates deploy user |
 | `ansible/site.yml` | Idempotent — hardening, Docker, firewall; slower compliance steps opt-in via vars |
 | `ansible/audit-*.yml` | Lynis, OpenSCAP, docker-bench security audits |
@@ -74,7 +74,7 @@ vps-base-template/
 │   │   ├── os-hardening/    # wraps dev-sec.io os_hardening
 │   │   ├── docker/          # Docker CE + compose plugin + weekly prune timer
 │   │   ├── firewall/        # ufw + Docker-aware published-port filtering
-│   │   └── backup/          # hourly PostgreSQL → Restic backups + weekly verification
+│   │   └── backup/          # hourly PostgreSQL → Restic backups + off-hour weekly verification
 │   ├── bootstrap.yml
 │   ├── site.yml
 │   ├── audit-lynis.yml

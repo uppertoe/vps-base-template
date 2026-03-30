@@ -167,18 +167,26 @@
 - name: Restrict interactive user initialization file permissions
   ansible.builtin.shell: |
     set -eu
-    while IFS=: read -r _ _ _ _ _ home shell; do
+    while IFS=: read -r user _ uid _ _ home shell; do
+      case "$user" in
+        nobody|nfsnobody)
+          continue
+          ;;
+      esac
+      [ "$uid" -ge 1000 ] 2>/dev/null || continue
       case "$shell" in
         */nologin|*/false|"")
           continue
           ;;
       esac
       [ -d "$home" ] || continue
-      find "$home" -maxdepth 1 -type f \
-        \( -name '.bash_profile' -o -name '.bash_login' -o -name '.bash_logout' -o -name '.profile' -o -name '.bashrc' -o -name '.zprofile' -o -name '.zshrc' -o -name '.kshrc' -o -name '.cshrc' \) \
-        -perm /037 -print0
+      find "$home" -maxdepth 1 -mindepth 1 \( -type f -o -type d \) -printf '%f\0' \
+        | grep -zP '{{ baseline_user_initialization_files_regex }}' \
+        | while IFS= read -r -d '' file; do
+            printf '%s\0' "$home/$file"
+          done
     done < /etc/passwd | while IFS= read -r -d '' file; do
-      chmod u=rwX,g=r,o= "$file"
+      chmod u-s,g-wxs,o= "$file"
       printf '%s\n' "$file"
     done
   args:

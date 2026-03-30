@@ -1,8 +1,10 @@
 ---
 baseline_manage_apparmor_profile_modes: true
+baseline_user_initialization_files_regex: '^\.[\w\- ]+$'
 
 baseline_docker_audit_watch_candidates:
   - /usr/bin/docker
+  - /usr/bin/dockerd
   - /usr/bin/containerd
   - /usr/bin/containerd-shim-runc-v2
   - /usr/bin/runc

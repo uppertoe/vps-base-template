@@ -286,3 +286,18 @@ Use this loop for Docker CIS findings:
 5. Re-run `site-quick.yml` if host settings changed.
 6. Redeploy the apps.
 7. Re-run `audit-docker.yml`.
+
+### GitHub Actions regression loop
+
+This repo also supports a GitHub Actions regression workflow for the base
+scaffold:
+
+1. Start from a fresh `ubuntu-24.04` GitHub-hosted runner.
+2. Run `bootstrap.yml`.
+3. Run `site-first-run.yml`.
+4. Run `audit-openscap.yml` and `audit-docker.yml`.
+5. Upload the resulting `reports/` directory as a workflow artifact.
+6. Optionally publish the generated report index to GitHub Pages from `main`.
+
+Treat that CI workflow as a regression signal for the scaffold itself, not as a
+replacement for auditing a real VPS with the actual downstream app stack.

@@ -61,7 +61,14 @@ GitHub Actions runs three checks on pushes to `main` and on pull requests:
 - Molecule `backup`
 - `backup/tests/integration/run_tests.sh`
 
-Workflow file: `.github/workflows/ci.yml`
+A separate `Compliance Audits` workflow runs on GitHub-hosted Ubuntu 24.04,
+applies `bootstrap.yml` plus `site-first-run.yml`, then publishes OpenSCAP and
+Docker audit reports as workflow artifacts. On `main`, it also publishes a
+static report index to GitHub Pages.
+
+Workflow files:
+- `.github/workflows/ci.yml`
+- `.github/workflows/compliance-audits.yml`
 
 ## Repository structure
 

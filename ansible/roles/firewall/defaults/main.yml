@@ -1,4 +1,8 @@
 ---
+firewall_default_incoming_policy: deny
+firewall_default_outgoing_policy: deny
+firewall_default_routed_policy: deny
+
 firewall_allowed_tcp_ports:
   - "22"
   - "80"
@@ -6,6 +10,18 @@ firewall_allowed_tcp_ports:
 
 firewall_allowed_udp_ports:
   - "443"  # HTTP/3 (QUIC)
+
+firewall_allowed_outbound_tcp_ports:
+  - "22"   # Git over SSH / general admin egress
+  - "53"   # DNS over TCP fallback
+  - "80"   # apt/http redirects
+  - "443"  # HTTPS, Docker registry, S3-compatible APIs
+  - "465"  # SMTP submission (implicit TLS)
+  - "587"  # SMTP submission (STARTTLS)
+
+firewall_allowed_outbound_udp_ports:
+  - "53"   # DNS
+  - "123"  # NTP
 
 docker_firewall_enabled: true
 docker_firewall_bridge_interfaces:

@@ -7,17 +7,17 @@
 - name: Set default incoming policy to deny
   community.general.ufw:
     direction: incoming
-    policy: deny
+    policy: "{{ firewall_default_incoming_policy }}"
 
-- name: Set default outgoing policy to allow
+- name: Set default outgoing policy
   community.general.ufw:
     direction: outgoing
-    policy: allow
+    policy: "{{ firewall_default_outgoing_policy }}"
 
 - name: Set default routed policy to deny
   community.general.ufw:
     direction: routed
-    policy: deny
+    policy: "{{ firewall_default_routed_policy }}"
 
 - name: Allow loopback traffic in
   community.general.ufw:
@@ -56,6 +56,22 @@
     port: "{{ item }}"
     proto: udp
   loop: "{{ firewall_allowed_udp_ports }}"
+
+- name: Allow outbound TCP ports
+  community.general.ufw:
+    rule: allow
+    direction: out
+    port: "{{ item }}"
+    proto: tcp
+  loop: "{{ firewall_allowed_outbound_tcp_ports }}"
+
+- name: Allow outbound UDP ports
+  community.general.ufw:
+    rule: allow
+    direction: out
+    port: "{{ item }}"
+    proto: udp
+  loop: "{{ firewall_allowed_outbound_udp_ports }}"
 
 - name: Enable ufw (non-destructive — existing SSH session is preserved)
   community.general.ufw:
@@ -149,3 +165,35 @@
   when:
     - docker_firewall_enabled | bool
     - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
+- name: Gather live IPv4 interface sysctl directories
+  ansible.builtin.find:
+    paths: /proc/sys/net/ipv4/conf
+    file_type: directory
+    recurse: false
+  register: firewall_ipv4_conf_dirs
+  when: ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
+- name: Re-apply martian and rp_filter sysctls on live IPv4 interfaces
+  ansible.posix.sysctl:
+    name: "net.ipv4.conf.{{ item.0 }}.{{ item.1.key }}"
+    value: "{{ item.1.value }}"
+    state: present
+    reload: true
+    sysctl_file: /etc/sysctl.d/99-vps-scaffold.conf
+  vars:
+    firewall_live_ipv4_interfaces: >-
+      {{
+        firewall_ipv4_conf_dirs.files
+        | map(attribute='path')
+        | map('basename')
+        | reject('in', ['all', 'default'])
+        | list
+      }}
+    firewall_ipv4_interface_sysctls:
+      log_martians: "{{ baseline_host_sysctls['net.ipv4.conf.all.log_martians'] }}"
+      rp_filter: "{{ baseline_host_sysctls['net.ipv4.conf.all.rp_filter'] }}"
+  loop: "{{ firewall_live_ipv4_interfaces | product(firewall_ipv4_interface_sysctls | dict2items) | list }}"
+  when:
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+    - firewall_live_ipv4_interfaces | length > 0

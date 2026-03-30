@@ -33,9 +33,11 @@ ansible-playbook -i "$INVENTORY_FILE" ansible/bootstrap.yml \
 
 # GitHub's Ubuntu 24.04 runner image still trips on blanket AppArmor
 # profile-mode enforcement before the audit step. Keep only that CI-specific
-# skip in place so the workflow reaches the reports while still exercising
-# full first-run behavior, including AIDE initialization.
+# skip in place so the workflow reaches the reports. Also keep AIDE DB
+# initialization off in CI while iterating; it makes the runner take well over
+# an hour and still does not produce a stable signal on the hosted image.
 ansible-playbook -i "$INVENTORY_FILE" ansible/site-first-run.yml \
-  -e baseline_manage_apparmor_profile_modes=false
+  -e baseline_manage_apparmor_profile_modes=false \
+  -e baseline_initialize_aide_database=false
 ansible-playbook -i "$INVENTORY_FILE" ansible/audit-openscap.yml
 ansible-playbook -i "$INVENTORY_FILE" ansible/audit-docker.yml

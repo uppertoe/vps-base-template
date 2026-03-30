@@ -468,9 +468,14 @@
     content: |
       MACs {{ ssh_macs | join(',') }}
 
+- name: Gather service facts before managing systemd-timesyncd
+  ansible.builtin.service_facts:
+
 - name: Enable and start systemd-timesyncd on real hosts
   ansible.builtin.systemd:
     name: systemd-timesyncd
     enabled: true
     state: started
-  when: ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+  when:
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+    - "'systemd-timesyncd.service' in ansible_facts.services"

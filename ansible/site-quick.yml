@@ -1,0 +1,29 @@
+---
+# site-quick.yml — fast day-to-day apply path, run as the deploy user
+#
+# This is the explicit "quick apply updates" mode. It keeps slower
+# maintenance/compliance steps disabled so routine re-runs stay fast.
+#
+# Usage:
+#   ansible-playbook -i ansible/inventory/myserver ansible/site-quick.yml
+
+- name: Configure server (quick apply mode)
+  hosts: all
+  gather_facts: true
+  become: true
+  vars:
+    common_run_safe_upgrade: false
+    baseline_initialize_aide_database: false
+  roles:
+    - role: common
+      tags: [common, baseline]
+    - role: ssh-hardening
+      tags: [hardening, ssh]
+    - role: os-hardening
+      tags: [hardening, os]
+    - role: baseline-hardening
+      tags: [hardening, baseline]
+    - role: docker
+      tags: [docker]
+    - role: firewall
+      tags: [firewall]

@@ -106,25 +106,19 @@ If this works, exit and continue. **Do not proceed to step 6 if this fails**
 exit
 ```
 
-## Step 6 — Run the main site playbook (as deploy user)
+## Step 6 — Run the first-run site playbook (as deploy user)
 
-This applies SSH hardening, OS hardening, installs Docker, and configures the
-firewall. Safe to re-run at any time — all roles are idempotent.
+This applies SSH hardening, OS hardening, installs Docker, configures the
+firewall, and enables the slower first-run/compliance tasks.
 
 ```bash
-ansible-playbook -i ansible/inventory/myserver ansible/site.yml
+ansible-playbook -i ansible/inventory/myserver ansible/site-first-run.yml
 ```
 
-This playbook defaults to the fast day-to-day path:
-- safe apt upgrades are skipped unless you opt in
-- first-run AIDE database initialization is skipped unless you opt in
-
-For a fuller maintenance run, enable them explicitly:
+Use the quick path for routine updates later:
 
 ```bash
-ansible-playbook -i ansible/inventory/myserver ansible/site.yml \
-  -e common_run_safe_upgrade=true \
-  -e baseline_initialize_aide_database=true
+ansible-playbook -i ansible/inventory/myserver ansible/site-quick.yml
 ```
 
 **What this does:**
@@ -153,29 +147,27 @@ sudo ufw status
 
 ## Re-running and updating
 
-The site playbook is safe to re-run at any time. Changes to roles or variables
-will be applied on the next run:
+The quick site playbook is safe to re-run at any time. Changes to roles or
+variables will be applied on the next run:
 
 ```bash
-ansible-playbook -i ansible/inventory/myserver ansible/site.yml
+ansible-playbook -i ansible/inventory/myserver ansible/site-quick.yml
 ```
 
-To include the slower maintenance steps on a re-run:
+To re-run the heavier first-run/compliance pass:
 
 ```bash
-ansible-playbook -i ansible/inventory/myserver ansible/site.yml \
-  -e common_run_safe_upgrade=true \
-  -e baseline_initialize_aide_database=true
+ansible-playbook -i ansible/inventory/myserver ansible/site-first-run.yml
 ```
 
 To apply only specific roles:
 
 ```bash
 # Only Docker-related tasks
-ansible-playbook -i ansible/inventory/myserver ansible/site.yml --tags docker
+ansible-playbook -i ansible/inventory/myserver ansible/site-quick.yml --tags docker
 
 # Only hardening tasks
-ansible-playbook -i ansible/inventory/myserver ansible/site.yml --tags hardening
+ansible-playbook -i ansible/inventory/myserver ansible/site-quick.yml --tags hardening
 ```
 
 ---

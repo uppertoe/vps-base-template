@@ -1,0 +1,29 @@
+---
+# site-first-run.yml — fuller first-run/compliance pass, run as the deploy user
+#
+# This is the explicit "first run" mode. It enables slower maintenance tasks
+# that help establish a stronger initial compliance baseline.
+#
+# Usage:
+#   ansible-playbook -i ansible/inventory/myserver ansible/site-first-run.yml
+
+- name: Configure server (first-run mode)
+  hosts: all
+  gather_facts: true
+  become: true
+  vars:
+    common_run_safe_upgrade: true
+    baseline_initialize_aide_database: true
+  roles:
+    - role: common
+      tags: [common, baseline]
+    - role: ssh-hardening
+      tags: [hardening, ssh]
+    - role: os-hardening
+      tags: [hardening, os]
+    - role: baseline-hardening
+      tags: [hardening, baseline]
+    - role: docker
+      tags: [docker]
+    - role: firewall
+      tags: [firewall]

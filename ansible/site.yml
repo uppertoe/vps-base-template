@@ -1,19 +1,26 @@
 ---
-# site.yml — full server configuration, run as the deploy user
+# site.yml — default quick-apply server configuration, run as the deploy user
 #
 # Run this after bootstrap.yml. Safe to re-run (all roles are idempotent).
+# This remains the compatibility entrypoint and follows the fast day-to-day
+# path. Use site-first-run.yml for the heavier first-run/compliance pass.
 #
 # Usage:
 #   ansible-playbook -i ansible/inventory/myserver ansible/site.yml
+#   ansible-playbook -i ansible/inventory/myserver ansible/site-quick.yml
+#   ansible-playbook -i ansible/inventory/myserver ansible/site-first-run.yml
 #
 # To limit to specific roles, use tags:
 #   ansible-playbook -i ansible/inventory/myserver ansible/site.yml --tags docker
 #   ansible-playbook -i ansible/inventory/myserver ansible/site.yml --tags hardening
 
-- name: Configure server
+- name: Configure server (default quick mode)
   hosts: all
   gather_facts: true
   become: true
+  vars:
+    common_run_safe_upgrade: false
+    baseline_initialize_aide_database: false
   roles:
     - role: common
       tags: [common, baseline]

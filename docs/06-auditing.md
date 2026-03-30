@@ -170,13 +170,11 @@ Common intentional exceptions:
 
 ### Full Compliance Run
 
-The default `site.yml` path keeps long-running maintenance steps off normal
-re-runs. For a compliance-oriented pass, enable them explicitly:
+The default `site.yml` path follows the fast day-to-day mode. For a stronger
+baseline before auditing, use the explicit first-run/compliance playbook:
 
 ```bash
-ansible-playbook -i ansible/hosts scaffold/ansible/site.yml \
-  -e common_run_safe_upgrade=true \
-  -e baseline_initialize_aide_database=true
+ansible-playbook -i ansible/hosts scaffold/ansible/site-first-run.yml
 ```
 
 That gives OpenSCAP the AIDE state it expects while keeping day-to-day runs
@@ -245,7 +243,7 @@ Compare it against our `group_vars/all.yml` to see what we cover and what we don
 ```bash
 # 1. Provision a fresh VPS
 ansible-playbook -i ansible/inventory/myserver ansible/bootstrap.yml
-ansible-playbook -i ansible/inventory/myserver ansible/site.yml
+ansible-playbook -i ansible/inventory/myserver ansible/site-first-run.yml
 
 # 2. Run Lynis for a quick overall score
 ansible-playbook -i ansible/inventory/myserver ansible/audit-lynis.yml
@@ -256,6 +254,36 @@ ansible-playbook -i ansible/inventory/myserver ansible/audit-openscap.yml
 # 4. Run docker-bench-security for Docker CIS Benchmark
 ansible-playbook -i ansible/inventory/myserver ansible/audit-docker.yml
 
-# 5. Review reports, fix unexpected failures, re-run
-# 6. Commit a note of the score and date in your server repo
+# 5. Fix host-level gaps in inventory vars or Ansible roles
+# 6. Fix container-level Docker findings in your app compose files
+# 7. Re-apply the fast path
+ansible-playbook -i ansible/inventory/myserver ansible/site-quick.yml
+
+# 8. Re-run the audits until findings are resolved or formally accepted
 ```
+
+### CIS feedback loop
+
+Use this loop for OpenSCAP/CIS findings:
+
+1. Run `site-first-run.yml`.
+2. Run `audit-openscap.yml`.
+3. Classify each failed rule as:
+   expected platform exception, host-hardening gap, or app/container gap.
+4. Fix host gaps in Ansible or inventory.
+5. Re-run `site-quick.yml`.
+6. Re-run `audit-openscap.yml`.
+7. Repeat until the remaining failures are intentional and documented.
+
+### Docker feedback loop
+
+Use this loop for Docker CIS findings:
+
+1. Run `audit-docker.yml` against the real VPS.
+2. Separate findings into:
+   daemon-level controls, host integration controls, and per-container controls.
+3. Fix daemon/host controls in scaffold roles and inventory.
+4. Fix per-container controls in downstream `apps/*/docker-compose.yml`.
+5. Re-run `site-quick.yml` if host settings changed.
+6. Redeploy the apps.
+7. Re-run `audit-docker.yml`.

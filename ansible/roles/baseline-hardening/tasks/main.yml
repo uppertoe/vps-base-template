@@ -5,7 +5,7 @@
 
 - name: Install baseline hardening packages
   ansible.builtin.apt:
-    name: "{{ ['aide', 'apparmor-utils', 'libpam-pwquality', 'rsyslog'] + (['auditd'] if os_auditd_enabled | bool else []) }}"
+    name: "{{ ['aide', 'apparmor-utils', 'libpam-pwquality', 'rsyslog', 'systemd-timesyncd'] + (['auditd'] if os_auditd_enabled | bool else []) }}"
     state: present
     update_cache: true
 
@@ -22,6 +22,10 @@
     - inetutils-telnet
     - rsync
     - apport
+    - chrony
+    - apache2
+    - nginx
+    - postfix
   when: item in ansible_facts.packages
 
 - name: Apply authentication and password policy
@@ -467,6 +471,20 @@
     mode: "0600"
     content: |
       MACs {{ ssh_macs | join(',') }}
+
+- name: Normalize SSH server drop-in ownership and permissions
+  ansible.builtin.shell: |
+    set -eu
+    find /etc/ssh/sshd_config.d -maxdepth 1 -type f -print0 \
+      | while IFS= read -r -d '' file; do
+          chown root:root "$file"
+          chmod 0600 "$file"
+          printf '%s\n' "$file"
+        done
+  args:
+    executable: /bin/bash
+  register: baseline_sshd_dropin_permissions
+  changed_when: baseline_sshd_dropin_permissions.stdout != ""
 
 - name: Gather service facts before managing systemd-timesyncd
   ansible.builtin.service_facts:

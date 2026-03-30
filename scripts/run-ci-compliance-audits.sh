@@ -31,6 +31,11 @@ cd "$REPO_ROOT"
 ansible-playbook -i "$INVENTORY_FILE" ansible/bootstrap.yml \
   -e "{\"deploy_user_public_key\": \"${DEPLOY_USER_PUBLIC_KEY}\"}"
 
-ansible-playbook -i "$INVENTORY_FILE" ansible/site-first-run.yml
+# GitHub's Ubuntu 24.04 runner image currently includes an AppArmor profile
+# that causes blanket aa-enforce runs to abort before we reach the audit step.
+# Skip only that profile-mode task in CI so OpenSCAP can report the resulting
+# posture instead of the workflow failing early.
+ansible-playbook -i "$INVENTORY_FILE" ansible/site-first-run.yml \
+  -e baseline_manage_apparmor_profile_modes=false
 ansible-playbook -i "$INVENTORY_FILE" ansible/audit-openscap.yml
 ansible-playbook -i "$INVENTORY_FILE" ansible/audit-docker.yml

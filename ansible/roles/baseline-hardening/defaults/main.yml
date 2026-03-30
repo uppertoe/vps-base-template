@@ -1,4 +1,6 @@
 ---
+baseline_manage_apparmor_profile_modes: true
+
 baseline_docker_audit_watch_candidates:
   - /usr/bin/docker
   - /usr/bin/containerd

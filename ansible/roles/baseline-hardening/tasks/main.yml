@@ -325,6 +325,7 @@
       args:
         executable: /bin/bash
       changed_when: false
+      when: baseline_manage_apparmor_profile_modes | bool
 
     - name: Ensure auditd is enabled and started on real hosts
       ansible.builtin.systemd:

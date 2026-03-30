@@ -1,6 +1,27 @@
 ---
 baseline_manage_apparmor_profile_modes: true
 baseline_user_initialization_files_regex: '^\.[\w\- ]+$'
+baseline_unneeded_packages:
+  - ftp
+  - tnftp
+  - telnet
+  - inetutils-telnet
+  - rsync
+  - apport
+  - chrony
+  - apache2
+  - nginx
+  - postfix
+  - exim4
+  - exim4-base
+  - exim4-config
+  - exim4-daemon-light
+  - exim4-daemon-heavy
+  - nullmailer
+  - dma
+  - sendmail
+  - sendmail-bin
+  - sendmail-cf
 
 baseline_docker_audit_watch_candidates:
   - /usr/bin/docker

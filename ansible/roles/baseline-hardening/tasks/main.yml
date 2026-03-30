@@ -11,32 +11,17 @@
 
 - name: Remove packages we do not need on a minimal VPS
   ansible.builtin.apt:
-    name: "{{ item }}"
+    name: "{{ baseline_installed_unneeded_packages }}"
     state: absent
     purge: true
-    autoremove: true
-  loop:
-    - ftp
-    - tnftp
-    - telnet
-    - inetutils-telnet
-    - rsync
-    - apport
-    - chrony
-    - apache2
-    - nginx
-    - postfix
-    - exim4
-    - exim4-base
-    - exim4-config
-    - exim4-daemon-light
-    - exim4-daemon-heavy
-    - nullmailer
-    - dma
-    - sendmail
-    - sendmail-bin
-    - sendmail-cf
-  when: item in ansible_facts.packages
+  vars:
+    baseline_installed_unneeded_packages: >-
+      {{
+        baseline_unneeded_packages
+        | select('in', ansible_facts.packages.keys() | list)
+        | list
+      }}
+  when: baseline_installed_unneeded_packages | length > 0
 
 - name: Apply authentication and password policy
   block:
@@ -186,8 +171,11 @@
             printf '%s\0' "$home/$file"
           done
     done < /etc/passwd | while IFS= read -r -d '' file; do
-      chmod u-s,g-wxs,o= "$file"
-      printf '%s\n' "$file"
+      mode="$(stat -Lc '%a' "$file")"
+      if [ $((8#$mode & 8#037)) -ne 0 ]; then
+        chmod u-s,g-wxs,o= "$file"
+        printf '%s\n' "$file"
+      fi
     done
   args:
     executable: /bin/bash
@@ -495,9 +483,13 @@
     set -eu
     find /etc/ssh/sshd_config.d -maxdepth 1 -type f -print0 \
       | while IFS= read -r -d '' file; do
-          chown root:root "$file"
-          chmod 0600 "$file"
-          printf '%s\n' "$file"
+          owner_group="$(stat -Lc '%U:%G' "$file")"
+          mode="$(stat -Lc '%a' "$file")"
+          if [ "$owner_group" != "root:root" ] || [ "$mode" != "600" ]; then
+            chown root:root "$file"
+            chmod 0600 "$file"
+            printf '%s\n' "$file"
+          fi
         done
   args:
     executable: /bin/bash

@@ -9,19 +9,22 @@
     state: present
     update_cache: true
 
+- name: Detect actually installed unneeded packages
+  ansible.builtin.shell: |
+    set -eu
+    dpkg-query -W -f='${db:Status-Abbrev} ${binary:Package}\n' {{ baseline_unneeded_packages | join(' ') }} 2>/dev/null \
+      | awk '$1 ~ /^(ii|hi)$/ { print $2 }'
+  args:
+    executable: /bin/bash
+  register: baseline_installed_unneeded_packages
+  changed_when: false
+
 - name: Remove packages we do not need on a minimal VPS
   ansible.builtin.apt:
-    name: "{{ baseline_installed_unneeded_packages }}"
+    name: "{{ baseline_installed_unneeded_packages.stdout_lines }}"
     state: absent
     purge: true
-  vars:
-    baseline_installed_unneeded_packages: >-
-      {{
-        baseline_unneeded_packages
-        | select('in', ansible_facts.packages.keys() | list)
-        | list
-      }}
-  when: baseline_installed_unneeded_packages | length > 0
+  when: baseline_installed_unneeded_packages.stdout_lines | length > 0
 
 - name: Apply authentication and password policy
   block:

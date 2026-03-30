@@ -26,6 +26,16 @@
     - apache2
     - nginx
     - postfix
+    - exim4
+    - exim4-base
+    - exim4-config
+    - exim4-daemon-light
+    - exim4-daemon-heavy
+    - nullmailer
+    - dma
+    - sendmail
+    - sendmail-bin
+    - sendmail-cf
   when: item in ansible_facts.packages
 
 - name: Apply authentication and password policy

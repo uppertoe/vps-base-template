@@ -27,7 +27,6 @@
       - curl
       - gnupg
       - msmtp
-      - msmtp-mta
       - python3
     state: present
     update_cache: true

@@ -19,4 +19,4 @@ for hook in ./apps/*/deploy.sh; do
   fi
 done
 
-docker compose up -d --remove-orphans
+docker compose up -d --remove-orphans --wait

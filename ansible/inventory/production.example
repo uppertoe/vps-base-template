@@ -5,7 +5,8 @@
 #
 # Usage:
 #   ansible-playbook -i ansible/inventory/myserver ansible/bootstrap.yml
-#   ansible-playbook -i ansible/inventory/myserver ansible/site.yml
+#   ansible-playbook -i ansible/inventory/myserver ansible/site-first-run.yml
+#   ansible-playbook -i ansible/inventory/myserver ansible/site-quick.yml
 
 [servers]
 myserver ansible_host=1.2.3.4

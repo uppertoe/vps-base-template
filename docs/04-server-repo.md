@@ -119,7 +119,8 @@ walkthrough. The short version from the server repo root:
 ```bash
 ansible-galaxy collection install -r scaffold/ansible/requirements.yml
 ansible-playbook -i ansible/hosts scaffold/ansible/bootstrap.yml
-ansible-playbook -i ansible/hosts scaffold/ansible/site.yml
+ansible-playbook -i ansible/hosts scaffold/ansible/site-first-run.yml
+ansible-playbook -i ansible/hosts scaffold/ansible/site-quick.yml
 ```
 
 ## Local development

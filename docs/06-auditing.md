@@ -145,7 +145,7 @@ explicit maintenance run, or accepted as an intentional exception.
 
 | Audit finding | What the scanner is looking for | Scaffold response |
 |---------------|---------------------------------|------------------|
-| `aide_build_database` | A built AIDE database present on disk | Run `site.yml` once with `-e baseline_initialize_aide_database=true` during a maintenance window |
+| `aide_build_database` | A built AIDE database present on disk | Run `site-first-run.yml` during a maintenance window |
 | `file_permission_user_init_files` | User init files at mode `0740` or stricter | Enforced by `baseline-hardening` on each real-host run |
 | `all_apparmor_profiles_in_enforce_complain_mode` | AppArmor profiles loaded in `enforce` or `complain` mode | Enforced by `baseline-hardening` on real hosts |
 | `sysctl_net_ipv4_conf_*_log_martians` | Runtime + persistent sysctls set to `1` | Enforced via `baseline_host_sysctls` |
@@ -170,8 +170,7 @@ Common intentional exceptions:
 
 ### Full Compliance Run
 
-The default `site.yml` path follows the fast day-to-day mode. For a stronger
-baseline before auditing, use the explicit first-run/compliance playbook:
+Use the explicit first-run/compliance playbook for the stronger baseline before auditing:
 
 ```bash
 ansible-playbook -i ansible/hosts scaffold/ansible/site-first-run.yml

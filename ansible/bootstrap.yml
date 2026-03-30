@@ -3,7 +3,7 @@
 #
 # This playbook creates the non-root deploy user and installs common packages.
 # After this runs, all further access uses the deploy user — root login will
-# be disabled by site.yml.
+# be disabled by the site-quick/site-first-run playbooks.
 #
 # Usage:
 #   ansible-playbook -i ansible/inventory/myserver ansible/bootstrap.yml

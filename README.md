@@ -30,7 +30,6 @@ provides everything specific to that VPS.
 | `ansible/roles/firewall` | UFW + Docker-aware filtering for published ports |
 | `ansible/roles/backup` | Hourly PostgreSQL → Restic backups + off-hour weekly verification |
 | `ansible/bootstrap.yml` | Run once as root — creates deploy user |
-| `ansible/site.yml` | Default quick-apply path — hardening, Docker, firewall |
 | `ansible/site-first-run.yml` | Heavier first-run/compliance pass — includes safe upgrade + AIDE init |
 | `ansible/site-quick.yml` | Explicit fast day-to-day apply path |
 | `ansible/audit-*.yml` | Lynis, OpenSCAP, docker-bench security audits |
@@ -78,7 +77,6 @@ vps-base-template/
 │   │   ├── firewall/        # ufw + Docker-aware published-port filtering
 │   │   └── backup/          # hourly PostgreSQL → Restic backups + off-hour weekly verification
 │   ├── bootstrap.yml
-│   ├── site.yml
 │   ├── site-first-run.yml
 │   ├── site-quick.yml
 │   ├── audit-lynis.yml

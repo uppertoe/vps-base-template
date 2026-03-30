@@ -7,7 +7,8 @@
 #   backup.sh [--dry-run] [--verify] [--service NAME]
 #
 #   --dry-run         Print every command that would run; make no changes.
-#   --verify          After backing up, run `restic check` and list snapshots.
+#   --verify          After backing up, run `restic check`, apply retention with
+#                     prune, and list recent snapshots.
 #   --service NAME    Back up only the named service (default: all services).
 #
 # CONFIGURATION
@@ -216,6 +217,41 @@ send_notification() {
   rm -f "$config_file"
 }
 
+apply_retention() {
+  local service_name="$1"
+  local prune_mode="${2:-false}"
+  local keep_daily="${KEEP_DAILY:-7}"
+  local keep_weekly="${KEEP_WEEKLY:-4}"
+  local keep_monthly="${KEEP_MONTHLY:-6}"
+  local -a forget_args=(
+    --keep-daily "$keep_daily"
+    --keep-weekly "$keep_weekly"
+    --keep-monthly "$keep_monthly"
+  )
+
+  if [[ "$prune_mode" == "true" ]]; then
+    info "[$service_name] Applying retention with prune (daily=$keep_daily, weekly=$keep_weekly, monthly=$keep_monthly)..."
+    forget_args+=(--prune)
+  else
+    info "[$service_name] Applying retention (daily=$keep_daily, weekly=$keep_weekly, monthly=$keep_monthly)..."
+  fi
+
+  if ! restic forget "${forget_args[@]}"; then
+    if [[ "$prune_mode" == "true" ]]; then
+      warn "[$service_name] Retention prune failed."
+    else
+      warn "[$service_name] Retention application failed."
+    fi
+    return 1
+  fi
+
+  if [[ "$prune_mode" == "true" ]]; then
+    info "[$service_name] Retention prune complete."
+  else
+    info "[$service_name] Retention applied."
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # Failure trap
 # ---------------------------------------------------------------------------
@@ -344,21 +380,7 @@ backup_service() {
     info "[$SERVICE_NAME] File backup complete."
   fi
 
-  # Apply retention policy to this service's repository.
-  local keep_daily="${KEEP_DAILY:-7}"
-  local keep_weekly="${KEEP_WEEKLY:-4}"
-  local keep_monthly="${KEEP_MONTHLY:-6}"
-
-  info "[$SERVICE_NAME] Applying retention (daily=$keep_daily, weekly=$keep_weekly, monthly=$keep_monthly)..."
-  if ! restic forget \
-    --keep-daily   "$keep_daily"  \
-    --keep-weekly  "$keep_weekly" \
-    --keep-monthly "$keep_monthly" \
-    --prune; then
-    warn "[$SERVICE_NAME] Retention application failed."
-    return 1
-  fi
-  info "[$SERVICE_NAME] Retention applied."
+  apply_retention "$SERVICE_NAME"
 }
 
 # ---------------------------------------------------------------------------
@@ -382,6 +404,10 @@ verify_service() {
     return 1
   fi
   info "[$SERVICE_NAME] Repository OK."
+
+  if ! apply_retention "$SERVICE_NAME" "true"; then
+    return 1
+  fi
 
   info "[$SERVICE_NAME] Recent snapshots:"
   if ! restic snapshots --latest 5; then

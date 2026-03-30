@@ -6,7 +6,8 @@
 # WHAT IT TESTS
 #   - Dry-run mode produces no snapshots
 #   - Backup creates a restic snapshot
-#   - Retention/prune runs without error
+#   - Retention runs after backup without inline prune
+#   - Verify mode runs restic check plus retention/prune
 #   - Restore recreates data correctly in an alternate database
 #   - Post-restore verification passes on good data
 #   - Rollback: original database is recovered after a failed restore
@@ -263,16 +264,26 @@ test_backup_creates_snapshot() {
 
 test_retention_runs_clean() {
   header "test_retention_runs_clean"
-  # Run backup again to get a second snapshot, then verify forget/prune runs.
+  # Run backup again to get a second snapshot, then verify inline retention keeps working.
   run_backup > /dev/null 2>&1
 
   local count
   count="$(snapshot_count "${RESTIC_REPO_DIR}/testapp" "test-repo-password")"
 
   if [[ "$count" -ge 1 ]]; then
-    pass "retention/prune ran cleanly ($count snapshot(s) kept)"
+    pass "retention ran cleanly during backup ($count snapshot(s) kept)"
   else
     fail "snapshots unexpectedly pruned to zero"
+  fi
+}
+
+test_verify_runs_retention_prune() {
+  header "test_verify_runs_retention_prune"
+
+  if run_backup --verify > /dev/null 2>&1; then
+    pass "verify ran restic check and retention/prune cleanly"
+  else
+    fail "verify mode failed"
   fi
 }
 
@@ -642,6 +653,7 @@ setup
 test_dry_run_exits_zero
 test_backup_creates_snapshot
 test_retention_runs_clean
+test_verify_runs_retention_prune
 test_restore_into_alternate_db
 test_verify_passes
 test_restore_rollback_on_failure

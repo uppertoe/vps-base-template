@@ -140,7 +140,8 @@ bash backup/tests/integration/run_tests.sh
 |------|------------------|
 | `test_dry_run_exits_zero` | `--dry-run` makes no changes, exits 0 |
 | `test_backup_creates_snapshot` | A snapshot exists after backup |
-| `test_retention_runs_clean` | `forget --prune` runs without error |
+| `test_retention_runs_clean` | Inline backup retention runs without prune |
+| `test_verify_runs_retention_prune` | Verify mode runs `restic check` and `forget --prune` |
 | `test_restore_into_alternate_db` | Rows match after restore to a different DB |
 | `test_verify_passes` | Built-in table count check passes after good restore |
 | `test_restore_rollback_on_failure` | Original DB is preserved when restore fails |

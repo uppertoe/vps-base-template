@@ -1,14 +1,22 @@
 #!/usr/bin/env bash
-# deploy — pull latest changes and restart containers.
+# deploy — pull latest changes, run optional app hooks, and restart containers.
 # Run from anywhere: ~/deploy
 set -euo pipefail
 
 cd /opt/deploy
 git pull --recurse-submodules
+docker compose pull
 
 # Keep server and app env files readable only by the deploy user.
 find . \
   \( -path './.env' -o -path './apps/*/.env' -o -path './backup/config.env' -o -path './backup/services/*.env' \) \
   -type f -exec chmod 600 {} +
 
-docker compose up -d --pull always --remove-orphans
+for hook in ./apps/*/deploy.sh; do
+  if [[ -x "$hook" ]]; then
+    echo "Running app deploy hook: ${hook#./}"
+    "$hook"
+  fi
+done
+
+docker compose up -d --remove-orphans

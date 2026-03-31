@@ -146,11 +146,9 @@ firewall_allowed_tcp_ports:
 firewall_allowed_udp_ports:
   - "443"  # HTTP/3
 firewall_allowed_outbound_tcp_ports:
-  - "22"   # Git over SSH / admin egress
   - "53"   # DNS over TCP fallback
   - "80"   # apt/http redirects
-  - "443"  # HTTPS, Docker registry, S3-compatible APIs
-  - "465"  # SMTP submission (implicit TLS)
+  - "443"  # HTTPS, ACME, Docker registry, S3-compatible APIs, SNS web APIs
   - "587"  # SMTP submission (STARTTLS)
 firewall_allowed_outbound_udp_ports:
   - "53"   # DNS

@@ -39,5 +39,37 @@ ansible-playbook -i "$INVENTORY_FILE" ansible/bootstrap.yml \
 ansible-playbook -i "$INVENTORY_FILE" ansible/site-first-run.yml \
   -e baseline_manage_apparmor_profile_modes=false \
   -e baseline_initialize_aide_database=false
+
+DIAGNOSTICS_DIR="$REPO_ROOT/reports/ci-diagnostics"
+mkdir -p "$DIAGNOSTICS_DIR"
+
+{
+  echo "# CI network diagnostics"
+  echo
+  echo "## timestamp"
+  date -u '+%Y-%m-%dT%H:%M:%SZ'
+  echo
+  echo "## ip -brief addr"
+  ip -brief addr || true
+  echo
+  echo "## ss -lntup"
+  ss -lntup || true
+  echo
+  echo "## ufw status numbered"
+  ufw status numbered || true
+  echo
+  echo "## ufw show raw"
+  ufw show raw || true
+  echo
+  echo "## iptables -S"
+  iptables -S || true
+  echo
+  echo "## iptables -S DOCKER-USER"
+  iptables -S DOCKER-USER || true
+  echo
+  echo "## docker ps -a"
+  docker ps -a || true
+} > "$DIAGNOSTICS_DIR/network-and-firewall.txt"
+
 ansible-playbook -i "$INVENTORY_FILE" ansible/audit-openscap.yml
 ansible-playbook -i "$INVENTORY_FILE" ansible/audit-docker.yml

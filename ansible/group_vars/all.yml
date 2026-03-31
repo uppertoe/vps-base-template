@@ -146,6 +146,7 @@ firewall_allowed_tcp_ports:
 firewall_allowed_udp_ports:
   - "443"  # HTTP/3
 firewall_allowed_outbound_tcp_ports:
+  - "22"   # Git over SSH / deploy key pulls
   - "53"   # DNS over TCP fallback
   - "80"   # apt/http redirects
   - "443"  # HTTPS, ACME, Docker registry, S3-compatible APIs, SNS web APIs

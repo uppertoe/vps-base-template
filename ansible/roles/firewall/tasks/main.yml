@@ -77,6 +77,27 @@
   community.general.ufw:
     state: enabled
 
+- name: Normalize Ubuntu network security sysctls for CIS-aligned rp_filter
+  ansible.builtin.replace:
+    path: /etc/sysctl.d/10-network-security.conf
+    regexp: '^net\.ipv4\.conf\.(all|default)\.rp_filter\s*=\s*2\s*$'
+    replace: 'net.ipv4.conf.\1.rp_filter=1'
+  when: ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
+- name: Comment conflicting UFW martian packet sysctls
+  ansible.builtin.replace:
+    path: /etc/ufw/sysctl.conf
+    regexp: '^(net/ipv4/conf/(all|default)/log_martians\s*=.*)$'
+    replace: '# \1'
+  when: ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
+- name: Comment conflicting UFW reverse path filtering sysctls
+  ansible.builtin.replace:
+    path: /etc/ufw/sysctl.conf
+    regexp: '^(net/ipv4/conf/(all|default)/rp_filter\s*=.*)$'
+    replace: '# \1'
+  when: ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
 - name: Install Docker-aware firewall helper script
   ansible.builtin.copy:
     dest: /usr/local/sbin/vps-scaffold-docker-firewall

@@ -52,6 +52,7 @@ a submodule and includes the backup configuration structure.
 | [docs/02-local-testing.md](docs/02-local-testing.md) | Molecule test suite + backup integration tests |
 | [docs/03-provisioning-a-server.md](docs/03-provisioning-a-server.md) | Full provisioning walkthrough |
 | [docs/04-server-repo.md](docs/04-server-repo.md) | Server repo structure and conventions |
+| [docs/05-access-model.md](docs/05-access-model.md) | Future split-trust deploy/admin access model |
 | [docs/06-auditing.md](docs/06-auditing.md) | Lynis + OpenSCAP + docker-bench auditing |
 
 ## CI

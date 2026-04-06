@@ -4,7 +4,7 @@
 # Installed by the backup Ansible role.
 
 [Unit]
-Description=Database backup verification (restic check)
+Description=Database backup verification (restic check only)
 After=network-online.target
 Wants=network-online.target
 
@@ -15,7 +15,7 @@ Type=oneshot
 # Per-service configs are sourced by the script itself.
 EnvironmentFile=/etc/restic/config.env
 
-ExecStart=/opt/backup/backup.sh --verify
+ExecStart=/opt/backup/backup.sh --verify-only
 
 # restic check can take much longer than a normal backup on larger repositories.
 TimeoutStartSec=2h

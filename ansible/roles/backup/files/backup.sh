@@ -4,11 +4,13 @@
 # =============================================================================
 #
 # USAGE
-#   backup.sh [--dry-run] [--verify] [--service NAME]
+#   backup.sh [--dry-run] [--verify] [--verify-only] [--service NAME]
 #
 #   --dry-run         Print every command that would run; make no changes.
 #   --verify          After backing up, run `restic check`, apply retention with
 #                     prune, and list recent snapshots.
+#   --verify-only     Skip backup creation entirely and run verification mode
+#                     only (restic check + retention/prune + recent snapshots).
 #   --service NAME    Back up only the named service (default: all services).
 #
 # CONFIGURATION
@@ -58,17 +60,19 @@ set -euo pipefail
 
 DRY_RUN=false
 VERIFY=false
+VERIFY_ONLY=false
 FILTER_SERVICE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run)  DRY_RUN=true;  shift ;;
     --verify)   VERIFY=true;   shift ;;
+    --verify-only) VERIFY=true; VERIFY_ONLY=true; shift ;;
     --service)  [[ -n "${2:-}" ]] || { echo "--service requires a NAME argument" >&2; exit 1; }
                 FILTER_SERVICE="$2"; shift 2 ;;
     *)
       echo "Unknown argument: $1" >&2
-      echo "Usage: $0 [--dry-run] [--verify] [--service NAME]" >&2
+      echo "Usage: $0 [--dry-run] [--verify] [--verify-only] [--service NAME]" >&2
       exit 1
       ;;
   esac
@@ -217,9 +221,54 @@ send_notification() {
   rm -f "$config_file"
 }
 
+RESTIC_LAST_OUTPUT=""
+
+normalise_error_detail() {
+  printf '%s' "$1" | tr '\n' ' ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//'
+}
+
+is_lock_contention_output() {
+  local output="$1"
+  [[ "$output" == *"repo already locked"* || "$output" == *"repository is already locked"* || "$output" == *"unable to create lock in backend"* ]]
+}
+
+run_restic_with_lock_retry() {
+  local service_name="$1"
+  local operation="$2"
+  shift 2
+
+  local max_attempts="${RESTIC_LOCK_RETRY_ATTEMPTS:-4}"
+  local sleep_seconds="${RESTIC_LOCK_RETRY_INITIAL_DELAY_SEC:-2}"
+  local attempt=1
+  local output="" exit_code=0
+
+  while true; do
+    output="$("$@" 2>&1)" || exit_code=$?
+    printf '%s\n' "$output"
+
+    if [[ "${exit_code:-0}" -eq 0 ]]; then
+      RESTIC_LAST_OUTPUT="$output"
+      return 0
+    fi
+
+    if ! is_lock_contention_output "$output" || [[ "$attempt" -ge "$max_attempts" ]]; then
+      RESTIC_LAST_OUTPUT="$output"
+      return "${exit_code:-1}"
+    fi
+
+    warn "[$service_name] ${operation} hit a repository lock; retrying in ${sleep_seconds}s (attempt ${attempt}/${max_attempts})..."
+    sleep "$sleep_seconds"
+    sleep_seconds=$((sleep_seconds * 2))
+    attempt=$((attempt + 1))
+    exit_code=0
+  done
+}
+
 apply_retention() {
   local service_name="$1"
   local prune_mode="${2:-false}"
+  local repo="$3"
+  local password="$4"
   local keep_daily="${KEEP_DAILY:-7}"
   local keep_weekly="${KEEP_WEEKLY:-4}"
   local keep_monthly="${KEEP_MONTHLY:-6}"
@@ -236,7 +285,9 @@ apply_retention() {
     info "[$service_name] Applying retention (daily=$keep_daily, weekly=$keep_weekly, monthly=$keep_monthly)..."
   fi
 
-  if ! restic forget "${forget_args[@]}"; then
+  if ! RESTIC_REPOSITORY="$repo" RESTIC_PASSWORD="$password" \
+      run_restic_with_lock_retry "$service_name" "retention" \
+      restic forget "${forget_args[@]}"; then
     if [[ "$prune_mode" == "true" ]]; then
       warn "[$service_name] Retention prune failed."
     else
@@ -257,18 +308,77 @@ apply_retention() {
 # ---------------------------------------------------------------------------
 
 _NOTIFICATION_SENT=false
+RUN_STATE_DIR="$(mktemp -d /tmp/backup-state.XXXXXX)"
+
+cleanup_run_state() {
+  rm -rf "$RUN_STATE_DIR"
+}
+
+trap cleanup_run_state EXIT
+
+record_failure() {
+  local failure_id="$1"
+  local display_name="$2"
+  local phase="$3"
+  local snapshot_state="$4"
+  local detail="${5:-}"
+  local failure_file="$RUN_STATE_DIR/${failure_id//[^A-Za-z0-9_.:-]/_}.failure"
+
+  {
+    printf 'display=%s\n' "$display_name"
+    printf 'phase=%s\n' "$phase"
+    printf 'snapshot=%s\n' "$snapshot_state"
+    printf 'detail=%s\n' "$(normalise_error_detail "$detail")"
+  } > "$failure_file"
+}
+
+build_failure_body() {
+  local journal_unit="$1"
+  shift
+
+  local body
+  body="$(printf 'Backup FAILED on %s at %s.\n\nMode: %s\n\nFailure details:\n' \
+    "$(hostname)" "$TIMESTAMP" "$journal_unit")"
+
+  local failure_id="" failure_file="" display="" phase="" snapshot="" detail=""
+  for failure_id in "$@"; do
+    failure_file="$RUN_STATE_DIR/${failure_id//[^A-Za-z0-9_.:-]/_}.failure"
+    display="$failure_id"
+    phase="unknown"
+    snapshot="unknown"
+    detail=""
+
+    if [[ -f "$failure_file" ]]; then
+      # shellcheck source=/dev/null
+      source "$failure_file"
+    fi
+
+    body+=$(printf '  - %s: phase=%s, snapshot=%s\n' "$display" "$phase" "$snapshot")
+    if [[ -n "$detail" ]]; then
+      body+=$(printf '    detail: %s\n' "$detail")
+    fi
+  done
+
+  body+=$(printf '\nCheck the system journal:\n  journalctl -u %s -n 100' "$journal_unit")
+  printf '%s' "$body"
+}
 
 on_error() {
   local exit_code=$?
   local line_no="${1:-unknown}"
+  local journal_unit="backup.service"
+
+  if "$VERIFY_ONLY"; then
+    journal_unit="backup-verify.service"
+  fi
 
   warn "Backup failed at line $line_no (exit code $exit_code)."
 
   if ! "$_NOTIFICATION_SENT"; then
     local body
     body="$(printf \
-      'Backup FAILED on %s at %s.\n\nScript: %s\nLine:   %s\nExit:   %s\n\nCheck the system journal:\n  journalctl -u backup.service -n 100' \
-      "$(hostname)" "$TIMESTAMP" "$0" "$line_no" "$exit_code")"
+      'Backup FAILED on %s at %s.\n\nScript: %s\nLine:   %s\nExit:   %s\nMode:   %s\n\nCheck the system journal:\n  journalctl -u %s -n 100' \
+      "$(hostname)" "$TIMESTAMP" "$0" "$line_no" "$exit_code" "$journal_unit" "$journal_unit")"
     send_notification "[BACKUP FAILED] $(hostname) — $TIMESTAMP" "$body"
     _NOTIFICATION_SENT=true
   fi
@@ -282,6 +392,8 @@ trap 'on_error $LINENO' ERR
 
 backup_service() {
   local env_file="$1"
+  local failure_id="$2"
+  local success_file="$RUN_STATE_DIR/${failure_id//[^A-Za-z0-9_.:-]/_}.backed_up"
 
   # Reset per-service variables before sourcing to prevent bleed-through
   # between services.
@@ -301,7 +413,11 @@ backup_service() {
       missing=1
     fi
   done
-  [[ $missing -eq 0 ]] || return 1
+  if [[ $missing -ne 0 ]]; then
+    record_failure "$failure_id" "$(basename "$env_file" .env)" "config" "no snapshot attempted" \
+      "required service configuration is missing"
+    return 1
+  fi
 
   if ! RESOLVED_CONTAINER_NAME="$(resolve_container_name "$CONTAINER_NAME")"; then
     if [[ "$OPTIONAL" == "true" ]]; then
@@ -309,6 +425,8 @@ backup_service() {
       return 0
     fi
     warn "[$SERVICE_NAME] Container '$CONTAINER_NAME' could not be resolved."
+    record_failure "$failure_id" "$SERVICE_NAME" "container" "no snapshot attempted" \
+      "container '$CONTAINER_NAME' could not be resolved"
     return 1
   fi
 
@@ -339,6 +457,8 @@ backup_service() {
     info "[$SERVICE_NAME] Initialising new Restic repository at ${RESTIC_REPOSITORY}..."
     if ! restic init; then
       warn "[$SERVICE_NAME] Failed to initialise Restic repository."
+      record_failure "$failure_id" "$SERVICE_NAME" "repository-init" "no snapshot attempted" \
+        "restic init failed"
       return 1
     fi
   fi
@@ -358,6 +478,8 @@ backup_service() {
         --tag "$SERVICE_NAME" \
         --tag "$TIMESTAMP"; then
     warn "[$SERVICE_NAME] Database backup failed."
+    record_failure "$failure_id" "$SERVICE_NAME" "backup" "snapshot not saved" \
+      "database snapshot upload failed"
     return 1
   fi
 
@@ -375,12 +497,14 @@ backup_service() {
       --tag "${SERVICE_NAME}-files" \
       --tag "$TIMESTAMP"; then
       warn "[$SERVICE_NAME] File backup failed."
+      record_failure "$failure_id" "$SERVICE_NAME" "file-backup" "database snapshot saved" \
+        "file snapshot upload failed"
       return 1
     fi
     info "[$SERVICE_NAME] File backup complete."
   fi
 
-  apply_retention "$SERVICE_NAME"
+  : > "$success_file"
 }
 
 # ---------------------------------------------------------------------------
@@ -389,6 +513,8 @@ backup_service() {
 
 verify_service() {
   local env_file="$1"
+  local failure_id="$2"
+  local success_file="$RUN_STATE_DIR/${failure_id//[^A-Za-z0-9_.:-]/_}.verified"
 
   local SERVICE_NAME="" RESTIC_REPOSITORY="" RESTIC_PASSWORD=""
   local CONTAINER_NAME="" DB_NAME="" DB_USER="" DB_PASSWORD=""
@@ -401,19 +527,21 @@ verify_service() {
   info "[$SERVICE_NAME] Verifying repository integrity..."
   if ! run restic check; then
     warn "[$SERVICE_NAME] Repository verification failed."
+    record_failure "$failure_id" "$SERVICE_NAME [verify]" "verify" "no backup attempted" \
+      "restic check failed"
     return 1
   fi
   info "[$SERVICE_NAME] Repository OK."
 
-  if ! apply_retention "$SERVICE_NAME" "true"; then
-    return 1
-  fi
-
   info "[$SERVICE_NAME] Recent snapshots:"
   if ! restic snapshots --latest 5; then
     warn "[$SERVICE_NAME] Failed to list recent snapshots."
+    record_failure "$failure_id" "$SERVICE_NAME [verify]" "snapshot-list" "no backup attempted" \
+      "failed to list recent snapshots"
     return 1
   fi
+
+  : > "$success_file"
 }
 
 # ---------------------------------------------------------------------------
@@ -421,9 +549,20 @@ verify_service() {
 # ---------------------------------------------------------------------------
 
 main() {
+  local journal_unit="backup.service"
+  local run_mode_label="backup"
+
+  if "$VERIFY_ONLY"; then
+    journal_unit="backup-verify.service"
+    run_mode_label="verify-only"
+  elif "$VERIFY"; then
+    run_mode_label="backup+verify"
+  fi
+
   info "================================================================="
   info "Backup started — $TIMESTAMP"
   "$DRY_RUN" && info "(dry-run mode — no changes will be made)"
+  info "Mode: $run_mode_label"
   info "Config: $CONFIG_DIR"
   info "================================================================="
 
@@ -447,19 +586,102 @@ main() {
   # Run each service in a subshell so a failure in one does not abort the
   # others. Failures are accumulated and reported together at the end.
   local failed_services=()
+  local failed_failure_ids=()
+  local retention_labels=()
+  local retention_repos=()
+  local retention_passwords=()
+  local env_file="" failure_label="" failure_id=""
 
-  for env_file in "${service_files[@]}"; do
-    if ! ( backup_service "$env_file" ); then
-      failed_services+=("$(basename "$env_file" .env)")
-    fi
-  done
+  queue_retention() {
+    local label="$1"
+    local repo="$2"
+    local password="$3"
+    local idx=0
+
+    for idx in "${!retention_repos[@]}"; do
+      if [[ "${retention_repos[$idx]}" == "$repo" && "${retention_passwords[$idx]}" == "$password" ]]; then
+        case ",${retention_labels[$idx]}," in
+          *",$label,"*) ;;
+          *) retention_labels[$idx]="${retention_labels[$idx]},$label" ;;
+        esac
+        return 0
+      fi
+    done
+
+    retention_labels+=("$label")
+    retention_repos+=("$repo")
+    retention_passwords+=("$password")
+  }
+
+  if ! "$VERIFY_ONLY"; then
+    for env_file in "${service_files[@]}"; do
+      failure_label="$(basename "$env_file" .env)"
+      failure_id="backup:${failure_label}"
+      if ! ( backup_service "$env_file" "$failure_id" ); then
+        failed_services+=("$failure_label")
+        failed_failure_ids+=("$failure_id")
+        continue
+      fi
+
+      if [[ ! -f "$RUN_STATE_DIR/${failure_id//[^A-Za-z0-9_.:-]/_}.backed_up" ]]; then
+        continue
+      fi
+
+      local SERVICE_NAME="" RESTIC_REPOSITORY="" RESTIC_PASSWORD=""
+      # shellcheck source=/dev/null
+      source "$env_file"
+      queue_retention "$SERVICE_NAME" "$RESTIC_REPOSITORY" "$RESTIC_PASSWORD"
+    done
+
+    local idx=0
+    for idx in "${!retention_repos[@]}"; do
+      if ! apply_retention "${retention_labels[$idx]}" "false" "${retention_repos[$idx]}" "${retention_passwords[$idx]}"; then
+        failure_label="${retention_labels[$idx]}"
+        failure_id="retention:${failure_label}"
+        failed_services+=("$failure_label")
+        failed_failure_ids+=("$failure_id")
+        record_failure "$failure_id" "$failure_label" "retention" "snapshot saved" "$RESTIC_LAST_OUTPUT"
+      fi
+    done
+  fi
 
   if "$VERIFY"; then
     info "================================================================="
-    info "Running post-backup verification..."
+    if "$VERIFY_ONLY"; then
+      info "Running verification-only pass..."
+    else
+      info "Running post-backup verification..."
+    fi
+    retention_labels=()
+    retention_repos=()
+    retention_passwords=()
     for env_file in "${service_files[@]}"; do
-      if ! ( verify_service "$env_file" ); then
-        failed_services+=("$(basename "$env_file" .env) [verify]")
+      failure_label="$(basename "$env_file" .env)"
+      failure_id="verify:${failure_label}"
+      if ! ( verify_service "$env_file" "$failure_id" ); then
+        failed_services+=("${failure_label} [verify]")
+        failed_failure_ids+=("$failure_id")
+        continue
+      fi
+
+      if [[ ! -f "$RUN_STATE_DIR/${failure_id//[^A-Za-z0-9_.:-]/_}.verified" ]]; then
+        continue
+      fi
+
+      local SERVICE_NAME="" RESTIC_REPOSITORY="" RESTIC_PASSWORD=""
+      # shellcheck source=/dev/null
+      source "$env_file"
+      queue_retention "$SERVICE_NAME" "$RESTIC_REPOSITORY" "$RESTIC_PASSWORD"
+    done
+
+    local idx=0
+    for idx in "${!retention_repos[@]}"; do
+      if ! apply_retention "${retention_labels[$idx]}" "true" "${retention_repos[$idx]}" "${retention_passwords[$idx]}"; then
+        failure_label="${retention_labels[$idx]}"
+        failure_id="verify-retention:${failure_label}"
+        failed_services+=("${failure_label} [verify]")
+        failed_failure_ids+=("$failure_id")
+        record_failure "$failure_id" "${failure_label} [verify]" "retention-prune" "no backup attempted" "$RESTIC_LAST_OUTPUT"
       fi
     done
   fi
@@ -472,9 +694,7 @@ main() {
     done
     warn "================================================================="
     local body
-    body="$(printf \
-      'Backup FAILED on %s at %s.\n\nFailed services:\n%s\n\nCheck the system journal:\n  journalctl -u backup.service -n 100' \
-      "$(hostname)" "$TIMESTAMP" "$(printf '  - %s\n' "${failed_services[@]}")")"
+    body="$(build_failure_body "$journal_unit" "${failed_failure_ids[@]}")"
     _NOTIFICATION_SENT=true
     send_notification "[BACKUP FAILED] $(hostname) — $TIMESTAMP" "$body"
     exit 1

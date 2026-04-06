@@ -6,8 +6,10 @@
 # WHAT IT TESTS
 #   - Dry-run mode produces no snapshots
 #   - Backup creates a restic snapshot
-#   - Retention runs after backup without inline prune
+#   - Retention runs after backup once per repository
 #   - Verify mode runs restic check plus retention/prune
+#   - Verify-only mode does not create new snapshots
+#   - Retention retries on transient lock contention
 #   - Restore recreates data correctly in an alternate database
 #   - Post-restore verification passes on good data
 #   - Rollback: original database is recovered after a failed restore
@@ -46,6 +48,7 @@ PG_IMAGE="postgres:17-alpine"
 
 RESTIC_REPO_DIR=""  # set in setup()
 CONFIG_DIR=""       # set in setup()
+REAL_RESTIC=""
 
 PASS=0
 FAIL=0
@@ -64,6 +67,8 @@ check_deps() {
     echo "          or: apt install restic  (Debian/Ubuntu)" >&2
     exit 1
   fi
+
+  REAL_RESTIC="$(command -v restic)"
 }
 
 # ---------------------------------------------------------------------------
@@ -264,16 +269,20 @@ test_backup_creates_snapshot() {
 
 test_retention_runs_clean() {
   header "test_retention_runs_clean"
-  # Run backup again to get a second snapshot, then verify inline retention keeps working.
-  run_backup > /dev/null 2>&1
+  # Run backup again to get a second snapshot, then verify retention still runs.
+  local output
+  output="$(run_backup 2>&1)"
 
   local count
   count="$(snapshot_count "${RESTIC_REPO_DIR}/testapp" "test-repo-password")"
 
-  if [[ "$count" -ge 1 ]]; then
-    pass "retention ran cleanly during backup ($count snapshot(s) kept)"
+  local retention_count
+  retention_count="$(printf '%s\n' "$output" | grep -c "\[testapp\] Applying retention")"
+
+  if [[ "$count" -ge 1 && "$retention_count" -eq 1 ]]; then
+    pass "retention ran once per repository during backup ($count snapshot(s) kept)"
   else
-    fail "snapshots unexpectedly pruned to zero"
+    fail "expected one retention pass and snapshots to remain (count=$count retention_logs=$retention_count)"
   fi
 }
 
@@ -284,6 +293,73 @@ test_verify_runs_retention_prune() {
     pass "verify ran restic check and retention/prune cleanly"
   else
     fail "verify mode failed"
+  fi
+}
+
+test_verify_only_does_not_create_snapshot() {
+  header "test_verify_only_does_not_create_snapshot"
+
+  run_backup --service testapp > /dev/null 2>&1
+
+  local before after output
+  before="$(snapshot_count "${RESTIC_REPO_DIR}/testapp" "test-repo-password")"
+  output="$(run_backup --verify-only --service testapp 2>&1)"
+  after="$(snapshot_count "${RESTIC_REPO_DIR}/testapp" "test-repo-password")"
+
+  if [[ "$before" != "$after" ]]; then
+    fail "verify-only created or removed snapshots unexpectedly (before=$before after=$after)"
+  elif printf '%s\n' "$output" | grep -q "Backing up"; then
+    fail "verify-only should not run backup creation"
+  elif printf '%s\n' "$output" | grep -q "Running verification-only pass"; then
+    pass "verify-only skipped backup creation and verified the repository"
+  else
+    fail "verify-only did not log the expected verification-only mode"
+  fi
+}
+
+test_retention_retries_on_lock_contention() {
+  header "test_retention_retries_on_lock_contention"
+
+  local shim_dir shim_path state_file output exit_code=0 count
+  shim_dir="$(mktemp -d)"
+  shim_path="$shim_dir/restic"
+  state_file="$shim_dir/forget-attempts"
+
+  cat > "$shim_path" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+STATE_FILE="${state_file}"
+REAL_RESTIC="${REAL_RESTIC}"
+
+if [[ "\${1:-}" == "forget" ]]; then
+  attempt=0
+  [[ -f "\$STATE_FILE" ]] && attempt="\$(cat "\$STATE_FILE")"
+  attempt=\$((attempt + 1))
+  printf '%s' "\$attempt" > "\$STATE_FILE"
+  if [[ "\$attempt" -le 2 ]]; then
+    echo "repo already locked, waiting up to 0s for the lock" >&2
+    echo "unable to create lock in backend: repository is already locked exclusively by PID 999 on integration-test by root (UID 0, GID 0)" >&2
+    exit 1
+  fi
+fi
+
+exec "\$REAL_RESTIC" "\$@"
+EOF
+  chmod +x "$shim_path"
+
+  output="$(PATH="$shim_dir:$PATH" BACKUP_CONFIG_DIR="$CONFIG_DIR" "$BACKUP_SCRIPT" --service testapp 2>&1)" || exit_code=$?
+  count="$(snapshot_count "${RESTIC_REPO_DIR}/testapp" "test-repo-password")"
+
+  rm -rf "$shim_dir"
+
+  if [[ "$exit_code" -ne 0 ]]; then
+    fail "backup should succeed after transient lock contention retries (exit=$exit_code)"
+  elif [[ "$count" -lt 1 ]]; then
+    fail "backup did not save a snapshot while retrying retention"
+  elif printf '%s\n' "$output" | grep -q "retention hit a repository lock; retrying"; then
+    pass "retention retried on lock contention and the backup still succeeded"
+  else
+    fail "expected lock retry log output during retention"
   fi
 }
 
@@ -654,6 +730,8 @@ test_dry_run_exits_zero
 test_backup_creates_snapshot
 test_retention_runs_clean
 test_verify_runs_retention_prune
+test_verify_only_does_not_create_snapshot
+test_retention_retries_on_lock_contention
 test_restore_into_alternate_db
 test_verify_passes
 test_restore_rollback_on_failure

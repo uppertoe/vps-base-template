@@ -33,6 +33,11 @@
 #   (tagged SERVICE_NAME-files) is restored to / after the database restore.
 #   --snapshot does not apply to file restores; always uses latest.
 #
+# FILES-ONLY SERVICES
+#   When a service config has DB_NAME empty (or unset), the service is treated
+#   as files-only — only BACKUP_PATHS are restored, the DB rollback machinery
+#   is skipped, and --target / --snapshot are rejected (they only apply to DB).
+#
 # EXAMPLES
 #   # Restore one service (interactive confirmation for live DB)
 #   restore.sh --service myapp
@@ -283,15 +288,70 @@ restore_service() {
   # shellcheck source=/dev/null
   source "$env_file"
 
+  # Files-only mode: triggered by an empty (or unset) DB_NAME.
+  local files_only="false"
+  if [[ -z "${DB_NAME:-}" ]]; then
+    files_only="true"
+  fi
+
   # Validate required variables.
   local var missing=0
-  for var in SERVICE_NAME CONTAINER_NAME DB_NAME DB_USER RESTIC_REPOSITORY RESTIC_PASSWORD STDIN_FILENAME; do
+  local -a required_vars=(SERVICE_NAME RESTIC_REPOSITORY RESTIC_PASSWORD)
+  if "$files_only"; then
+    required_vars+=(BACKUP_PATHS)
+  else
+    required_vars+=(CONTAINER_NAME DB_USER STDIN_FILENAME)
+  fi
+  for var in "${required_vars[@]}"; do
     if [[ -z "${!var:-}" ]]; then
       warn "[$env_file] \$$var is not set — skipping."
       missing=1
     fi
   done
   [[ $missing -eq 0 ]] || return 1
+
+  if "$files_only"; then
+    if [[ -n "$TARGET_DB_ARG" ]]; then
+      warn "[$SERVICE_NAME] --target does not apply to files-only services."
+      return 1
+    fi
+    if [[ "$SNAPSHOT" != "latest" ]]; then
+      warn "[$SERVICE_NAME] --snapshot does not apply to files-only services (always uses latest)."
+      return 1
+    fi
+
+    export RESTIC_REPOSITORY RESTIC_PASSWORD
+
+    info "================================================================="
+    info "Restoring service: $SERVICE_NAME (files-only)"
+    info "  File paths: $BACKUP_PATHS"
+    "$DRY_RUN" && info "  (dry-run mode — no changes will be made)"
+    info "================================================================="
+
+    if "$DRY_RUN"; then
+      echo "DRY-RUN: restic restore latest --tag ${SERVICE_NAME}-files --target /"
+      return 0
+    fi
+
+    info "[$SERVICE_NAME] Checking for file snapshots..."
+    local file_snap_count
+    file_snap_count="$(restic snapshots --tag "${SERVICE_NAME}-files" --json 2>/dev/null \
+      | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"
+
+    if [[ "$file_snap_count" -lt 1 ]]; then
+      warn "[$SERVICE_NAME] No file snapshots found — nothing to restore."
+      return 1
+    fi
+
+    info "[$SERVICE_NAME] Restoring file paths (latest snapshot)..."
+    restic restore latest --tag "${SERVICE_NAME}-files" --target /
+    info "[$SERVICE_NAME] File paths restored."
+
+    info "================================================================="
+    info "Restore complete — $SERVICE_NAME (files-only)."
+    info "================================================================="
+    return 0
+  fi
 
   if ! resolved_container_name="$(resolve_container_name "$CONTAINER_NAME")"; then
     warn "[$SERVICE_NAME] Container '$CONTAINER_NAME' could not be resolved."
@@ -434,8 +494,13 @@ main() {
     [[ ${#service_files[@]} -eq 1 ]] || die "--list requires exactly one --service"
     source "${service_files[0]}"
     export RESTIC_REPOSITORY RESTIC_PASSWORD
-    info "Snapshots for service '$SERVICE_NAME' (repository: $RESTIC_REPOSITORY):"
-    restic snapshots --tag "$SERVICE_NAME"
+    if [[ -z "${DB_NAME:-}" ]]; then
+      info "Snapshots for service '$SERVICE_NAME' (files-only, repository: $RESTIC_REPOSITORY):"
+      restic snapshots --tag "${SERVICE_NAME}-files"
+    else
+      info "Snapshots for service '$SERVICE_NAME' (repository: $RESTIC_REPOSITORY):"
+      restic snapshots --tag "$SERVICE_NAME"
+    fi
     exit 0
   fi
 

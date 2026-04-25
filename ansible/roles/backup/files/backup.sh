@@ -28,21 +28,27 @@
 #
 # PER-SERVICE VARIABLES (services/NAME.env)
 #   SERVICE_NAME      Identifier used in tags and log messages.
+#   RESTIC_REPOSITORY Restic repository URL (e.g. s3:s3.amazonaws.com/bucket/svc).
+#   RESTIC_PASSWORD   Encryption passphrase for this service's repository.
+#
+#   DB_NAME           Database name inside the container. Leave empty (or omit)
+#                     to mark this service as files-only — the DB-specific
+#                     variables below are then ignored and BACKUP_PATHS becomes
+#                     required.
 #   CONTAINER_NAME    Docker container running PostgreSQL for this service.
 #                     May be either the exact container name or the Compose
 #                     service/container stem (e.g. jw_postgres).
-#   RESTIC_REPOSITORY Restic repository URL (e.g. s3:s3.amazonaws.com/bucket/svc).
-#   RESTIC_PASSWORD   Encryption passphrase for this service's repository.
-#   DB_NAME           Database name inside the container.
 #   DB_USER           PostgreSQL user inside the container.
 #   DB_PASSWORD       Password (leave empty for trust/peer auth).
 #   STDIN_FILENAME    Filename stored inside the snapshot (e.g. myapp-db.sql).
+#
 #   BACKUP_PATHS      Colon-separated host paths to back up alongside the database
 #                     (e.g. /opt/apps/planka/data:/opt/apps/planka/backgrounds).
 #                     Stored as a separate snapshot tagged SERVICE_NAME-files.
-#                     Omit if the service has no file assets to back up.
-#   OPTIONAL          Set to "true" to skip this service if the container is not
-#                     running instead of failing the whole backup run (default: false).
+#                     Required for files-only services; optional otherwise.
+#   OPTIONAL          Set to "true" to skip this service gracefully (default: false).
+#                     For DB services: skipped if the container is not running.
+#                     For files-only services: skipped if no BACKUP_PATHS exist on disk.
 #
 # EXIT CODES
 #   0   All services backed up successfully.
@@ -405,9 +411,22 @@ backup_service() {
   # shellcheck source=/dev/null
   source "$env_file"
 
+  # Files-only mode: triggered by an empty (or unset) DB_NAME. Such services
+  # skip the database step entirely and only snapshot BACKUP_PATHS.
+  local FILES_ONLY="false"
+  if [[ -z "${DB_NAME:-}" ]]; then
+    FILES_ONLY="true"
+  fi
+
   # Validate required variables.
   local var missing=0
-  for var in SERVICE_NAME CONTAINER_NAME DB_NAME DB_USER RESTIC_REPOSITORY RESTIC_PASSWORD STDIN_FILENAME; do
+  local -a required_vars=(SERVICE_NAME RESTIC_REPOSITORY RESTIC_PASSWORD)
+  if "$FILES_ONLY"; then
+    required_vars+=(BACKUP_PATHS)
+  else
+    required_vars+=(CONTAINER_NAME DB_USER STDIN_FILENAME)
+  fi
+  for var in "${required_vars[@]}"; do
     if [[ -z "${!var:-}" ]]; then
       warn "[$env_file] \$$var is not set — skipping this service."
       missing=1
@@ -419,33 +438,59 @@ backup_service() {
     return 1
   fi
 
-  if ! RESOLVED_CONTAINER_NAME="$(resolve_container_name "$CONTAINER_NAME")"; then
+  if "$FILES_ONLY"; then
+    info "--- Service: $SERVICE_NAME (files-only) ---"
+
     if [[ "$OPTIONAL" == "true" ]]; then
-      warn "[$SERVICE_NAME] Container '$CONTAINER_NAME' is not available — skipping (OPTIONAL=true)."
-      return 0
+      local -a _opt_paths
+      IFS=: read -ra _opt_paths <<< "$BACKUP_PATHS"
+      local _path any_exist=false
+      for _path in "${_opt_paths[@]}"; do
+        if [[ -e "$_path" ]]; then
+          any_exist=true
+          break
+        fi
+      done
+      if ! "$any_exist"; then
+        warn "[$SERVICE_NAME] No BACKUP_PATHS exist on disk — skipping (OPTIONAL=true)."
+        return 0
+      fi
     fi
-    warn "[$SERVICE_NAME] Container '$CONTAINER_NAME' could not be resolved."
-    record_failure "$failure_id" "$SERVICE_NAME" "container" "no snapshot attempted" \
-      "container '$CONTAINER_NAME' could not be resolved"
-    return 1
-  fi
-
-  info "--- Service: $SERVICE_NAME ---"
-
-  # If OPTIONAL=true, check container is running before attempting the backup.
-  if [[ "$OPTIONAL" == "true" ]]; then
-    local running
-    running="$(docker inspect --format '{{.State.Running}}' "$RESOLVED_CONTAINER_NAME" 2>/dev/null || echo 'false')"
-    if [[ "$running" != "true" ]]; then
-      warn "[$SERVICE_NAME] Container '$RESOLVED_CONTAINER_NAME' is not running — skipping (OPTIONAL=true)."
-      return 0
+  else
+    if ! RESOLVED_CONTAINER_NAME="$(resolve_container_name "$CONTAINER_NAME")"; then
+      if [[ "$OPTIONAL" == "true" ]]; then
+        warn "[$SERVICE_NAME] Container '$CONTAINER_NAME' is not available — skipping (OPTIONAL=true)."
+        return 0
+      fi
+      warn "[$SERVICE_NAME] Container '$CONTAINER_NAME' could not be resolved."
+      record_failure "$failure_id" "$SERVICE_NAME" "container" "no snapshot attempted" \
+        "container '$CONTAINER_NAME' could not be resolved"
+      return 1
     fi
-  fi
 
-  info "[$SERVICE_NAME] Backing up ${DB_NAME} from container ${RESOLVED_CONTAINER_NAME}..."
+    info "--- Service: $SERVICE_NAME ---"
+
+    # If OPTIONAL=true, check container is running before attempting the backup.
+    if [[ "$OPTIONAL" == "true" ]]; then
+      local running
+      running="$(docker inspect --format '{{.State.Running}}' "$RESOLVED_CONTAINER_NAME" 2>/dev/null || echo 'false')"
+      if [[ "$running" != "true" ]]; then
+        warn "[$SERVICE_NAME] Container '$RESOLVED_CONTAINER_NAME' is not running — skipping (OPTIONAL=true)."
+        return 0
+      fi
+    fi
+
+    info "[$SERVICE_NAME] Backing up ${DB_NAME} from container ${RESOLVED_CONTAINER_NAME}..."
+  fi
 
   if "$DRY_RUN"; then
-    echo "DRY-RUN: docker exec $RESOLVED_CONTAINER_NAME pg_dump $DB_NAME | restic backup --stdin --stdin-filename $STDIN_FILENAME --tag $SERVICE_NAME"
+    if "$FILES_ONLY"; then
+      echo "DRY-RUN: restic backup ${BACKUP_PATHS//:/ } --tag ${SERVICE_NAME}-files"
+    else
+      echo "DRY-RUN: docker exec $RESOLVED_CONTAINER_NAME pg_dump $DB_NAME | restic backup --stdin --stdin-filename $STDIN_FILENAME --tag $SERVICE_NAME"
+      [[ -n "${BACKUP_PATHS:-}" ]] && \
+        echo "DRY-RUN: restic backup ${BACKUP_PATHS//:/ } --tag ${SERVICE_NAME}-files"
+    fi
     return 0
   fi
 
@@ -465,39 +510,47 @@ backup_service() {
 
   # Dump the database via docker exec directly into restic (no temp file).
   # Using the container's own pg_dump avoids version mismatches.
-  if ! docker exec \
-      -e PGPASSWORD="${DB_PASSWORD:-}" \
-      "$RESOLVED_CONTAINER_NAME" \
-      pg_dump \
-        --username "$DB_USER" \
-        --no-password \
-        "$DB_NAME" \
-    | restic backup \
-        --stdin \
-        --stdin-filename "$STDIN_FILENAME" \
-        --tag "$SERVICE_NAME" \
-        --tag "$TIMESTAMP"; then
-    warn "[$SERVICE_NAME] Database backup failed."
-    record_failure "$failure_id" "$SERVICE_NAME" "backup" "snapshot not saved" \
-      "database snapshot upload failed"
-    return 1
+  if ! "$FILES_ONLY"; then
+    if ! docker exec \
+        -e PGPASSWORD="${DB_PASSWORD:-}" \
+        "$RESOLVED_CONTAINER_NAME" \
+        pg_dump \
+          --username "$DB_USER" \
+          --no-password \
+          "$DB_NAME" \
+      | restic backup \
+          --stdin \
+          --stdin-filename "$STDIN_FILENAME" \
+          --tag "$SERVICE_NAME" \
+          --tag "$TIMESTAMP"; then
+      warn "[$SERVICE_NAME] Database backup failed."
+      record_failure "$failure_id" "$SERVICE_NAME" "backup" "snapshot not saved" \
+        "database snapshot upload failed"
+      return 1
+    fi
+
+    info "[$SERVICE_NAME] Backup complete."
   fi
 
-  info "[$SERVICE_NAME] Backup complete."
-
   # Back up file paths if configured (separate snapshot, tagged SERVICE_NAME-files).
-  # The existing restic forget below covers both DB and file snapshots — restic
-  # groups them by path so retention is applied to each independently.
+  # For files-only services this is the only snapshot. The retention pass below
+  # covers both DB and file snapshots — restic groups them by path so retention
+  # is applied to each independently.
   if [[ -n "${BACKUP_PATHS:-}" ]]; then
     info "[$SERVICE_NAME] Backing up file paths..."
     local -a _paths
     IFS=: read -ra _paths <<< "$BACKUP_PATHS"
+    local files_phase="file-backup"
+    local files_snapshot_state="database snapshot saved"
+    if "$FILES_ONLY"; then
+      files_snapshot_state="snapshot not saved"
+    fi
     if ! restic backup \
       "${_paths[@]}" \
       --tag "${SERVICE_NAME}-files" \
       --tag "$TIMESTAMP"; then
       warn "[$SERVICE_NAME] File backup failed."
-      record_failure "$failure_id" "$SERVICE_NAME" "file-backup" "database snapshot saved" \
+      record_failure "$failure_id" "$SERVICE_NAME" "$files_phase" "$files_snapshot_state" \
         "file snapshot upload failed"
       return 1
     fi

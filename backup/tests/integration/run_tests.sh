@@ -18,6 +18,8 @@
 #   - --list shows snapshots for a service
 #   - BACKUP_PATHS: files are backed up and restored alongside the database
 #   - Multi-service restore: --service a --service b restores both
+#   - Files-only services (DB_NAME empty): backup creates only a files snapshot
+#     and restore writes files back without touching any database
 #
 # PREREQUISITES
 #   - Docker (for PostgreSQL container)
@@ -669,6 +671,105 @@ test_backup_paths() {
   fi
 }
 
+test_files_only_service() {
+  header "test_files_only_service"
+
+  # Create a directory with marker files outside any database.
+  # See note in test_backup_paths re: /private/tmp on macOS.
+  local files_dir
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    files_dir="$(mktemp -d /private/tmp/files-only-XXXXXX)"
+  else
+    files_dir="$(mktemp -d)"
+  fi
+  mkdir -p "$files_dir/config"
+  echo "files-only-marker" > "$files_dir/config/app.yaml"
+
+  cat > "$CONFIG_DIR/services/configsvc.env" <<EOF
+SERVICE_NAME=configsvc
+RESTIC_REPOSITORY=${RESTIC_REPO_DIR}/configsvc
+RESTIC_PASSWORD=files-only-password
+BACKUP_PATHS=${files_dir}
+EOF
+
+  # Backup: should create exactly one snapshot tagged configsvc-files,
+  # and zero snapshots tagged configsvc (no DB snapshot).
+  run_backup --service configsvc > /dev/null 2>&1
+
+  local files_count db_count
+  files_count="$(RESTIC_PASSWORD=files-only-password restic \
+    -r "${RESTIC_REPO_DIR}/configsvc" \
+    snapshots --tag "configsvc-files" --json 2>/dev/null \
+    | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"
+  db_count="$(RESTIC_PASSWORD=files-only-password restic \
+    -r "${RESTIC_REPO_DIR}/configsvc" \
+    snapshots --tag "configsvc" --json 2>/dev/null \
+    | python3 -c 'import json,sys; d=json.load(sys.stdin); print(sum(1 for s in d if "configsvc-files" not in s.get("tags", [])))')"
+
+  if [[ "$files_count" -lt 1 || "$db_count" -ne 0 ]]; then
+    fail "files_only: expected files snapshot and no db snapshot (files=$files_count db=$db_count)"
+    rm -f "$CONFIG_DIR/services/configsvc.env"
+    rm -rf "$files_dir"
+    return
+  fi
+
+  # Reject --target on files-only.
+  local target_exit=0 target_output
+  target_output="$(RESTORE_NO_CONFIRM=true BACKUP_CONFIG_DIR="$CONFIG_DIR" \
+    "$RESTORE_SCRIPT" --service configsvc --target whatever 2>&1)" || target_exit=$?
+  if [[ "$target_exit" -eq 0 ]] || ! echo "$target_output" | grep -q "files-only"; then
+    fail "files_only: --target should be rejected for files-only services (exit=$target_exit)"
+    rm -f "$CONFIG_DIR/services/configsvc.env"
+    rm -rf "$files_dir"
+    return
+  fi
+
+  # Delete the files to simulate data loss, then restore.
+  rm -rf "$files_dir"
+
+  local exit_code=0
+  RESTORE_NO_CONFIRM=true run_restore --service configsvc > /dev/null 2>&1 || exit_code=$?
+
+  local marker_content
+  marker_content="$(cat "$files_dir/config/app.yaml" 2>/dev/null || echo "")"
+
+  rm -f "$CONFIG_DIR/services/configsvc.env"
+  rm -rf "$files_dir"
+
+  if [[ "$exit_code" -ne 0 ]]; then
+    fail "files_only: restore exited $exit_code"
+  elif [[ "$marker_content" == "files-only-marker" ]]; then
+    pass "files_only: backup + restore round-trip without a database"
+  else
+    fail "files_only: marker not restored (got '$marker_content')"
+  fi
+}
+
+test_files_only_optional_skips_when_paths_missing() {
+  header "test_files_only_optional_skips_when_paths_missing"
+
+  cat > "$CONFIG_DIR/services/missing-files.env" <<EOF
+SERVICE_NAME=missing-files
+RESTIC_REPOSITORY=${RESTIC_REPO_DIR}/missing-files
+RESTIC_PASSWORD=missing-files-password
+BACKUP_PATHS=/nonexistent/path/that/does/not/exist
+OPTIONAL=true
+EOF
+
+  local exit_code=0 output
+  output="$(run_backup --service missing-files 2>&1)" || exit_code=$?
+
+  rm -f "$CONFIG_DIR/services/missing-files.env"
+
+  if [[ "$exit_code" -ne 0 ]]; then
+    fail "files_only_optional: backup exited $exit_code (expected 0 with OPTIONAL=true)"
+  elif echo "$output" | grep -q "No BACKUP_PATHS exist on disk — skipping (OPTIONAL=true)"; then
+    pass "files_only_optional: missing paths skipped gracefully"
+  else
+    fail "files_only_optional: did not log expected skip message"
+  fi
+}
+
 test_multi_service_restore() {
   header "test_multi_service_restore"
 
@@ -740,6 +841,8 @@ test_partial_failure_continues
 test_optional_service_skips_stopped_container
 test_list_snapshots
 test_backup_paths
+test_files_only_service
+test_files_only_optional_skips_when_paths_missing
 test_multi_service_restore
 
 header "Results"

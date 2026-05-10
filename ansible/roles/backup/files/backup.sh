@@ -681,8 +681,10 @@ main() {
       fi
 
       local SERVICE_NAME="" RESTIC_REPOSITORY="" RESTIC_PASSWORD=""
+      local _saved_b2_id="${B2_ACCOUNT_ID:-}" _saved_b2_key="${B2_ACCOUNT_KEY:-}"
       # shellcheck source=/dev/null
       source "$env_file"
+      B2_ACCOUNT_ID="$_saved_b2_id" B2_ACCOUNT_KEY="$_saved_b2_key"
       queue_retention "$SERVICE_NAME" "$RESTIC_REPOSITORY" "$RESTIC_PASSWORD"
     done
 
@@ -722,8 +724,10 @@ main() {
       fi
 
       local SERVICE_NAME="" RESTIC_REPOSITORY="" RESTIC_PASSWORD=""
+      local _saved_b2_id="${B2_ACCOUNT_ID:-}" _saved_b2_key="${B2_ACCOUNT_KEY:-}"
       # shellcheck source=/dev/null
       source "$env_file"
+      B2_ACCOUNT_ID="$_saved_b2_id" B2_ACCOUNT_KEY="$_saved_b2_key"
       queue_retention "$SERVICE_NAME" "$RESTIC_REPOSITORY" "$RESTIC_PASSWORD"
     done
 

@@ -46,6 +46,9 @@
 #                     (e.g. /opt/apps/planka/data:/opt/apps/planka/backgrounds).
 #                     Stored as a separate snapshot tagged SERVICE_NAME-files.
 #                     Required for files-only services; optional otherwise.
+#   BACKUP_EXCLUDE    Colon-separated paths/patterns to exclude from BACKUP_PATHS
+#                     (e.g. /srv/data/apps/ha/media:/srv/data/apps/ha/tmp).
+#                     Passed as --exclude to restic; supports globs.
 #   OPTIONAL          Set to "true" to skip this service gracefully (default: false).
 #                     For DB services: skipped if the container is not running.
 #                     For files-only services: skipped if no BACKUP_PATHS exist on disk.
@@ -409,7 +412,7 @@ backup_service() {
   # Reset per-service variables before sourcing to prevent bleed-through
   # between services.
   local SERVICE_NAME="" CONTAINER_NAME="" DB_NAME="" DB_USER="" DB_PASSWORD=""
-  local RESTIC_REPOSITORY="" RESTIC_PASSWORD="" STDIN_FILENAME="" BACKUP_PATHS=""
+  local RESTIC_REPOSITORY="" RESTIC_PASSWORD="" STDIN_FILENAME="" BACKUP_PATHS="" BACKUP_EXCLUDE=""
   local OPTIONAL="false"
   local RESOLVED_CONTAINER_NAME=""
 
@@ -543,8 +546,14 @@ backup_service() {
   # is applied to each independently.
   if [[ -n "${BACKUP_PATHS:-}" ]]; then
     info "[$SERVICE_NAME] Backing up file paths..."
-    local -a _paths
+    local -a _paths _excludes=()
     IFS=: read -ra _paths <<< "$BACKUP_PATHS"
+    if [[ -n "${BACKUP_EXCLUDE:-}" ]]; then
+      local _exc
+      while IFS= read -r -d: _exc || [[ -n "$_exc" ]]; do
+        _excludes+=(--exclude "$_exc")
+      done <<< "${BACKUP_EXCLUDE}:"
+    fi
     local files_phase="file-backup"
     local files_snapshot_state="database snapshot saved"
     if "$FILES_ONLY"; then
@@ -552,6 +561,7 @@ backup_service() {
     fi
     if ! restic backup \
       "${_paths[@]}" \
+      "${_excludes[@]}" \
       --tag "${SERVICE_NAME}-files" \
       --tag "$TIMESTAMP"; then
       warn "[$SERVICE_NAME] File backup failed."

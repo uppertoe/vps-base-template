@@ -275,6 +275,8 @@ apply_retention() {
   local prune_mode="${2:-false}"
   local repo="$3"
   local password="$4"
+  local b2_id="${5:-}"
+  local b2_key="${6:-}"
   local keep_daily="${KEEP_DAILY:-7}"
   local keep_weekly="${KEEP_WEEKLY:-4}"
   local keep_monthly="${KEEP_MONTHLY:-6}"
@@ -291,7 +293,10 @@ apply_retention() {
     info "[$service_name] Applying retention (daily=$keep_daily, weekly=$keep_weekly, monthly=$keep_monthly)..."
   fi
 
+  local _b2_id_env="${b2_id:-${B2_ACCOUNT_ID:-}}"
+  local _b2_key_env="${b2_key:-${B2_ACCOUNT_KEY:-}}"
   if ! RESTIC_REPOSITORY="$repo" RESTIC_PASSWORD="$password" \
+      B2_ACCOUNT_ID="$_b2_id_env" B2_ACCOUNT_KEY="$_b2_key_env" \
       run_restic_with_lock_retry "$service_name" "retention" \
       restic forget "${forget_args[@]}"; then
     if [[ "$prune_mode" == "true" ]]; then
@@ -643,12 +648,16 @@ main() {
   local retention_labels=()
   local retention_repos=()
   local retention_passwords=()
+  local retention_b2_ids=()
+  local retention_b2_keys=()
   local env_file="" failure_label="" failure_id=""
 
   queue_retention() {
     local label="$1"
     local repo="$2"
     local password="$3"
+    local b2_id="${4:-}"
+    local b2_key="${5:-}"
     local idx=0
 
     for idx in "${!retention_repos[@]}"; do
@@ -664,6 +673,8 @@ main() {
     retention_labels+=("$label")
     retention_repos+=("$repo")
     retention_passwords+=("$password")
+    retention_b2_ids+=("$b2_id")
+    retention_b2_keys+=("$b2_key")
   }
 
   if ! "$VERIFY_ONLY"; then
@@ -684,13 +695,14 @@ main() {
       local _saved_b2_id="${B2_ACCOUNT_ID:-}" _saved_b2_key="${B2_ACCOUNT_KEY:-}"
       # shellcheck source=/dev/null
       source "$env_file"
+      local _svc_b2_id="${B2_ACCOUNT_ID:-}" _svc_b2_key="${B2_ACCOUNT_KEY:-}"
       B2_ACCOUNT_ID="$_saved_b2_id" B2_ACCOUNT_KEY="$_saved_b2_key"
-      queue_retention "$SERVICE_NAME" "$RESTIC_REPOSITORY" "$RESTIC_PASSWORD"
+      queue_retention "$SERVICE_NAME" "$RESTIC_REPOSITORY" "$RESTIC_PASSWORD" "$_svc_b2_id" "$_svc_b2_key"
     done
 
     local idx=0
     for idx in "${!retention_repos[@]}"; do
-      if ! apply_retention "${retention_labels[$idx]}" "false" "${retention_repos[$idx]}" "${retention_passwords[$idx]}"; then
+      if ! apply_retention "${retention_labels[$idx]}" "false" "${retention_repos[$idx]}" "${retention_passwords[$idx]}" "${retention_b2_ids[$idx]}" "${retention_b2_keys[$idx]}"; then
         failure_label="${retention_labels[$idx]}"
         failure_id="retention:${failure_label}"
         failed_services+=("$failure_label")
@@ -710,6 +722,8 @@ main() {
     retention_labels=()
     retention_repos=()
     retention_passwords=()
+    retention_b2_ids=()
+    retention_b2_keys=()
     for env_file in "${service_files[@]}"; do
       failure_label="$(basename "$env_file" .env)"
       failure_id="verify:${failure_label}"
@@ -727,13 +741,14 @@ main() {
       local _saved_b2_id="${B2_ACCOUNT_ID:-}" _saved_b2_key="${B2_ACCOUNT_KEY:-}"
       # shellcheck source=/dev/null
       source "$env_file"
+      local _svc_b2_id="${B2_ACCOUNT_ID:-}" _svc_b2_key="${B2_ACCOUNT_KEY:-}"
       B2_ACCOUNT_ID="$_saved_b2_id" B2_ACCOUNT_KEY="$_saved_b2_key"
-      queue_retention "$SERVICE_NAME" "$RESTIC_REPOSITORY" "$RESTIC_PASSWORD"
+      queue_retention "$SERVICE_NAME" "$RESTIC_REPOSITORY" "$RESTIC_PASSWORD" "$_svc_b2_id" "$_svc_b2_key"
     done
 
     local idx=0
     for idx in "${!retention_repos[@]}"; do
-      if ! apply_retention "${retention_labels[$idx]}" "true" "${retention_repos[$idx]}" "${retention_passwords[$idx]}"; then
+      if ! apply_retention "${retention_labels[$idx]}" "true" "${retention_repos[$idx]}" "${retention_passwords[$idx]}" "${retention_b2_ids[$idx]}" "${retention_b2_keys[$idx]}"; then
         failure_label="${retention_labels[$idx]}"
         failure_id="verify-retention:${failure_label}"
         failed_services+=("${failure_label} [verify]")

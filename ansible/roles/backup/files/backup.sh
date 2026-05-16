@@ -363,8 +363,10 @@ build_failure_body() {
     detail=""
 
     if [[ -f "$failure_file" ]]; then
-      # shellcheck source=/dev/null
-      source "$failure_file"
+      display=$(grep -m1 '^display=' "$failure_file" | cut -d= -f2-)
+      phase=$(grep -m1 '^phase=' "$failure_file" | cut -d= -f2-)
+      snapshot=$(grep -m1 '^snapshot=' "$failure_file" | cut -d= -f2-)
+      detail=$(grep -m1 '^detail=' "$failure_file" | cut -d= -f2-)
     fi
 
     body+=$(printf '  - %s: phase=%s, snapshot=%s\n' "$display" "$phase" "$snapshot")

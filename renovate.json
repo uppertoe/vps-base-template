@@ -1,0 +1,16 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "labels": ["dependencies"],
+  "docker": {
+    "pinDigests": true
+  },
+  "packageRules": [
+    {
+      "description": "Group Docker image digest bumps so base-image CVE fixes flow through in one PR",
+      "matchManagers": ["docker-compose", "dockerfile"],
+      "matchUpdateTypes": ["digest", "pin", "pinDigest"],
+      "groupName": "docker image digests"
+    }
+  ]
+}

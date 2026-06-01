@@ -53,7 +53,9 @@ a submodule and includes the backup configuration structure.
 | [docs/03-provisioning-a-server.md](docs/03-provisioning-a-server.md) | Full provisioning walkthrough |
 | [docs/04-server-repo.md](docs/04-server-repo.md) | Server repo structure and conventions |
 | [docs/05-access-model.md](docs/05-access-model.md) | Future split-trust deploy/admin access model |
-| [docs/06-auditing.md](docs/06-auditing.md) | Lynis + OpenSCAP + docker-bench auditing |
+| [docs/06-auditing.md](docs/06-auditing.md) | How to run each audit tool (OpenSCAP, Lynis, docker-bench, audit-compose) |
+| [docs/07-auth.md](docs/07-auth.md) | Passwordless email one-time-code login for apps (forward_auth) |
+| [docs/08-security-model.md](docs/08-security-model.md) | Security model: which benchmark governs each layer + the exceptions register |
 
 ## CI
 

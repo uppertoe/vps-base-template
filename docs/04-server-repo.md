@@ -47,13 +47,29 @@ Each app gets a folder in `apps/`. There are no conventions beyond the three
 files — compose, env, and caddy snippet. Services, volumes, and environment
 variables are specific to each app and written by hand.
 
-**`apps/myapp/docker-compose.yml`** — pull image, join caddy network:
+**`apps/myapp/docker-compose.yml`** — pull image, join caddy network, and apply
+the CIS Docker §5 runtime hardening block (see below):
 ```yaml
 services:
   myapp:
-    image: yourorg/myapp:latest
+    image: yourorg/myapp:1.2.3@sha256:…   # pin a digest, never :latest
     restart: unless-stopped
     env_file: apps/myapp/.env
+    # --- CIS Docker §5 runtime hardening ---
+    user: "1000:1000"            # run non-root (match your image's user)
+    cap_drop: [ALL]              # drop all caps, add back only what you need
+    security_opt:
+      - no-new-privileges:true
+    read_only: true              # immutable root fs; writable paths via tmpfs/volumes
+    tmpfs: [/tmp]
+    mem_limit: 256m              # bound memory (2 GB host)
+    pids_limit: 256              # fork-bomb guard
+    healthcheck:
+      test: ["CMD", "…"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    # ----------------------------------------
     networks:
       - caddy
 
@@ -62,6 +78,27 @@ networks:
     external: true
     name: caddy
 ```
+
+### Container hardening (CIS Docker §5)
+
+Every app container should carry the block above. These controls are verified on
+the running stack by `scaffold/ansible/audit-compose.yml` and linted in CI, so a
+container that skips them shows up as a finding. The rules:
+
+| Control | Why |
+|---------|-----|
+| `image: …@sha256:` digest, never `:latest` | reproducible, tamper-evident pulls (Renovate keeps digests fresh) |
+| `user:` non-root | a container escape lands as an unprivileged user |
+| `cap_drop: [ALL]` (+ minimal `cap_add`) | remove kernel capabilities the app never uses |
+| `security_opt: [no-new-privileges:true]` | block setuid privilege escalation (also a daemon default) |
+| `read_only: true` + `tmpfs`/named volumes | tamper-resistant root filesystem |
+| `mem_limit` + `pids_limit` | contain a single app from exhausting the 2 GB host |
+| `healthcheck` | the deploy waits for health; surfaces crash-loops |
+| never set `privileged: true`, never mount `/var/run/docker.sock` | both hand the host to the container |
+
+The base `caddy` service and the bundled `auth` app already follow this pattern —
+copy from them. Caddy is the one documented exception that keeps a single
+capability (`NET_BIND_SERVICE`) so it can bind ports 80/443 as non-root.
 
 **`apps/myapp/.env.example`** — commit this, listing every variable:
 ```bash

@@ -1,0 +1,111 @@
+---
+# audit-compose.yml — CIS Docker Benchmark section 5 (container runtime) audit
+#
+# docker-bench-security (audit-docker.yml) checks the daemon and host (CIS Docker
+# §1-4). It does NOT verify the per-container §5 controls that the compose files
+# declare — non-root user, dropped capabilities, no-new-privileges, read-only
+# rootfs, resource limits, healthchecks. This playbook closes that gap: it
+# inspects the running stack and asserts those controls, so a container that
+# skips them fails the audit instead of silently regressing.
+#
+# Usage:
+#   standalone: ansible-playbook -i ansible/inventory/myserver ansible/audit-compose.yml
+#   scaffold:   ansible-playbook -i ansible/hosts scaffold/ansible/audit-compose.yml
+#
+# Run it against the real VPS with the production stack up. Reports land in the
+# repo-root reports/ directory, alongside the OpenSCAP and Docker Bench reports.
+
+- name: Container runtime (CIS Docker §5) audit
+  hosts: all
+  gather_facts: true
+  become: true
+
+  vars:
+    # Containers allowed to skip specific §5 controls, with the reason documented
+    # in docs/08-security-model.md. Map of container name -> list of control keys:
+    #   privileged, cap_drop_all, no_new_privileges, read_only, mem_limit,
+    #   pids_limit, non_root, healthcheck
+    # The default stack (caddy, auth) passes every control, so this is empty.
+    audit_compose_exceptions: {}
+    # Fail the play when a non-excepted control fails. Set false for report-only.
+    audit_compose_enforce: true
+    compose_audit_dir: /tmp/compose-audit
+    local_reports_root: >-
+      {{
+        (playbook_dir | dirname | dirname)
+        if (playbook_dir | dirname | basename) == 'scaffold'
+        else (playbook_dir | dirname)
+      }}
+    local_report_dir: "{{ local_reports_root }}/reports/compose-audit-{{ inventory_hostname }}-{{ ansible_facts['date_time']['date'] }}"
+
+  tasks:
+    - name: Ensure report directory exists on server
+      ansible.builtin.file:
+        path: "{{ compose_audit_dir }}"
+        state: directory
+        mode: "0750"
+
+    - name: Copy §5 hardening checker to server
+      ansible.builtin.copy:
+        src: files/compose-audit/check-compose-hardening.py
+        dest: "{{ compose_audit_dir }}/check-compose-hardening.py"
+        mode: "0755"
+
+    - name: Write exceptions file
+      ansible.builtin.copy:
+        dest: "{{ compose_audit_dir }}/exceptions.json"
+        content: "{{ audit_compose_exceptions | to_nice_json }}"
+        mode: "0644"
+
+    - name: Run container runtime (§5) audit
+      ansible.builtin.command:
+        cmd: >-
+          python3 {{ compose_audit_dir }}/check-compose-hardening.py
+          --json {{ compose_audit_dir }}/compose-audit.json
+          --md {{ compose_audit_dir }}/compose-audit.md
+          --exceptions {{ compose_audit_dir }}/exceptions.json
+      register: compose_audit
+      changed_when: false
+      # Script exits 1 on any non-excepted finding; surface output regardless.
+      failed_when: false
+
+    - name: Print audit output
+      ansible.builtin.debug:
+        msg: "{{ compose_audit.stdout_lines }}"
+
+    - name: Ensure local report directory exists
+      ansible.builtin.file:
+        path: "{{ local_report_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      become: false
+
+    - name: Fetch JSON report
+      ansible.builtin.fetch:
+        src: "{{ compose_audit_dir }}/compose-audit.json"
+        dest: "{{ local_report_dir }}/compose-audit.json"
+        flat: true
+
+    - name: Fetch Markdown report
+      ansible.builtin.fetch:
+        src: "{{ compose_audit_dir }}/compose-audit.md"
+        dest: "{{ local_report_dir }}/compose-audit.md"
+        flat: true
+
+    - name: Remind how to read results
+      ansible.builtin.debug:
+        msg:
+          - "Full report: {{ local_report_dir }}/compose-audit.md"
+          - "[WARN] lines are CIS Docker §5 controls a container is missing"
+          - "Fix them in the app's docker-compose.yml (see docs/04-server-repo.md)"
+          - "or record an accepted exception in audit_compose_exceptions + docs/08-security-model.md"
+
+    - name: Fail if §5 controls are not met
+      ansible.builtin.fail:
+        msg: >-
+          One or more containers are missing required CIS Docker §5 controls.
+          See {{ local_report_dir }}/compose-audit.md.
+      when:
+        - audit_compose_enforce | bool
+        - compose_audit.rc != 0

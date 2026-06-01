@@ -422,6 +422,27 @@
     - not aide_db_file.stat.exists
     - not aide_db_gz_file.stat.exists
 
+# Ubuntu's aide package ships dailyaidecheck.service/.timer (masked by default).
+# Enabling the timer satisfies CIS aide_periodic_checking_systemd_timer and runs
+# a scheduled integrity check without a custom unit.
+- name: Unmask packaged AIDE check service
+  ansible.builtin.systemd_service:
+    name: dailyaidecheck.service
+    masked: false
+  when:
+    - baseline_enable_aide | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
+- name: Enable periodic AIDE integrity check timer
+  ansible.builtin.systemd_service:
+    name: dailyaidecheck.timer
+    masked: false
+    enabled: true
+    state: started
+  when:
+    - baseline_enable_aide | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
 - name: Create grub drop-in directory
   ansible.builtin.file:
     path: /etc/default/grub.d

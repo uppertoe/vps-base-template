@@ -1,0 +1,16 @@
+---
+# os-hardening role defaults
+#
+# devsec.hardening.os_hardening already sets all CIS L1 network sysctls and
+# hardens /dev/shm, /dev and /run with nosuid,nodev,noexec on every real-host
+# run. It leaves /tmp and /var/tmp unmanaged (os_mnt_tmp_enabled defaults off)
+# because it cannot assume a filesystem for them.
+#
+# A single-disk cloud image has no separate /tmp partition, so the CIS-compliant
+# path is a size-capped tmpfs. This satisfies both the CIS partition_for_tmp and
+# mount_option_tmp_{nodev,nosuid,noexec} rules without repartitioning. tmpfs only
+# consumes RAM for what is actually written; earlyoom (enabled in common) covers
+# pressure on the 2 GB box.
+oshardening_harden_tmp_mount: true
+oshardening_tmp_tmpfs_size: 512m
+oshardening_var_tmp_tmpfs_size: 256m

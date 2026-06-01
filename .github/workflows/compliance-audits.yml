@@ -55,6 +55,59 @@ jobs:
         with:
           path: compliance-site
 
+  container-security:
+    name: Container image and compose scan
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Resolve pinned caddy image reference
+        id: img
+        run: |
+          ref="$(grep -oE 'caddy:2-alpine@sha256:[a-f0-9]+' docker/caddy.base.yml | head -1)"
+          echo "ref=${ref:-caddy:2-alpine}" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare reports directory
+        run: mkdir -p reports/container-security
+
+      # Image CVE scan — report-only so an unfixable upstream CVE does not block
+      # deploys. Findings still surface in the artifact and the step summary.
+      - name: Trivy image scan (caddy)
+        run: |
+          docker run --rm -v "$PWD/reports/container-security:/out" aquasec/trivy:latest image \
+            --severity HIGH,CRITICAL --no-progress --format table \
+            --output /out/trivy-caddy.txt "${{ steps.img.outputs.ref }}" || true
+          docker run --rm -v "$PWD/reports/container-security:/out" aquasec/trivy:latest image \
+            --severity HIGH,CRITICAL --no-progress --format json \
+            --output /out/trivy-caddy.json "${{ steps.img.outputs.ref }}" || true
+          echo '### Trivy (caddy) HIGH/CRITICAL' >> "$GITHUB_STEP_SUMMARY"
+          tail -n 40 reports/container-security/trivy-caddy.txt >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Dockle image best-practice lint (caddy)
+        run: |
+          docker run --rm -v "$PWD/reports/container-security:/out" goodwithtech/dockle:latest \
+            --format json --output /out/dockle-caddy.json "${{ steps.img.outputs.ref }}" || true
+
+      # Static compose misconfig lint. Fails the build on HIGH findings. The four
+      # excluded query IDs are accepted public-reverse-proxy exceptions documented
+      # in docs/08-security-model.md (privileged ports 80/443, all-interface bind,
+      # shared named volumes, and cap_add alongside cap_drop ALL). Per-container §5
+      # controls are authoritatively verified on the host by audit-compose.yml.
+      - name: KICS compose scan
+        run: |
+          docker run --rm -v "$PWD/docker:/path" -v "$PWD/reports/container-security:/out" \
+            checkmarx/kics:latest scan -p /path --type DockerCompose \
+            --exclude-queries 8c978947-0ff6-485c-b0c2-0bfca6026466,bc2908f3-f73c-40a9-8793-c1b7d5544f79,451d79dc-0588-476a-ad03-3c7f0320abb3,ce76b7d0-9e77-464d-b86f-c5c48e03e22d \
+            --report-formats json --output-name kics-compose -o /out --fail-on high
+
+      - name: Upload container security reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: container-security-reports
+          path: reports/container-security
+
   deploy-pages:
     name: Publish Compliance Reports
     if: github.ref == 'refs/heads/main'

@@ -9,6 +9,18 @@
 - name: Apply OS hardening via dev-sec.io
   ansible.builtin.include_role:
     name: devsec.hardening.os_hardening
+  vars:
+    # Harden /tmp and /var/tmp as size-capped tmpfs so the CIS partition_for_tmp
+    # and mount_option_tmp_* / mount_option_var_tmp_* rules pass on a single-disk
+    # cloud image. /dev/shm is already hardened by devsec defaults.
+    os_mnt_tmp_enabled: "{{ oshardening_harden_tmp_mount }}"
+    os_mnt_tmp_src: tmpfs
+    os_mnt_tmp_filesystem: tmpfs
+    os_mnt_tmp_options: "rw,nosuid,nodev,noexec,size={{ oshardening_tmp_tmpfs_size }}"
+    os_mnt_var_tmp_enabled: "{{ oshardening_harden_tmp_mount }}"
+    os_mnt_var_tmp_src: tmpfs
+    os_mnt_var_tmp_filesystem: tmpfs
+    os_mnt_var_tmp_options: "rw,nosuid,nodev,noexec,size={{ oshardening_var_tmp_tmpfs_size }}"
   when: ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
 
 - name: Apply safe host networking sysctls

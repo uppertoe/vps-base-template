@@ -29,10 +29,19 @@
 
   vars:
     openscap_profile: xccdf_org.ssgproject.content_profile_cis_level1_server
+    # Tailoring deselects CIS rules that are genuinely not applicable to a
+    # single-disk, single-tenant cloud VPS (separate-partition mount options,
+    # GRUB bootloader passwords) so the report separates real residual failures
+    # from documented exceptions. Each deselection is recorded in
+    # docs/08-security-model.md. Set openscap_tailoring_file: "" to scan against
+    # the untailored CIS L1 Server profile instead.
+    openscap_tailoring_file: "{{ playbook_dir }}/files/openscap/ssg-ubuntu2404-tailoring.xml"
+    openscap_tailoring_profile: xccdf_org.ssgproject.content_profile_cis_level1_server_cloud_vps
     openscap_content_source: auto
     openscap_refresh_upstream_content: false
     openscap_upstream_release_api: https://api.github.com/repos/ComplianceAsCode/content/releases/latest
     openscap_report_dir: /tmp/openscap
+    remote_tailoring_path: /tmp/openscap/tailoring.xml
     local_reports_root: >-
       {{
         (playbook_dir | dirname | dirname)
@@ -385,11 +394,19 @@
         state: directory
         mode: "0750"
 
+    - name: Copy OpenSCAP tailoring file to server
+      ansible.builtin.copy:
+        src: "{{ openscap_tailoring_file }}"
+        dest: "{{ remote_tailoring_path }}"
+        mode: "0644"
+      when: openscap_tailoring_file | length > 0
+
     - name: Run OpenSCAP CIS scan
       ansible.builtin.command:
         cmd: >-
           oscap xccdf eval
-          --profile {{ openscap_profile }}
+          --profile {{ openscap_tailoring_profile if (openscap_tailoring_file | length > 0) else openscap_profile }}
+          {{ ('--tailoring-file ' ~ remote_tailoring_path) if (openscap_tailoring_file | length > 0) else '' }}
           --results {{ openscap_report_dir }}/results.xml
           --report {{ openscap_report_dir }}/report.html
           --oval-results
@@ -427,8 +444,11 @@
           - "Open {{ local_report_dir }}/report.html in a browser for full results"
           - "SCAP content source: {{ scap_content_source_used }}"
           - "SCAP datastream: {{ scap_content_path }}"
+          - >-
+            Tailoring: {{ 'ON — ' ~ openscap_tailoring_profile
+            if (openscap_tailoring_file | length > 0)
+            else 'OFF (untailored ' ~ openscap_profile ~ ')' }}
           - "Cached upstream metadata: {{ local_upstream_metadata_file }}"
           - "Failed rules are CIS Benchmark Level 1 requirements not currently met"
           - "Each rule links to the CIS control ID and remediation guidance"
-          - "Some failures are intentional trade-offs for a public web server"
-          - "(e.g. CIS may recommend disabling IPv6 — you may choose not to)"
+          - "Deselected (notselected) rules are documented exceptions — see docs/08-security-model.md"

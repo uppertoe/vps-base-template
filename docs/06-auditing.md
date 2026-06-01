@@ -1,7 +1,18 @@
 # Security Auditing
 
-Two complementary tools give you confidence that the server is hardened to an
-industry standard — not just "custom scripts that seem reasonable".
+> **Start with [08-security-model.md](08-security-model.md)** — it defines which
+> benchmark governs each layer (host OS, Docker daemon, containers, images), the
+> accepted-exceptions register, and how to interpret each tool for *this* kind of
+> host. This page covers *how to run* each tool.
+
+Complementary tools give you confidence that the server is hardened to an
+industry standard — not just "custom scripts that seem reasonable":
+
+- **OpenSCAP** — formal CIS Ubuntu 24.04 L1 Server compliance (with a tailoring
+  file for accepted cloud exceptions)
+- **Lynis** — host hardening-index drift signal
+- **docker-bench-security** — CIS Docker Benchmark §1–4 (daemon/host)
+- **audit-compose** — CIS Docker Benchmark §5 (per-container runtime)
 
 ---
 
@@ -157,16 +168,18 @@ explicit maintenance run, or accepted as an intentional exception.
 | Docker Bench `2.2` | Restricted traffic between containers on the default bridge | Enforced with Docker daemon `icc: false` |
 | Docker Bench `2.16` | `userland-proxy` disabled | Enforced with Docker daemon `userland-proxy: false` |
 
-Common intentional exceptions:
+**Intentional exceptions are tracked in the
+[exceptions register in 08-security-model.md](08-security-model.md#exceptions-register)**
+— the single source of truth, kept in lock-step with the OpenSCAP tailoring file
+(`ansible/files/openscap/ssg-ubuntu2404-tailoring.xml`). It covers the
+separate-partition mount options and GRUB passwords (deselected as cloud-N/A), plus
+public-web-server and Docker exceptions (`ip_forward`, UFW-over-nftables, the
+`deploy` user in the `docker` group, ports 80/443, and Caddy's single retained
+capability).
 
-| Audit finding | Why we do not force it by default |
-|---------------|----------------------------------|
-| `/tmp` on separate partition | Requires a different disk or partitioning model at VPS creation time |
-| `grub2_password` / `grub2_uefi_password` | Heavy-handed for typical VPS workflows |
-| `sysctl_net_ipv4_ip_forward` | Docker hosts generally require forwarding |
-| `service_nftables_enabled` / `package_ufw_removed` | This scaffold intentionally uses UFW plus Docker-aware `DOCKER-USER` rules rather than direct nftables management |
-| Docker Bench `1.1.2` | `deploy` is intentionally in the `docker` group for the current deployment model |
-| Docker Bench `5.8` | Public Caddy instances must bind ports `80` and `443` |
+> Note: `/tmp` and `/var/tmp` are no longer exceptions — the `os-hardening` role now
+> mounts them as size-capped tmpfs with `nodev,nosuid,noexec`, so the corresponding
+> CIS rules pass.
 
 ### Full Compliance Run
 
@@ -216,8 +229,29 @@ applied safely across many Dockerised apps:
 - Docker-aware filtering for published ports via `DOCKER-USER`
 
 Container-specific controls such as non-root users, CPU limits, read-only root
-filesystems, and service-level health checks still need to be handled in each
-server repo's `docker-compose.yml`.
+filesystems, and service-level health checks live in each server repo's
+`docker-compose.yml` — and are verified by `audit-compose.yml` below.
+
+---
+
+## Container runtime — audit-compose (CIS Docker §5)
+
+`docker-bench-security` checks the daemon (§1–4) but not the per-container runtime
+controls the compose files declare. `audit-compose.yml` closes that gap: it
+inspects the running stack and fails if any container is missing a required §5
+control (non-root user, `cap_drop: ALL`, `no-new-privileges`, read-only rootfs,
+memory/pids limits, healthcheck).
+
+```bash
+# Run against the real VPS with the production stack up
+ansible-playbook -i ansible/inventory/myserver ansible/audit-compose.yml
+```
+
+Findings map to the app's `docker-compose.yml` (see
+[04-server-repo.md](04-server-repo.md) for the §5 block). Accept a control with
+`audit_compose_exceptions` and record it in
+[08-security-model.md](08-security-model.md). The same controls are linted in CI
+(KICS) and verified against the live caddy in the server repo's compose smoke test.
 
 ---
 
@@ -250,15 +284,18 @@ ansible-playbook -i ansible/inventory/myserver ansible/audit-lynis.yml
 # 3. Run OpenSCAP for formal CIS Benchmark compliance (OS)
 ansible-playbook -i ansible/inventory/myserver ansible/audit-openscap.yml
 
-# 4. Run docker-bench-security for Docker CIS Benchmark
+# 4. Run docker-bench-security for Docker CIS Benchmark (daemon, §1-4)
 ansible-playbook -i ansible/inventory/myserver ansible/audit-docker.yml
 
-# 5. Fix host-level gaps in inventory vars or Ansible roles
-# 6. Fix container-level Docker findings in your app compose files
-# 7. Re-apply the fast path
+# 5. Run audit-compose for the container runtime controls (§5)
+ansible-playbook -i ansible/inventory/myserver ansible/audit-compose.yml
+
+# 6. Fix host-level gaps in inventory vars or Ansible roles
+# 7. Fix container-level Docker findings in your app compose files
+# 8. Re-apply the fast path
 ansible-playbook -i ansible/inventory/myserver ansible/site-quick.yml
 
-# 8. Re-run the audits until findings are resolved or formally accepted
+# 9. Re-run the audits until findings are resolved or formally accepted
 ```
 
 ### CIS feedback loop

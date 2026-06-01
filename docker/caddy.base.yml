@@ -16,9 +16,20 @@
 
 services:
   caddy:
-    image: caddy:2-alpine
+    # Pinned by digest (multi-arch index). Renovate bumps the digest; the :2-alpine
+    # tag is kept for human readability. See scaffold/docs/08-security-model.md.
+    image: caddy:2-alpine@sha256:86deaf5e3d3408a6ccec08fbb79989783dd26e206ae10bcf78a801dc8c9ab794
     restart: unless-stopped
     read_only: true
+    # CIS Docker §5 runtime hardening. The caddy image runs as root by default;
+    # run non-root and bind 80/443 via the single retained capability.
+    user: "1000:1000"
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE   # bind privileged ports 80/443 as non-root
+    security_opt:
+      - no-new-privileges:true
     mem_limit: 256m
     pids_limit: 256
     ports:

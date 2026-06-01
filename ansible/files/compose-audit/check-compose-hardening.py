@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+"""Assert CIS Docker Benchmark section 5 (container runtime) controls against the
+running stack.
+
+docker-bench-security checks the daemon (sections 1-4); nothing in the scaffold
+verified the per-container §5 controls that the compose files declare. This does:
+it inspects every running container and checks the controls the scaffold expects
+every app to carry, then prints docker-bench-style [PASS]/[WARN] lines and writes
+a JSON + Markdown report.
+
+Usage:
+  check-compose-hardening.py [--json OUT.json] [--md OUT.md] [--exceptions FILE]
+
+Exit code: 0 if every (non-excepted) control passes, 1 otherwise — so the audit
+playbook fails loudly on a regression.
+"""
+import argparse
+import json
+import subprocess
+import sys
+
+# CIS Docker Benchmark §5 controls we assert from `docker inspect`.
+CONTROLS = [
+    ("5.4 not privileged", "privileged"),
+    ("5.3 cap_drop ALL", "cap_drop_all"),
+    ("5.25 no-new-privileges", "no_new_privileges"),
+    ("5.12 read-only rootfs", "read_only"),
+    ("5.10 memory limit", "mem_limit"),
+    ("5.28 pids limit", "pids_limit"),
+    ("5.x non-root user", "non_root"),
+    ("5.26 healthcheck", "healthcheck"),
+]
+
+
+def docker(args):
+    return subprocess.run(
+        ["docker", *args], capture_output=True, text=True, check=True
+    ).stdout
+
+
+def image_user(image):
+    """Effective USER baked into the image (for containers that don't override it)."""
+    try:
+        out = docker(["image", "inspect", image])
+        return (json.loads(out)[0].get("Config") or {}).get("User", "") or ""
+    except Exception:
+        return ""
+
+
+def is_root(user):
+    u = (user or "").split(":")[0].strip()
+    return u in ("", "0", "root")
+
+
+def evaluate(c):
+    host = c.get("HostConfig") or {}
+    cfg = c.get("Config") or {}
+    sec = host.get("SecurityOpt") or []
+    cap_drop = [x.upper() for x in (host.get("CapDrop") or [])]
+    user = cfg.get("User") or image_user(cfg.get("Image", ""))
+    hc = cfg.get("Healthcheck") or {}
+    hc_test = hc.get("Test") or []
+
+    return {
+        "privileged": not host.get("Privileged", False),
+        "cap_drop_all": "ALL" in cap_drop,
+        "no_new_privileges": any("no-new-privileges" in s for s in sec),
+        "read_only": bool(host.get("ReadonlyRootfs", False)),
+        "mem_limit": (host.get("Memory") or 0) > 0,
+        "pids_limit": (host.get("PidsLimit") or 0) > 0,
+        "non_root": not is_root(user),
+        "healthcheck": len([t for t in hc_test if t not in ("", "NONE")]) > 0,
+    }
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--json")
+    ap.add_argument("--md")
+    ap.add_argument(
+        "--exceptions",
+        help="JSON: {container_name: [control_key, ...]} to accept as documented exceptions",
+    )
+    args = ap.parse_args()
+
+    exceptions = {}
+    if args.exceptions:
+        with open(args.exceptions) as fh:
+            exceptions = json.load(fh)
+
+    names = [n for n in docker(["ps", "--format", "{{.Names}}"]).splitlines() if n]
+    report = {"containers": {}, "summary": {"pass": 0, "warn": 0, "excepted": 0}}
+    failed = False
+
+    if not names:
+        print("[INFO] no running containers to audit")
+
+    for name in names:
+        c = json.loads(docker(["inspect", name]))[0]
+        results = evaluate(c)
+        excepted = set(exceptions.get(name, []))
+        report["containers"][name] = {}
+        for label, key in CONTROLS:
+            ok = results[key]
+            if ok:
+                status = "PASS"
+                report["summary"]["pass"] += 1
+            elif key in excepted:
+                status = "EXCEPTED"
+                report["summary"]["excepted"] += 1
+            else:
+                status = "WARN"
+                report["summary"]["warn"] += 1
+                failed = True
+            report["containers"][name][key] = status
+            print(f"[{status}] {name}: {label}")
+
+    s = report["summary"]
+    print(f"\nSummary: {s['pass']} pass, {s['warn']} warn, {s['excepted']} excepted")
+
+    if args.json:
+        with open(args.json, "w") as fh:
+            json.dump(report, fh, indent=2)
+    if args.md:
+        with open(args.md, "w") as fh:
+            fh.write("# Container runtime (CIS Docker §5) audit\n\n")
+            fh.write(f"{s['pass']} pass, {s['warn']} warn, {s['excepted']} excepted\n\n")
+            cols = [k for _, k in CONTROLS]
+            fh.write("| container | " + " | ".join(cols) + " |\n")
+            fh.write("|" + "---|" * (len(cols) + 1) + "\n")
+            for name, res in report["containers"].items():
+                fh.write(
+                    f"| {name} | "
+                    + " | ".join(res.get(k, "-") for k in cols)
+                    + " |\n"
+                )
+
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

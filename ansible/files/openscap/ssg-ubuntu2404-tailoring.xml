@@ -1,0 +1,51 @@
+<?xml version="1.0" ?>
+<!--
+  OpenSCAP XCCDF tailoring for the vps-scaffold cloud VPS.
+
+  Base profile : xccdf_org.ssgproject.content_profile_cis_level1_server
+                 (CIS Ubuntu 24.04 LTS Benchmark for Level 1 - Server, v1.0.0)
+  Tailored id  : xccdf_org.ssgproject.content_profile_cis_level1_server_cloud_vps
+
+  This file DESELECTS a small set of CIS L1 rules that are genuinely not
+  applicable to a single-disk, single-tenant cloud VPS, so the OpenSCAP report
+  separates "real residual failures" from "accepted, documented exceptions".
+  Every deselection below is recorded in the exceptions register in
+  docs/08-security-model.md — keep the two in lock-step.
+
+  IMPORTANT: deselect ONLY controls we cannot satisfy without repartitioning the
+  cloud image or attaching a console. Anything the scaffold can enforce stays
+  selected and is driven to PASS by the Ansible roles (e.g. /tmp and /dev/shm
+  mount options, usb-storage blacklist, AIDE) — do NOT add those here.
+
+  Regenerate against a new SSG release with the "autotailor" tool (package
+  openscap-utils): output to this file (-o), set the new profile id (-p), a title,
+  one unselect flag (-u) per rule id below, then pass the datastream and the base
+  profile id as positional arguments. Full command + rule list:
+  docs/08-security-model.md.
+-->
+<xccdf-1.2:Tailoring xmlns:xccdf-1.2="http://checklists.nist.gov/xccdf/1.2" id="xccdf_auto_tailoring_default">
+	<xccdf-1.2:benchmark href="ssg-ubuntu2404-ds.xml"/>
+	<xccdf-1.2:version time="2026-06-01T00:00:00">1</xccdf-1.2:version>
+	<xccdf-1.2:Profile id="xccdf_org.ssgproject.content_profile_cis_level1_server_cloud_vps" extends="xccdf_org.ssgproject.content_profile_cis_level1_server">
+		<xccdf-1.2:title override="true">CIS Ubuntu 24.04 L1 Server - vps-scaffold cloud VPS tailoring</xccdf-1.2:title>
+		<!-- Separate-partition mount options: /var, /var/log, /var/log/audit, /home
+		     cannot carry nodev/nosuid/noexec without dedicated filesystems, which a
+		     single-root cloud image does not have. CIS's own benchmark text accepts
+		     the cloud-resize caveat for partitioning. N/A. -->
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_mount_option_var_nodev" selected="false"/>
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_mount_option_var_nosuid" selected="false"/>
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_mount_option_var_log_nodev" selected="false"/>
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_mount_option_var_log_noexec" selected="false"/>
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_mount_option_var_log_nosuid" selected="false"/>
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_mount_option_var_log_audit_nodev" selected="false"/>
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_mount_option_var_log_audit_noexec" selected="false"/>
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_mount_option_var_log_audit_nosuid" selected="false"/>
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_mount_option_home_nodev" selected="false"/>
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_mount_option_home_nosuid" selected="false"/>
+		<!-- GRUB bootloader passwords: no physical/console access on a managed
+		     hypervisor; recovery is via the provider console/rebuild. Setting a GRUB
+		     password risks locking out provider rescue. N/A. -->
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_grub2_password" selected="false"/>
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_grub2_uefi_password" selected="false"/>
+	</xccdf-1.2:Profile>
+</xccdf-1.2:Tailoring>

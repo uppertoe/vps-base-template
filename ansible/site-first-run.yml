@@ -27,3 +27,5 @@
       tags: [hardening, baseline]
     - role: firewall
       tags: [firewall]
+    - role: notify
+      tags: [notify]

@@ -1,0 +1,7 @@
+[Unit]
+Description=Push notification for failed unit %i
+# Avoid recursion: this unit must never trigger itself.
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/vps-notify-unit %i

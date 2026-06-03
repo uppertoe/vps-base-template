@@ -413,6 +413,20 @@
         - baseline_cis_l2_audit_rules | bool
   when: ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
 
+# CIS L2 / detection: run the daily AIDE job in 'check' mode (not 'update'), so a
+# detected change keeps alerting on every run until an operator acknowledges it
+# with `aide --update`. 'update' silently re-baselines after one report, which
+# can mask a slow attacker. dailyaidecheck --systemdservice exits non-zero on
+# changes, so the notify role's OnFailure hook pushes an alert.
+- name: Run the daily AIDE job in check (not update) mode
+  ansible.builtin.lineinfile:
+    path: /etc/default/aide
+    regexp: '^COMMAND='
+    line: 'COMMAND=check'
+  when:
+    - baseline_enable_aide | bool
+    - baseline_cis_l2_audit_rules | bool
+
 # CIS L2: AIDE must monitor the audit tooling itself (aide_check_audit_tools).
 - name: Ensure AIDE monitors the audit tools
   ansible.builtin.blockinfile:

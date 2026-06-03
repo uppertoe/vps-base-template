@@ -1,0 +1,18 @@
+---
+# Push notifications via ntfy. Disabled until notify_ntfy_url is set (e.g. in the
+# gitignored inventory). When empty, the scripts are installed but no-op.
+notify_ntfy_url: ""
+notify_ntfy_token: ""
+notify_default_priority: high
+
+# Units whose failure should trigger a push (OnFailure=). Only units that exist
+# on the host get a drop-in; the rest are skipped. dailyaidecheck failing is the
+# AIDE "file integrity changed / scan errored" signal.
+notify_onfailure_units:
+  - auditd.service
+  - docker.service
+  - fail2ban.service
+  - ssh.service
+  - dailyaidecheck.service
+  - backup.service
+  - backup-verify.service

@@ -1,0 +1,20 @@
+#!/bin/bash
+# vps-notify-unit — OnFailure handler. Sends an alert for a failed systemd unit
+# with a short status/journal excerpt. Invoked as: vps-notify-unit <unit>
+set -u
+unit="${1:?usage: vps-notify-unit <unit>}"
+
+# dailyaidecheck failing almost always means AIDE detected file changes (or the
+# scan itself errored) — give it a clearer title.
+case "$unit" in
+  dailyaidecheck.service) title="AIDE: file integrity check reported a problem ($unit)";;
+  backup.service)         title="Backup FAILED ($unit)";;
+  backup-verify.service)  title="Backup verification FAILED ($unit)";;
+  *)                      title="Unit failed: $unit";;
+esac
+
+body="$(systemctl status "$unit" --no-pager -n 15 2>/dev/null | sed -n '1,25p')"
+[ -z "$body" ] && body="$(journalctl -u "$unit" -n 15 --no-pager 2>/dev/null)"
+
+/usr/local/bin/vps-notify "$title" "$body" high "rotating_light"
+exit 0

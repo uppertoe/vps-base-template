@@ -1,0 +1,79 @@
+---
+- name: Create vps-scaffold config directory
+  ansible.builtin.file:
+    path: /etc/vps-scaffold
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Install notification scripts
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "/usr/local/bin/{{ item }}"
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - vps-notify
+    - vps-notify-unit
+
+- name: Install notify@ systemd template (OnFailure handler)
+  ansible.builtin.copy:
+    src: notify@.service
+    dest: /etc/systemd/system/notify@.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Install notification config (ntfy)
+  ansible.builtin.template:
+    src: notify.env.j2
+    dest: /etc/vps-scaffold/notify.env
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Warn if notifications are unconfigured
+  ansible.builtin.debug:
+    msg: >-
+      notify_ntfy_url is empty — push notifications are installed but disabled
+      (vps-notify will no-op). Set notify_ntfy_url in the inventory to enable.
+  when: notify_ntfy_url | length == 0
+
+- name: Detect which OnFailure target units exist
+  ansible.builtin.command: "systemctl cat {{ item }}"
+  loop: "{{ notify_onfailure_units }}"
+  register: notify_unit_checks
+  changed_when: false
+  failed_when: false
+
+- name: Build list of existing target units
+  ansible.builtin.set_fact:
+    notify_existing_units: >-
+      {{ notify_unit_checks.results
+         | selectattr('rc', 'equalto', 0)
+         | map(attribute='item') | list }}
+
+- name: Ensure systemd drop-in directories exist for target units
+  ansible.builtin.file:
+    path: "/etc/systemd/system/{{ item }}.d"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop: "{{ notify_existing_units }}"
+
+- name: Wire OnFailure push notification on target units
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/{{ item }}.d/onfailure-notify.conf"
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Managed by Ansible (notify role)
+      [Unit]
+      OnFailure=notify@%n.service
+  loop: "{{ notify_existing_units }}"
+  notify: Reload systemd

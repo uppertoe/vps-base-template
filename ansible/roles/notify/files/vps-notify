@@ -1,0 +1,37 @@
+#!/bin/bash
+# vps-notify — send a push notification via ntfy.
+#
+#   vps-notify "<title>" "<message...>" [priority] [tags]
+#
+# Reads /etc/vps-scaffold/notify.env for:
+#   NTFY_URL    (required; if empty this is a silent no-op)
+#   NTFY_TOKEN  (optional bearer token for protected topics)
+#   NOTIFY_DEFAULT_PRIORITY (optional; default "high")
+#
+# Designed to never fail the caller: missing config or a failed POST exits 0.
+set -u
+
+CONF="${VPS_NOTIFY_CONF:-/etc/vps-scaffold/notify.env}"
+# shellcheck disable=SC1090
+[ -r "$CONF" ] && . "$CONF"
+
+NTFY_URL="${NTFY_URL:-}"
+[ -z "$NTFY_URL" ] && exit 0   # not configured → no-op
+
+title="${1:-Alert}"
+message="${2:-}"
+priority="${3:-${NOTIFY_DEFAULT_PRIORITY:-high}}"
+tags="${4:-warning}"
+host="$(hostname -f 2>/dev/null || hostname)"
+
+# ntfy caps message size; keep it sane.
+message="$(printf '%s' "$message" | head -c 3500)"
+
+args=(-fsS --max-time 20
+      -H "Title: [${host}] ${title}"
+      -H "Priority: ${priority}"
+      -H "Tags: ${tags}")
+[ -n "${NTFY_TOKEN:-}" ] && args+=(-H "Authorization: Bearer ${NTFY_TOKEN}")
+
+printf '%s' "$message" | curl "${args[@]}" --data-binary @- "$NTFY_URL" >/dev/null 2>&1 || true
+exit 0

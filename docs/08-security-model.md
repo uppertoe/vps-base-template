@@ -86,6 +86,53 @@ tailoring file in lock-step.
 | `deploy` user in the `docker` group (Docker Bench 1.1.2) | The deployment model runs `docker compose` as the deploy user. |
 | Caddy keeps `cap_add: NET_BIND_SERVICE` | Single retained capability so Caddy binds 80/443 as a non-root user. It still `cap_drop: ALL` first. |
 
+### Host OS — CIS Level 2 (deselected in the L2 tailoring profile)
+
+Hosts with `baseline_cis_l2_audit_rules=true` are evaluated against the
+`..._cis_level2_server_cloud_vps` tailoring profile. On top of the L1 exceptions
+above, the L2 profile deselects the following — each is a deliberate trade-off,
+not an unmet control:
+
+| SSG rule(s) | Why accepted |
+|-------------|--------------|
+| `partition_for_home`, `partition_for_var`, `partition_for_var_log`, `partition_for_var_log_audit`, `partition_for_var_tmp` | Single-root cloud image; separate filesystems need a rebuild/repartition. |
+| `package_ufw_removed`, `service_nftables_enabled`, `nftables_rules_permanent` | Host uses UFW, which *is* an nftables frontend (live `nft` ruleset is active and persistent). CIS's standalone-nftables path conflicts with that architecture. |
+| `kernel_module_overlayfs_disabled` | `overlay` backs Docker's `overlayfs` storage driver — disabling it breaks Docker. |
+| `sysctl_net_ipv4_ip_forward` | Docker requires `ip_forward=1` for container networking. |
+| `sudo_require_authentication` | The `deploy` user needs passwordless sudo for unattended Ansible + the `~/deploy` helper. Compensated by key-only SSH, single-user access, and auditd rules on `sudo`/`sudoers`. |
+| `auditd_data_disk_error_action`, `auditd_data_disk_full_action`, `auditd_data_retention_space_left_action`, `auditd_data_retention_admin_space_left_action` | CIS wants `single`/`halt`, which drops a console-less remote VPS offline on a full audit disk (self-DoS). We keep `SUSPEND` + `SYSLOG` and rely on log rotation + monitoring. |
+
+> **Satisfied, not excepted** (driven to *pass* by `baseline_cis_l2_audit_rules`):
+> the full CIS L2 audit ruleset (`files/cis-l2-audit.d/`, immutable `-e 2`),
+> `audit=1 audit_backlog_limit=8192` grub args, `DisableForwarding yes`,
+> `even_deny_root`, AIDE audit-tool monitoring, audispd-plugins, and a
+> `privileged.rules` that audits **every** setuid/setgid binary execution.
+
+**OVAL `error` (inconclusive) results — manually verified.** The L2 scan reports
+~12 `error` results that the scanner could not evaluate on this host. They are
+**not** failures; each underlying control was verified by hand and recorded in
+`reports/COMPLIANCE-SUMMARY.md`:
+
+- 7 firewall checks (`set_nftables_*`, `*_ufw_*`) — inconclusive on a UFW-backed
+  host; firewall verified active (`ufw status` + live 543-rule `nft` ruleset).
+- 3 filesystem-walk checks (world-writable / unowned / ungroup-owned) — error on
+  Docker's overlay2 layers; verified 0 offending files outside container storage.
+- `all_apparmor_profiles_enforced` — verified 117/117 profiles in enforce mode.
+- `audit_rules_privileged_commands` — verified all setuid/setgid binaries audited.
+
+### Regenerating the L2 tailoring profile
+
+The L2 profile lives in the same tailoring file as L1
+(`ssg-ubuntu2404-tailoring.xml`); regenerate it with `autotailor` using
+`-p ..._cis_level2_server_cloud_vps`, base profile
+`..._cis_level2_server`, and one `-u` per L2 rule id in the table above (plus the
+two `grub2_*` rules). Audit the host with:
+
+```bash
+ansible-playbook -i ansible/hosts scaffold/ansible/audit-openscap.yml \
+  -e openscap_tailoring_profile=xccdf_org.ssgproject.content_profile_cis_level2_server_cloud_vps
+```
+
 ## Container CIS Docker §5 controls
 
 Every app container must carry the §5 block (see

@@ -111,6 +111,20 @@ baseline_shell_umask: "027"
 baseline_faillock_deny: 4
 baseline_faillock_unlock_time: 900
 baseline_faillock_fail_interval: 900
+# CIS L2: also lock the root account on repeated failures (even_deny_root) and
+# give it a finite unlock window so a console-less VPS can't be permanently
+# locked out. Satisfies accounts_passwords_pam_faillock_root_unlock_time.
+baseline_faillock_even_deny_root: true
+baseline_faillock_root_unlock_time: 60
+
+# CIS Level 2 opt-in. When true, baseline-hardening deploys the full CIS L2
+# audit ruleset (files in roles/baseline-hardening/files/cis-l2-audit.d/) and
+# the audit=1/audit_backlog_limit grub args, and ssh-hardening adds
+# `DisableForwarding yes`. Default off so L1-targeting hosts are unaffected;
+# enable per host in the inventory. See docs/08-security-model.md.
+# (When true, ssh-hardening also appends `DisableForwarding yes` to devsec's
+# sshd_custom_options — see roles/ssh-hardening/tasks/main.yml.)
+baseline_cis_l2_audit_rules: false
 baseline_disabled_kernel_modules:
   - cramfs
   - freevxfs
@@ -118,6 +132,13 @@ baseline_disabled_kernel_modules:
   - hfsplus
   - jffs2
   - usb-storage
+  # CIS L2: rarely used filesystems / network protocols. NOTE: do NOT add
+  # 'overlay'/'overlayfs' here — it backs Docker's overlayfs storage driver.
+  - udf
+  - dccp
+  - sctp
+  - rds
+  - tipc
 baseline_timesyncd_ntp_servers:
   - 0.ubuntu.pool.ntp.org
   - 1.ubuntu.pool.ntp.org

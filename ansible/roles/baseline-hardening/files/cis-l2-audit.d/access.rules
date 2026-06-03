@@ -1,0 +1,4 @@
+-a always,exit -F arch=b32 -S open -S ftruncate -S creat -S openat -S truncate -F exit=-EACCES -F auid>=1000 -F auid!=unset -F key=access
+-a always,exit -F arch=b64 -S open -S ftruncate -S creat -S openat -S truncate -F exit=-EACCES -F auid>=1000 -F auid!=unset -F key=access
+-a always,exit -F arch=b32 -S open -S ftruncate -S creat -S openat -S truncate -F exit=-EPERM -F auid>=1000 -F auid!=unset -F key=access
+-a always,exit -F arch=b64 -S open -S ftruncate -S creat -S openat -S truncate -F exit=-EPERM -F auid>=1000 -F auid!=unset -F key=access

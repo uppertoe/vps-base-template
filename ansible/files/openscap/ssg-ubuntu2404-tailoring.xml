@@ -48,4 +48,49 @@
 		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_grub2_password" selected="false"/>
 		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_grub2_uefi_password" selected="false"/>
 	</xccdf-1.2:Profile>
+	<xccdf-1.2:Profile id="xccdf_org.ssgproject.content_profile_cis_level2_server_cloud_vps" extends="xccdf_org.ssgproject.content_profile_cis_level2_server">
+		<xccdf-1.2:title override="true">CIS Ubuntu 24.04 L2 Server - vps-scaffold cloud VPS tailoring</xccdf-1.2:title>
+		<!--
+		  L2 cloud-VPS tailoring. Every deselection below is a documented exception
+		  recorded in docs/08-security-model.md. Everything else in CIS L2 Server is
+		  driven to PASS by the scaffold roles (baseline-hardening audit ruleset,
+		  kernel-module blacklist, grub audit args, ssh DisableForwarding, pam/aide).
+		  Keep this list and the exceptions register in lock-step.
+		-->
+		<!-- Separate partitions for /home, /var, /var/log, /var/log/audit, /var/tmp:
+		     a single-root cloud image has one filesystem; creating these requires a
+		     rebuild/repartition. CIS accepts the cloud-resize caveat. N/A. -->
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_partition_for_home" selected="false"/>
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_partition_for_var" selected="false"/>
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_partition_for_var_log" selected="false"/>
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_partition_for_var_log_audit" selected="false"/>
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_partition_for_var_tmp" selected="false"/>
+		<!-- GRUB bootloader passwords: no physical/console access on a managed
+		     hypervisor; setting one risks locking out provider rescue. N/A. -->
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_grub2_password" selected="false"/>
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_grub2_uefi_password" selected="false"/>
+		<!-- Firewall: this host uses UFW (an nftables frontend; live nft ruleset is
+		     active and persistent). CIS's standalone-nftables path and "remove ufw"
+		     rule conflict with that architecture. Accepted. -->
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_package_ufw_removed" selected="false"/>
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_service_nftables_enabled" selected="false"/>
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_nftables_rules_permanent" selected="false"/>
+		<!-- Docker requirements: the overlay module backs Docker's overlayfs storage
+		     driver, and net.ipv4.ip_forward=1 is required for container networking.
+		     Disabling either breaks Docker. Accepted on a Docker host. -->
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_kernel_module_overlayfs_disabled" selected="false"/>
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_sysctl_net_ipv4_ip_forward" selected="false"/>
+		<!-- Passwordless sudo for the deploy user is required for unattended Ansible
+		     provisioning and the ~/deploy release helper. Accepted; compensated by
+		     key-only SSH, single-user access, and auditd rules on sudo/sudoers. -->
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_sudo_require_authentication" selected="false"/>
+		<!-- auditd disk-full / low-space actions: CIS wants single/halt, which would
+		     drop a remote, console-less VPS offline on a full audit disk (self-DoS /
+		     lockout). We keep SUSPEND + SYSLOG and rely on log rotation + monitoring.
+		     Availability-over-strict-CIS exception. -->
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_auditd_data_disk_error_action" selected="false"/>
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_auditd_data_disk_full_action" selected="false"/>
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_auditd_data_retention_admin_space_left_action" selected="false"/>
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_auditd_data_retention_space_left_action" selected="false"/>
+	</xccdf-1.2:Profile>
 </xccdf-1.2:Tailoring>

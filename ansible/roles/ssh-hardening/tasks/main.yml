@@ -3,6 +3,19 @@
 # Variables are set in group_vars/all.yml and passed through automatically.
 # See: https://github.com/dev-sec/ansible-collection-hardening/blob/master/roles/ssh_hardening/README.md
 
+# CIS L2 (sshd_disable_forwarding): devsec writes a self-contained
+# /etc/ssh/sshd_config with NO `Include sshd_config.d/*.conf`, so a drop-in there
+# is never read. Inject DisableForwarding via devsec's own sshd_custom_options
+# (rendered into the real sshd_config) BEFORE the role runs. set_fact outranks the
+# role default so it reliably takes effect. DisableForwarding overrides
+# AllowTcp/Agent/X11/StreamLocal forwarding in one directive.
+- name: Append DisableForwarding to sshd_custom_options for CIS L2
+  ansible.builtin.set_fact:
+    sshd_custom_options: "{{ (sshd_custom_options | default([])) + ['DisableForwarding yes'] }}"
+  when:
+    - baseline_cis_l2_audit_rules | default(false) | bool
+    - "'DisableForwarding yes' not in (sshd_custom_options | default([]))"
+
 - name: Apply SSH hardening via dev-sec.io
   ansible.builtin.include_role:
     name: devsec.hardening.ssh_hardening
@@ -16,3 +29,8 @@
     content: |
       Authorized uses only. Activity may be monitored and reported.
   notify: Restart ssh
+
+# NOTE: devsec writes a self-contained /etc/ssh/sshd_config with NO
+# `Include /etc/ssh/sshd_config.d/*.conf`, so drop-in files there are never read.
+# CIS L2 `DisableForwarding yes` is therefore injected via devsec's own
+# `sshd_custom_options` (group_vars) so it lands in the real sshd_config.

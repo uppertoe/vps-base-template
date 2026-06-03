@@ -5,7 +5,7 @@
 
 - name: Install baseline hardening packages
   ansible.builtin.apt:
-    name: "{{ ['aide', 'apparmor-utils', 'libpam-pwquality', 'rsyslog', 'systemd-timesyncd'] + (['auditd'] if os_auditd_enabled | bool else []) }}"
+    name: "{{ ['aide', 'apparmor-utils', 'libpam-pwquality', 'rsyslog', 'systemd-timesyncd'] + (['auditd', 'audispd-plugins'] if os_auditd_enabled | bool else []) }}"
     state: present
     update_cache: true
 
@@ -36,6 +36,10 @@
           deny = {{ baseline_faillock_deny }}
           fail_interval = {{ baseline_faillock_fail_interval }}
           unlock_time = {{ baseline_faillock_unlock_time }}
+          {% if baseline_faillock_even_deny_root | default(false) | bool %}
+          even_deny_root
+          root_unlock_time = {{ baseline_faillock_root_unlock_time | default(60) }}
+          {% endif %}
 
     - name: Remove nullok from pam_unix auth rules
       ansible.builtin.replace:
@@ -387,7 +391,43 @@
         mode: "0640"
       notify: Restart auditd
       when: os_auditd_enabled | bool
+
+    # CIS Level 2: SSG-derived audit ruleset (time/identity/perm/access/export/
+    # delete/modules/MAC/logins/session/privileged + immutable -e 2). These are
+    # the exact SSG rule files captured from a remediated host, so the OVAL checks
+    # pass. privileged.rules audits every setuid/setgid binary execution.
+    # Changing them after the immutable flag loads needs a reboot to reload.
+    - name: Deploy CIS L2 audit ruleset
+      ansible.builtin.copy:
+        src: "{{ item }}"
+        dest: "/etc/audit/rules.d/{{ item | basename }}"
+        owner: root
+        group: root
+        mode: "0600"
+      loop: "{{ query('fileglob', 'cis-l2-audit.d/*.rules') }}"
+      loop_control:
+        label: "{{ item | basename }}"
+      notify: Restart auditd
+      when:
+        - os_auditd_enabled | bool
+        - baseline_cis_l2_audit_rules | bool
   when: ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
+# CIS L2: AIDE must monitor the audit tooling itself (aide_check_audit_tools).
+- name: Ensure AIDE monitors the audit tools
+  ansible.builtin.blockinfile:
+    path: /etc/aide/aide.conf
+    marker: "# {mark} ANSIBLE MANAGED BLOCK: vps-scaffold audit tools"
+    block: |
+      /usr/sbin/auditctl p+i+n+u+g+s+b+acl+xattrs+sha512
+      /usr/sbin/auditd p+i+n+u+g+s+b+acl+xattrs+sha512
+      /usr/sbin/ausearch p+i+n+u+g+s+b+acl+xattrs+sha512
+      /usr/sbin/aureport p+i+n+u+g+s+b+acl+xattrs+sha512
+      /usr/sbin/autrace p+i+n+u+g+s+b+acl+xattrs+sha512
+      /usr/sbin/augenrules p+i+n+u+g+s+b+acl+xattrs+sha512
+  when:
+    - baseline_enable_aide | bool
+    - baseline_cis_l2_audit_rules | bool
 
 - name: Check whether an AIDE database already exists
   ansible.builtin.stat:
@@ -462,6 +502,22 @@
   notify: Update grub
   when:
     - baseline_enable_apparmor_boot | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
+# CIS L2: enable the kernel audit subsystem at boot and size its backlog so
+# events queued before auditd starts are not lost. Satisfies
+# grub2_audit_argument + grub2_audit_backlog_limit_argument.
+- name: Configure kernel audit at boot via grub drop-in
+  ansible.builtin.copy:
+    dest: /etc/default/grub.d/99-vps-scaffold-audit.cfg
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      GRUB_CMDLINE_LINUX="$GRUB_CMDLINE_LINUX audit=1 audit_backlog_limit=8192"
+  notify: Update grub
+  when:
+    - baseline_cis_l2_audit_rules | bool
     - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
 
 - name: Ensure modprobe.d directory exists

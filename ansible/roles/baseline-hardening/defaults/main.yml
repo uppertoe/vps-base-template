@@ -39,5 +39,8 @@ baseline_docker_audit_watch_candidates:
   - /usr/lib/systemd/system/docker.service
   - /lib/systemd/system/docker.socket
   - /usr/lib/systemd/system/docker.socket
-  - /var/run/docker.sock
-  - /run/containerd/containerd.sock
+  # NOTE: runtime sockets (/var/run/docker.sock, /run/containerd/containerd.sock)
+  # are intentionally NOT watched. They do not exist when augenrules runs early
+  # at boot, so a -w watch on them makes `augenrules --load` abort with
+  # "No such file or directory", silently dropping every rule after it. Watch the
+  # unit files and binaries instead.

@@ -51,6 +51,9 @@ services:
       - caddy
     environment:
       - DOMAIN=${DOMAIN}
+      # Let's Encrypt contact (optional but recommended; enables expiry notices).
+      # Without it Caddy registers a bogus contact that LE rejects. From .env.
+      - ACME_EMAIL=${ACME_EMAIL:-}
     command: ["/bin/sh", "/usr/local/bin/run-caddy.sh"]
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:2019/config/ || exit 1"]

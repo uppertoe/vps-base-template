@@ -44,3 +44,18 @@ baseline_docker_audit_watch_candidates:
   # at boot, so a -w watch on them makes `augenrules --load` abort with
   # "No such file or directory", silently dropping every rule after it. Watch the
   # unit files and binaries instead.
+
+# Paths AIDE must NOT file-integrity-monitor. The Debian aide.conf's root rule
+# (/ 0 Full) recursively hashes the whole filesystem, which on a container host
+# includes /var/lib/docker -- image layers, writable container state, and app
+# volume data (Postgres/SQLite). Those change on every image pull, container
+# start, deploy, and DB write, so monitoring them floods the nightly check with
+# diffs and causes alert fatigue, defeating AIDE's purpose (catching tampering
+# of the HOST: /etc, /usr, /bin, /boot, kernel). Image integrity is covered by
+# digest pinning, not by hashing unpacked layers. AIDE matches by longest path,
+# so these '!' rules override '/ 0 Full'.
+# Note: /opt/deploy is intentionally NOT excluded -- it is low-churn deploy
+# config worth tripwiring; re-baseline (aide --init) after a deploy.
+baseline_aide_exclude_paths:
+  - /var/lib/docker
+  - /var/lib/containerd

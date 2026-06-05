@@ -443,6 +443,24 @@
     - baseline_enable_aide | bool
     - baseline_cis_l2_audit_rules | bool
 
+# Detection hygiene on a container host: stop AIDE hashing the volatile container
+# trees (see baseline_aide_exclude_paths) so the nightly check tripwires the host
+# and stays quiet through deploys/DB writes. AIDE matches by longest path, so
+# these '!' rules win over the aide.conf.d '/ 0 Full' root rule.
+- name: Exclude volatile container paths from AIDE
+  ansible.builtin.blockinfile:
+    path: /etc/aide/aide.conf
+    marker: "# {mark} ANSIBLE MANAGED BLOCK: vps-scaffold AIDE exclusions"
+    block: |
+      {% for p in baseline_aide_exclude_paths %}
+      !{{ p }}
+      {% endfor %}
+  register: baseline_aide_exclusions
+  when:
+    - baseline_enable_aide | bool
+    - baseline_aide_exclude_paths | length > 0
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
 - name: Check whether an AIDE database already exists
   ansible.builtin.stat:
     path: /var/lib/aide/aide.db
@@ -475,6 +493,24 @@
     - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
     - not aide_db_file.stat.exists
     - not aide_db_gz_file.stat.exists
+
+# When the exclusion set changes on an already-baselined host, rebuild the
+# database so the new rules take effect (the first-run init above covers fresh
+# hosts). `aide --init` is used directly to avoid the aideinit wrapper's
+# /var/log/aide permission quirk on re-baseline.
+- name: Re-baseline AIDE database after exclusion change
+  ansible.builtin.shell: |
+    set -eu
+    aide --config=/etc/aide/aide.conf --init
+    if [ -f /var/lib/aide/aide.db.new ]; then cp -f /var/lib/aide/aide.db.new /var/lib/aide/aide.db; fi
+    if [ -f /var/lib/aide/aide.db.new.gz ]; then cp -f /var/lib/aide/aide.db.new.gz /var/lib/aide/aide.db.gz; fi
+  changed_when: true
+  when:
+    - baseline_enable_aide | bool
+    - baseline_aide_exclusions is defined
+    - baseline_aide_exclusions.changed | default(false)
+    - aide_db_file.stat.exists or aide_db_gz_file.stat.exists
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
 
 # Ubuntu's aide package ships dailyaidecheck.service/.timer (masked by default).
 # Enabling the timer satisfies CIS aide_periodic_checking_systemd_timer and runs

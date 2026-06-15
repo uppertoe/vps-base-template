@@ -56,7 +56,11 @@ services:
       - ACME_EMAIL=${ACME_EMAIL:-}
     command: ["/bin/sh", "/usr/local/bin/run-caddy.sh"]
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:2019/config/ || exit 1"]
+      # Read the body to completion (-O /dev/null), don't --spider it: spider
+      # closes the socket after headers, before Caddy finishes streaming the
+      # /config/ JSON, so every probe logged a write "broken pipe" admin.api
+      # error. Same health semantics (exit 0 only on 200), no log spam.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:2019/config/ || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 3

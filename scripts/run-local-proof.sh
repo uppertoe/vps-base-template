@@ -137,7 +137,7 @@ docker run -d --name proof-caddy \
   --memory 256m --pids-limit 256 \
   -v proof_data:/data -v proof_config:/config \
   -v /tmp/proof.Caddyfile:/etc/caddy/Caddyfile:ro \
-  --health-cmd "wget -q --spider http://127.0.0.1:2019/config/ || exit 1" \
+  --health-cmd "wget -q -O /dev/null http://127.0.0.1:2019/config/ || exit 1" \
   --health-interval 3s "${CADDY_REF:-caddy:2-alpine}" \
   caddy run --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null
 docker run -d --name proof-bad nginx:alpine >/dev/null 2>&1 || true

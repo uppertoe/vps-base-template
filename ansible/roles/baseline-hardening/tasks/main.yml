@@ -416,13 +416,62 @@
 # CIS L2 / detection: run the daily AIDE job in 'check' mode (not 'update'), so a
 # detected change keeps alerting on every run until an operator acknowledges it
 # with `aide --update`. 'update' silently re-baselines after one report, which
-# can mask a slow attacker. dailyaidecheck --systemdservice exits non-zero on
-# changes, so the notify role's OnFailure hook pushes an alert.
+# can mask a slow attacker.
+#
+# NOTE: the Debian `dailyaidecheck --systemdservice` wrapper exits 0 even when
+# AIDE finds changes (it reports via its log, not its exit status), so on its own
+# the notify role's OnFailure hook never fires. The ExecStartPost drop-in below
+# re-asserts AIDE's finding as the unit's exit status to make that hook work.
 - name: Run the daily AIDE job in check (not update) mode
   ansible.builtin.lineinfile:
     path: /etc/default/aide
     regexp: '^COMMAND='
     line: 'COMMAND=check'
+  when:
+    - baseline_enable_aide | bool
+    - baseline_cis_l2_audit_rules | bool
+
+# Bridge the wrapper's exit-0-on-change behaviour to the notify role's OnFailure
+# hook: an ExecStartPost that fails the unit when AIDE's latest report shows
+# differences, turning a detected change into the failed state that
+# OnFailure=notify@… pushes an ntfy alert for. (A real scan error already fails
+# the wrapper's ExecStart, so this only fires on a clean-but-changed run.)
+- name: Install AIDE change-detection ExecStartPost helper
+  ansible.builtin.copy:
+    src: aide-fail-on-change
+    dest: /usr/local/bin/aide-fail-on-change
+    owner: root
+    group: root
+    mode: "0755"
+  when:
+    - baseline_enable_aide | bool
+    - baseline_cis_l2_audit_rules | bool
+
+- name: Ensure dailyaidecheck.service drop-in directory exists
+  ansible.builtin.file:
+    path: /etc/systemd/system/dailyaidecheck.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when:
+    - baseline_enable_aide | bool
+    - baseline_cis_l2_audit_rules | bool
+
+- name: Fail dailyaidecheck on detected changes so the OnFailure push fires
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/dailyaidecheck.service.d/failonchange.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Managed by Ansible (baseline-hardening role)
+      # The dailyaidecheck wrapper exits 0 even when AIDE finds changes; re-assert
+      # that finding as the unit's exit status so OnFailure=notify@… (notify role)
+      # pushes an alert. See /usr/local/bin/aide-fail-on-change.
+      [Service]
+      ExecStartPost=/usr/local/bin/aide-fail-on-change
+  notify: Reload systemd daemon
   when:
     - baseline_enable_aide | bool
     - baseline_cis_l2_audit_rules | bool

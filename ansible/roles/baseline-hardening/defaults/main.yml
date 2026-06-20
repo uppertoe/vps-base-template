@@ -46,16 +46,40 @@ baseline_docker_audit_watch_candidates:
   # unit files and binaries instead.
 
 # Paths AIDE must NOT file-integrity-monitor. The Debian aide.conf's root rule
-# (/ 0 Full) recursively hashes the whole filesystem, which on a container host
-# includes /var/lib/docker -- image layers, writable container state, and app
-# volume data (Postgres/SQLite). Those change on every image pull, container
-# start, deploy, and DB write, so monitoring them floods the nightly check with
-# diffs and causes alert fatigue, defeating AIDE's purpose (catching tampering
-# of the HOST: /etc, /usr, /bin, /boot, kernel). Image integrity is covered by
-# digest pinning, not by hashing unpacked layers. AIDE matches by longest path,
-# so these '!' rules override '/ 0 Full'.
-# Note: /opt/deploy is intentionally NOT excluded -- it is low-churn deploy
-# config worth tripwiring; re-baseline (aide --init) after a deploy.
+# (/ 0 Full) recursively hashes the WHOLE filesystem -- including large volatile
+# trees that change every hour/day from normal operation. Once a detected change
+# actually alerts (see the notify role's OnFailure hook + the dailyaidecheck
+# ExecStartPost that fails the unit on changes), hashing those trees floods ntfy
+# with noise and buries a real tampering signal -- defeating AIDE's purpose.
+#
+# AIDE's job here is to tripwire the STABLE, security-relevant host: binaries and
+# config in /etc, /usr, /bin, /sbin, /lib*, /boot, plus /var/spool/cron (cron
+# persistence), /opt/deploy (deploy config), and /home|/root dotfiles like
+# .ssh/authorized_keys -- ALL of which stay monitored. The excluded trees below
+# hold only mutable state with no stable baseline to tripwire against:
+#   /run          tmpfs -- ephemeral runtime state (sockets/pids), wiped at boot.
+#   /tmp,/var/tmp scratch space.
+#   /var/cache    regenerable caches (apt, swcatalog, restic's backup cache --
+#                 rewritten on every scheduled backup).
+#   /root/.cache  per-user caches (restic also caches the backup index here).
+#   /var/log      append-only logs; their integrity is auditd's (immutable -e 2)
+#                 and log shipping's job, not a file-hash baseline's.
+#   /var/backups  daily dpkg metadata rotations.
+#   /var/lib      mutable daemon/package state: docker image layers + writable
+#                 container state + app volume DBs (Postgres/SQLite), apt/dpkg,
+#                 systemd timer stamps, fail2ban bans, AIDE's own db, fwupd, etc.
+#                 None are stable tripwire targets; an installed-backdoor still
+#                 shows up in /usr|/bin (monitored) and the audit log.
+# AIDE matches by longest path, so these '!' rules override '/ 0 Full' (and the
+# stock narrower include rules under these trees still win where present).
+# Re-baseline (aide --init) after a legitimate change to a monitored tree, e.g.
+# a deploy that touches /opt/deploy.
 baseline_aide_exclude_paths:
-  - /var/lib/docker
-  - /var/lib/containerd
+  - /run
+  - /tmp
+  - /var/tmp
+  - /var/cache
+  - /root/.cache
+  - /var/log
+  - /var/backups
+  - /var/lib

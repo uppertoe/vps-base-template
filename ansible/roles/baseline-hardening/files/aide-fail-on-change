@@ -1,0 +1,31 @@
+#!/bin/bash
+# aide-fail-on-change — ExecStartPost for dailyaidecheck.service.
+#
+# The Debian `dailyaidecheck --systemdservice` wrapper exits 0 even when AIDE
+# detects changes: it reports via its log (and, if configured, mail), not via
+# exit status. So the unit never enters a "failed" state, and its OnFailure=
+# push hook never fires — which is why nightly AIDE diffs were silent.
+#
+# This re-asserts AIDE's own finding as the unit's exit status: non-zero when
+# the latest report shows differences, which trips OnFailure=notify@… (notify
+# role) → ntfy push.
+#
+# A genuine scan error (missing DB, lock contention, …) already fails the
+# wrapper itself, so ExecStart fails and this ExecStartPost never runs — that
+# path still alerts via OnFailure. Hence here we only distinguish changed vs
+# unchanged on an otherwise-clean run.
+set -u
+
+log="/var/log/aide/aide.log"
+
+# No readable report → don't manufacture a failure (let a clean run stay clean).
+[ -r "$log" ] || exit 0
+
+# AIDE 0.18 prints exactly one of:
+#   "AIDE found differences between database and filesystem!!"    (changes)
+#   "AIDE found NO differences between database and filesystem…"  (clean)
+# Anchor on the change line so the "NO differences" line cannot match.
+if grep -qE '^AIDE found differences between database and filesystem' "$log"; then
+    exit 1   # changes detected → fail unit → OnFailure → ntfy
+fi
+exit 0

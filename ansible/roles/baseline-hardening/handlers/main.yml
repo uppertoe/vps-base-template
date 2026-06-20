@@ -20,3 +20,7 @@
 - name: Update grub
   ansible.builtin.command: update-grub
   changed_when: true
+
+- name: Reload systemd daemon
+  ansible.builtin.systemd:
+    daemon_reload: true

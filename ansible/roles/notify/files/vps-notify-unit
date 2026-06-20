@@ -5,16 +5,27 @@ set -u
 unit="${1:?usage: vps-notify-unit <unit>}"
 
 # dailyaidecheck failing almost always means AIDE detected file changes (or the
-# scan itself errored) — give it a clearer title.
+# scan itself errored) — give it a clearer title, and surface AIDE's own change
+# summary, since the unit's systemd status/journal won't say *what* changed.
 case "$unit" in
-  dailyaidecheck.service) title="AIDE: file integrity check reported a problem ($unit)";;
+  dailyaidecheck.service)
+    title="AIDE: file integrity changes detected ($unit)"
+    body="$(sed -n '/^AIDE found differences between database and filesystem/,$p' \
+              /var/log/aide/aide.log 2>/dev/null \
+            | grep -E 'found differences|Total number of entries|Added entries|Removed entries|Changed entries' \
+            | head -8)"
+    ;;
   backup.service)         title="Backup FAILED ($unit)";;
   backup-verify.service)  title="Backup verification FAILED ($unit)";;
   *)                      title="Unit failed: $unit";;
 esac
 
-body="$(systemctl status "$unit" --no-pager -n 15 2>/dev/null | sed -n '1,25p')"
-[ -z "$body" ] && body="$(journalctl -u "$unit" -n 15 --no-pager 2>/dev/null)"
+# Fall back to the unit's systemd status/journal (e.g. an AIDE scan error, which
+# leaves no change summary, or any other failed unit).
+if [ -z "${body:-}" ]; then
+  body="$(systemctl status "$unit" --no-pager -n 15 2>/dev/null | sed -n '1,25p')"
+  [ -z "$body" ] && body="$(journalctl -u "$unit" -n 15 --no-pager 2>/dev/null)"
+fi
 
 /usr/local/bin/vps-notify "$title" "$body" high "rotating_light"
 exit 0

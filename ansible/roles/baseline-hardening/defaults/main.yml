@@ -70,6 +70,15 @@ baseline_docker_audit_watch_candidates:
 #                 systemd timer stamps, fail2ban bans, AIDE's own db, fwupd, etc.
 #                 None are stable tripwire targets; an installed-backdoor still
 #                 shows up in /usr|/bin (monitored) and the audit log.
+#   /etc/ufw/user.rules, /etc/ufw/user6.rules
+#                 ufw's DYNAMIC ruleset -- rewritten by every `ufw` command and,
+#                 critically, by fail2ban's `ufw` banaction on every ban/unban of
+#                 an SSH brute-forcer (constant on an internet-facing host). The
+#                 admin-maintained firewall POLICY (before*.rules, after*.rules,
+#                 /etc/default/ufw) is NOT excluded and stays tripwired; auditd
+#                 separately logs firewall-config syscalls. Keeping fail2ban->ufw
+#                 (rather than a second nft firewall) is the CIS-aligned single-
+#                 firewall model.
 # AIDE matches by longest path, so these '!' rules override '/ 0 Full' (and the
 # stock narrower include rules under these trees still win where present).
 # Re-baseline (aide --init) after a legitimate change to a monitored tree, e.g.
@@ -83,3 +92,17 @@ baseline_aide_exclude_paths:
   - /var/log
   - /var/backups
   - /var/lib
+  - /etc/ufw/user.rules
+  - /etc/ufw/user6.rules
+
+# Raw aide.conf rule lines (not exclusions) written verbatim into a managed block.
+# Use for per-node rule overrides that '!' exclusion can't express.
+#   =/ VarDir   The root '/' inode's mtime/ctime flap daily: cron runs jobs via
+#               `cd / && run-parts ...`, so a daily maintenance job momentarily
+#               drops a working file in '/', bumping the directory timestamp with
+#               no persistent change. '=' restricts the rule to the '/' node only
+#               (non-recursive), and VarDir checks owner/perms/inode/xattrs but
+#               NOT mtime/ctime -- so '/' contents stay fully monitored under
+#               '/ 0 Full', only the harmless timestamp flap is ignored.
+baseline_aide_rule_overrides:
+  - "=/ VarDir"

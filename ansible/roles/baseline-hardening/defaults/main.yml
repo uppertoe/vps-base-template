@@ -54,9 +54,9 @@ baseline_docker_audit_watch_candidates:
 #
 # AIDE's job here is to tripwire the STABLE, security-relevant host: binaries and
 # config in /etc, /usr, /bin, /sbin, /lib*, /boot, plus /var/spool/cron (cron
-# persistence), /opt/deploy (deploy config), and /home|/root dotfiles like
-# .ssh/authorized_keys -- ALL of which stay monitored. The excluded trees below
-# hold only mutable state with no stable baseline to tripwire against:
+# persistence), /opt/deploy's WORKING TREE (deployed config), and /home|/root
+# dotfiles like .ssh/authorized_keys -- ALL of which stay monitored. The excluded
+# trees below hold only mutable state with no stable baseline to tripwire against:
 #   /run          tmpfs -- ephemeral runtime state (sockets/pids), wiped at boot.
 #   /tmp,/var/tmp scratch space.
 #   /var/cache    regenerable caches (apt, swcatalog, restic's backup cache --
@@ -79,10 +79,18 @@ baseline_docker_audit_watch_candidates:
 #                 separately logs firewall-config syscalls. Keeping fail2ban->ufw
 #                 (rather than a second nft firewall) is the CIS-aligned single-
 #                 firewall model.
+#   /opt/deploy/.git  the deploy clone's git plumbing (objects/refs/FETCH_HEAD).
+#                 It churns on every `git fetch`/`pull` -- which only updates
+#                 .git, NOT the checked-out files -- so monitoring it alerts on
+#                 routine fetches that change no deployed content. The WORKING
+#                 TREE (/opt/deploy/<files>, incl. the scaffold submodule's
+#                 checkout) stays monitored, so an actual deploy or tampering
+#                 with deployed config still tripwires. Re-baseline after a real
+#                 deploy that changes the working tree.
 # AIDE matches by longest path, so these '!' rules override '/ 0 Full' (and the
 # stock narrower include rules under these trees still win where present).
 # Re-baseline (aide --init) after a legitimate change to a monitored tree, e.g.
-# a deploy that touches /opt/deploy.
+# a deploy that touches /opt/deploy's working tree.
 baseline_aide_exclude_paths:
   - /run
   - /tmp
@@ -94,6 +102,7 @@ baseline_aide_exclude_paths:
   - /var/lib
   - /etc/ufw/user.rules
   - /etc/ufw/user6.rules
+  - /opt/deploy/.git
 
 # Raw aide.conf rule lines (not exclusions) written verbatim into a managed block.
 # Use for per-node rule overrides that '!' exclusion can't express.

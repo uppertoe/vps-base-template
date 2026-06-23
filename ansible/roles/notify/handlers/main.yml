@@ -2,3 +2,13 @@
 - name: Reload systemd
   ansible.builtin.systemd_service:
     daemon_reload: true
+
+# auditd.service defines no ExecReload, and its rules are immutable (-e 2) once
+# loaded, so a restart would re-run augenrules (noisy, and could trip auditd's
+# own OnFailure hook). SIGHUP makes auditd re-scan plugins.d and (re)start the
+# audit->ntfy plugin WITHOUT touching the kernel rules -- the safe reload path.
+- name: Reload auditd plugins
+  ansible.builtin.command: pkill -HUP -x auditd
+  register: _auditd_hup
+  changed_when: false
+  failed_when: _auditd_hup.rc not in [0, 1]

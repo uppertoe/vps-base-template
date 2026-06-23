@@ -77,3 +77,36 @@
       OnFailure=notify@%n.service
   loop: "{{ notify_existing_units }}"
   notify: Reload systemd
+
+# Real-time audit -> ntfy bridge. auditd already watches the crown-jewel config
+# paths (sshd_config, sudoers, passwd/shadow) in real time, but its events only
+# accrue in the audit log -- the daily AIDE sweep would otherwise be first to
+# notice, up to 24h later. This dispatcher plugin pushes the high-value, curated
+# events to ntfy the instant they happen, complementing (not replacing) AIDE.
+# Only meaningful where auditd is present.
+- name: Install the audit->ntfy bridge plugin
+  ansible.builtin.copy:
+    src: audit-notify
+    dest: /usr/local/bin/audit-notify
+    owner: root
+    group: root
+    mode: "0755"
+  notify: Reload auditd plugins
+  when: "'auditd.service' in notify_existing_units"
+
+- name: Register audit-notify as an auditd dispatcher plugin
+  ansible.builtin.copy:
+    dest: /etc/audit/plugins.d/audit-notify.conf
+    owner: root
+    group: root
+    mode: "0640"
+    content: |
+      # Managed by Ansible (notify role) -- push high-value audit events to ntfy.
+      # See /usr/local/bin/audit-notify.
+      active = yes
+      direction = out
+      path = /usr/local/bin/audit-notify
+      type = always
+      format = string
+  notify: Reload auditd plugins
+  when: "'auditd.service' in notify_existing_units"

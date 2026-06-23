@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+# audit-notify — auditd dispatcher plugin: push an ntfy alert (via vps-notify)
+# the moment auditd records a write to a curated set of high-value config keys.
+#
+# WHY: auditd already watches the crown-jewel paths (sshd_config, sudoers,
+# passwd/shadow, ...) in real time, but its events only accrue in the audit log
+# — nothing alerts. AIDE's daily sweep would catch the same change up to 24h
+# later. This bridges auditd's real-time signal to ntfy for the events that
+# actually matter (SSH/sudo/account tampering), complementing — not replacing —
+# the daily AIDE check.
+#
+# HOW: auditd's dispatcher pipes every enriched record (format=string) to this
+# program's stdin (see /etc/audit/plugins.d/audit-notify.conf). We filter to the
+# curated keys, coalesce write-bursts per category, and fire vps-notify. It must
+# never block the audit pipe or crash on a bad record, so: filter fast, notify
+# fire-and-forget, swallow all per-record errors.
+#
+# DESIGN NOTES
+# - Curated keys only. Deliberately NOT the high-volume 'privileged' (every
+#   sudo) or 'docker' (every package update) keys — those would be pure noise.
+#   The keys below match the CIS/SSG + scaffold auditd watch rules' -k values.
+# - Legitimate admin changes DO alert (by design — you want to know config
+#   changed, then acknowledge). The COOLDOWN collapses an editor's write-burst.
+# - Runs as root (auditd child), so it can read /etc/vps-scaffold/notify.env.
+import sys
+import time
+import pwd
+import subprocess
+import syslog
+
+VPS_NOTIFY = "/usr/local/bin/vps-notify"
+COOLDOWN = 300  # seconds; one alert per category per window (collapses bursts)
+
+# auditd watch -k key  ->  human category shown in the alert.
+KEY_CATEGORY = {
+    "sshd": "SSH server config",
+    "scope": "sudo policy",
+    "actions": "sudo policy",
+    "audit_rules_usergroup_modification": "user/group accounts",
+    "identity": "identity files (passwd/shadow/group)",
+}
+
+_last = {}  # category -> last alert epoch (in-memory; resets on auditd reload)
+
+
+def username(value):
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if n < 0 or n == 0xFFFFFFFF:
+        return "unset"
+    try:
+        return pwd.getpwuid(n).pw_name
+    except KeyError:
+        return str(n)
+
+
+def field(record, name):
+    tag = name + "="
+    for tok in record.split():
+        if tok.startswith(tag):
+            return tok[len(tag):].strip('"')
+    return None
+
+
+def notify(title, body):
+    # Fire-and-forget: a slow ntfy POST must not back up the audit pipe.
+    try:
+        subprocess.Popen(
+            [VPS_NOTIFY, title, body, "high", "rotating_light,lock"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        pass
+
+
+def handle(line):
+    if "type=SYSCALL" not in line:
+        return
+    key = field(line, "key")
+    if not key:
+        return
+    # key may hold several keys joined by the audit field separator (\x01).
+    cats = {KEY_CATEGORY[k]
+            for k in key.replace("\x01", " ").split()
+            if k in KEY_CATEGORY}
+    if not cats:
+        return
+    if field(line, "success") == "no":
+        return  # blocked attempt; the watch is on success here
+
+    auid = username(field(line, "auid"))
+    uid = username(field(line, "uid"))
+    comm = field(line, "comm") or "?"
+    exe = field(line, "exe") or "?"
+    now = time.time()
+    for cat in sorted(cats):
+        if now - _last.get(cat, 0) < COOLDOWN:
+            continue
+        _last[cat] = now
+        title = "audit: %s changed" % cat
+        body = ("A watched file (%s) was modified.\n"
+                "user=%s (acting as %s) via %s [%s]\n"
+                "Detail: sudo ausearch -k <key> -ts recent | aureport -f -i"
+                % (cat, auid, uid, comm, exe))
+        notify(title, body)
+        syslog.syslog(syslog.LOG_WARNING,
+                      "audit-notify: alerted on '%s' (user=%s comm=%s)"
+                      % (cat, auid, comm))
+
+
+def main():
+    syslog.openlog("audit-notify", syslog.LOG_PID, syslog.LOG_AUTHPRIV)
+    # Line-by-line so a tamper event is delivered promptly, not buffer-delayed.
+    for line in iter(sys.stdin.readline, ""):
+        try:
+            handle(line)
+        except Exception:
+            pass  # never die on a malformed record
+
+
+if __name__ == "__main__":
+    main()

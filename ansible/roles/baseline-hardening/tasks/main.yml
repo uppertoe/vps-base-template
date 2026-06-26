@@ -599,6 +599,82 @@
     - baseline_enable_aide | bool
     - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
 
+# Acknowledge legitimate package-driven change automatically. Package upgrades
+# touch /usr/bin, /usr/lib, etc. -- the core paths AIDE protects, which must NOT
+# be excluded -- so instead re-baseline AFTER apt (the trusted, signed change
+# channel). A dpkg Post-Invoke hook resets a 20-min timer; one re-baseline fires
+# once apt settles. Non-package tampering runs no apt and still alerts.
+- name: Install AIDE re-baseline helper
+  ansible.builtin.copy:
+    src: aide-rebaseline
+    dest: /usr/local/bin/aide-rebaseline
+    owner: root
+    group: root
+    mode: "0755"
+  when:
+    - baseline_enable_aide | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
+- name: Install AIDE re-baseline service + debounce timer
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/{{ item.name }}"
+    owner: root
+    group: root
+    mode: "0644"
+    content: "{{ item.content }}"
+  loop:
+    - name: aide-rebaseline.service
+      content: |
+        # Managed by Ansible (baseline-hardening role)
+        [Unit]
+        Description=Rebuild the AIDE baseline (acknowledge legitimate changes)
+        After=dailyaidecheck.service
+        [Service]
+        Type=oneshot
+        ExecStart=/usr/local/bin/aide-rebaseline
+        Nice=15
+        IOSchedulingClass=idle
+    - name: aide-rebaseline-after-apt.timer
+      content: |
+        # Managed by Ansible (baseline-hardening role) -- started/reset by the
+        # apt Post-Invoke hook; fires 20 min after the last dpkg operation.
+        [Unit]
+        Description=Debounced AIDE re-baseline after apt package changes
+        [Timer]
+        OnActiveSec=20min
+        AccuracySec=1min
+        Unit=aide-rebaseline.service
+  loop_control:
+    label: "{{ item.name }}"
+  notify: Reload systemd daemon
+  when:
+    - baseline_enable_aide | bool
+    - baseline_aide_rebaseline_on_apt | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
+- name: Wire apt to re-baseline AIDE after package changes
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/80aide-rebaseline
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      // Managed by Ansible (baseline-hardening role). Re-baseline AIDE after
+      // package changes so legitimate upgrades don't trip the daily check.
+      // Debounced via the aide-rebaseline-after-apt timer; tampering runs no apt.
+      DPkg::Post-Invoke { "if [ -x /usr/local/bin/aide-rebaseline ] && [ -f /var/lib/aide/aide.db ]; then systemctl restart aide-rebaseline-after-apt.timer >/dev/null 2>&1 || true; fi"; };
+  when:
+    - baseline_enable_aide | bool
+    - baseline_aide_rebaseline_on_apt | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
+- name: Remove apt re-baseline hook when disabled
+  ansible.builtin.file:
+    path: /etc/apt/apt.conf.d/80aide-rebaseline
+    state: absent
+  when:
+    - not (baseline_aide_rebaseline_on_apt | bool)
+
 - name: Create grub drop-in directory
   ansible.builtin.file:
     path: /etc/default/grub.d

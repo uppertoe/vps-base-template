@@ -1,0 +1,21 @@
+#!/bin/bash
+# aide-rebaseline — rebuild the AIDE baseline to acknowledge legitimate changes.
+#
+# The daily AIDE check runs in 'check' (not 'update') mode, so a real change
+# keeps alerting until acknowledged. The dominant source of legitimate change on
+# a patched host is PACKAGE UPGRADES (e.g. unattended-upgrades touching /usr/bin,
+# /usr/lib): those must NOT be whitelisted away — excluding /usr/bin would blind
+# the tripwire to a backdoored binary, the exact thing AIDE exists to catch.
+# Instead, treat apt as the trusted change channel: re-baseline AFTER package
+# operations (see /etc/apt/apt.conf.d/80aide-rebaseline, debounced via the
+# aide-rebaseline-after-apt timer). Non-package tampering runs no apt, so it
+# never triggers a re-baseline here and still alerts; auditd also catches
+# config-path writes in real time.
+#
+# Idle CPU/IO priority is set by the unit. Idempotent.
+set -eu
+
+aide --config=/etc/aide/aide.conf --init
+[ -f /var/lib/aide/aide.db.new ]    && cp -f /var/lib/aide/aide.db.new    /var/lib/aide/aide.db
+[ -f /var/lib/aide/aide.db.new.gz ] && cp -f /var/lib/aide/aide.db.new.gz /var/lib/aide/aide.db.gz
+logger -t aide-rebaseline "AIDE baseline rebuilt"

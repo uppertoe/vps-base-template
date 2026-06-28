@@ -37,9 +37,26 @@ find /srv/repo/apps -mindepth 2 -maxdepth 2 -type f -name '*.caddy' | sort | whi
 
       print $0 >> target
 
-      # Inject default response compression into each top-level site block.
+      # Inject per-site defaults into each top-level site block: response
+      # compression, and persistent JSON access logging. Without the log block a
+      # site records nothing (only Caddy's own process log reaches stdout), and
+      # stdout-based access logs are wiped whenever the container is recreated --
+      # exactly when a before/after comparison is most wanted. All sites write to
+      # one rolled file on the caddy_logs volume; Caddy shares a single writer
+      # per path, so concurrent sites rotate it safely. Retention is 90 days
+      # (roll_keep_for 2160h), also capped by size so the volume cannot fill. The
+      # Cookie header and POST bodies are never logged, so OTP codes, emails and
+      # session tokens stay off disk; client IPs and request URIs are recorded.
       if (depth == 0 && target == site && line ~ /\{[[:space:]]*$/ && substr(trimmed, 1, 1) != "(") {
         print "    encode zstd gzip" >> target
+        print "    log {" >> target
+        print "        output file /var/log/caddy/access.log {" >> target
+        print "            roll_size 20MiB" >> target
+        print "            roll_keep 12" >> target
+        print "            roll_keep_for 2160h" >> target
+        print "        }" >> target
+        print "        format json" >> target
+        print "    }" >> target
       }
 
       depth += opens - closes

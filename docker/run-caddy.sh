@@ -39,7 +39,7 @@ find /srv/repo/apps -mindepth 2 -maxdepth 2 -type f -name '*.caddy' | sort | whi
 
       # Inject per-site defaults into each top-level site block: response
       # compression, and persistent JSON access logging. Without the log block a
-      # site records nothing (only Caddy's own process log reaches stdout), and
+      # site records nothing (only the Caddy process log reaches stdout), and
       # stdout-based access logs are wiped whenever the container is recreated --
       # exactly when a before/after comparison is most wanted. All sites write to
       # one rolled file on the caddy_logs volume; Caddy shares a single writer

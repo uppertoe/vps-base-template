@@ -12,7 +12,7 @@ current — it is the first artifact a privacy review requests.
 | VPS | ⟨provider⟩ | ⟨e.g. US-owned; AU subsidiary⟩ | ⟨e.g. Sydney, AU⟩ | ⟨IRAP-assessed? HCF-certified?⟩ |
 | Backups (restic) | ⟨S3-compatible provider⟩ | ⟨…⟩ | ⟨bucket region⟩ | client-side encrypted (restic AES-256) before upload |
 | Transactional email | ⟨e.g. AWS SES⟩ | ⟨…⟩ | ⟨region⟩ | OTP emails contain addresses, no clinical data |
-| External monitor | ⟨e.g. Healthchecks.io⟩ | ⟨…⟩ | ⟨…⟩ | receives heartbeats only, no payload data |
+| External monitor | ⟨e.g. self-hosted Gatus on ⟨machine⟩⟩ | ⟨…⟩ | ⟨…⟩ | receives heartbeats only, no payload data |
 | DNS / registrar | ⟨…⟩ | ⟨…⟩ | — | metadata only |
 
 Administration is performed from: ⟨Australia only? note any offshore admin —

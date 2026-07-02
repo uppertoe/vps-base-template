@@ -1,9 +1,16 @@
 #!/bin/bash
 # vps-deadman — ping an external dead-man's-switch monitor.
 #
-# Reads DEADMAN_URL from /etc/vps-scaffold/notify.env. The monitor alarms when
-# pings STOP arriving, so a failed ping needs no local alerting: the silence
-# itself is the signal. Exits non-zero on failure so the journal records it.
+# Reads DEADMAN_URL (and optional DEADMAN_TOKEN) from
+# /etc/vps-scaffold/notify.env. The monitor alarms when pings STOP arriving,
+# so a failed ping needs no local alerting: the silence itself is the signal.
+# Exits non-zero on failure so the journal records it.
+#
+# Two receiver dialects:
+#   - DEADMAN_TOKEN set   → POST with "Authorization: Bearer <token>"
+#     (Gatus external endpoint: .../api/v1/endpoints/<group>_<name>/external?success=true)
+#   - DEADMAN_TOKEN empty → plain GET
+#     (Healthchecks / Uptime Kuma push URLs, which embed their token in the URL)
 set -u
 
 CONF="${VPS_NOTIFY_CONF:-/etc/vps-scaffold/notify.env}"
@@ -11,6 +18,11 @@ CONF="${VPS_NOTIFY_CONF:-/etc/vps-scaffold/notify.env}"
 [ -r "$CONF" ] && . "$CONF"
 
 DEADMAN_URL="${DEADMAN_URL:-}"
+DEADMAN_TOKEN="${DEADMAN_TOKEN:-}"
 [ -z "$DEADMAN_URL" ] && exit 0   # not configured → no-op
 
+if [ -n "$DEADMAN_TOKEN" ]; then
+  exec curl -fsS --max-time 15 --retry 3 -o /dev/null \
+    -X POST -H "Authorization: Bearer ${DEADMAN_TOKEN}" "$DEADMAN_URL"
+fi
 exec curl -fsS --max-time 15 --retry 3 -o /dev/null "$DEADMAN_URL"

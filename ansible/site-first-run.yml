@@ -31,3 +31,5 @@
       tags: [firewall]
     - role: notify
       tags: [notify]
+    - role: log-export
+      tags: [logging, log-export]

@@ -26,3 +26,4 @@ notify_onfailure_units:
   - restore-drill.service
   - vuln-scan.service
   - pending-security-updates.service
+  - log-export.service

@@ -1,0 +1,23 @@
+# log-export.service — Ship a hash-chained log archive off-host.
+#
+# Triggered by log-export.timer. Do not enable this unit directly.
+# Installed by the log-export role.
+
+[Unit]
+Description=Off-host tamper-evident log export
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=STATE_DIR={{ log_export_state_dir }}
+Environment=EXTRA_PATHS={{ log_export_extra_paths | join(':') }}
+ExecStart=/usr/local/bin/log-export.sh
+TimeoutStartSec=30m
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=log-export
+
+[Install]
+WantedBy=multi-user.target

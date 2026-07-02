@@ -316,6 +316,10 @@ restore_service() {
   [[ $missing -eq 0 ]] || return 1
 
   if "$files_only"; then
+    if "$NO_FILES"; then
+      warn "[$SERVICE_NAME] --no-files with a files-only service leaves nothing to restore."
+      return 1
+    fi
     if [[ -n "$TARGET_DB_ARG" ]]; then
       warn "[$SERVICE_NAME] --target does not apply to files-only services."
       return 1
@@ -389,14 +393,15 @@ restore_service() {
 
   if "$DRY_RUN"; then
     echo "DRY-RUN: restic dump $SNAPSHOT --tag $SERVICE_NAME /$STDIN_FILENAME | psql $TARGET_DB"
-    [[ -n "${BACKUP_PATHS:-}" ]] && \
+    [[ -n "${BACKUP_PATHS:-}" ]] && ! "$NO_FILES" && \
       echo "DRY-RUN: restic restore latest --tag ${SERVICE_NAME}-files --target /"
     return 0
   fi
 
   # Preserve the existing database for rollback.
   if db_exists "$TARGET_DB"; then
-    local rollback_db="${TARGET_DB}_pre_restore_$(date -u +%Y%m%dT%H%M%SZ)"
+    local rollback_db
+    rollback_db="${TARGET_DB}_pre_restore_$(date -u +%Y%m%dT%H%M%SZ)"
     info "Preserving '$TARGET_DB' -> '$rollback_db' for rollback safety..."
     _psql_admin postgres \
       --command "ALTER DATABASE \"$TARGET_DB\" RENAME TO \"$rollback_db\";"
@@ -421,8 +426,11 @@ restore_service() {
     die "[$SERVICE_NAME] Restore verification failed — no tables found in '$TARGET_DB'."
   info "  Verification passed."
 
-  # Restore file paths if configured.
-  if [[ -n "${BACKUP_PATHS:-}" ]]; then
+  # Restore file paths if configured (skipped with --no-files: the drill and
+  # DB-only recoveries must never write into live file paths under /).
+  if "$NO_FILES" && [[ -n "${BACKUP_PATHS:-}" ]]; then
+    info "[$SERVICE_NAME] --no-files: skipping file snapshot restore."
+  elif [[ -n "${BACKUP_PATHS:-}" ]]; then
     info "[$SERVICE_NAME] Checking for file snapshots..."
     local file_snap_count
     file_snap_count="$(restic snapshots --tag "${SERVICE_NAME}-files" --json 2>/dev/null \
@@ -497,6 +505,7 @@ main() {
   # List mode — show snapshots for one service and exit.
   if "$LIST_ONLY"; then
     [[ ${#service_files[@]} -eq 1 ]] || die "--list requires exactly one --service"
+    # shellcheck source=/dev/null
     source "${service_files[0]}"
     export RESTIC_REPOSITORY RESTIC_PASSWORD
     if [[ -z "${DB_NAME:-}" ]]; then

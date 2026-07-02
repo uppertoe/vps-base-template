@@ -204,10 +204,16 @@ drill_service() {
     fi
 
     local drill_db="${DB_NAME}_drill"
+    # Subshell-scope copies for the EXIT trap: drill_service's locals are
+    # already gone by the time the subshell teardown runs the trap.
+    DRILL_CLEANUP_CONTAINER="$container"
+    DRILL_CLEANUP_DB="$drill_db"
+    DRILL_CLEANUP_USER="$DB_USER"
+    DRILL_CLEANUP_PASSWORD="${DB_PASSWORD:-}"
     drop_drill_db() {
-      docker exec -e PGPASSWORD="${DB_PASSWORD:-}" "$container" \
-        psql --username "$DB_USER" --no-password --dbname postgres \
-        --command "DROP DATABASE IF EXISTS \"$drill_db\";" < /dev/null > /dev/null 2>&1 || true
+      docker exec -e PGPASSWORD="${DRILL_CLEANUP_PASSWORD:-}" "${DRILL_CLEANUP_CONTAINER:-}" \
+        psql --username "${DRILL_CLEANUP_USER:-}" --no-password --dbname postgres \
+        --command "DROP DATABASE IF EXISTS \"${DRILL_CLEANUP_DB:-}\";" < /dev/null > /dev/null 2>&1 || true
     }
     trap drop_drill_db EXIT
 

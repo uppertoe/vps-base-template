@@ -7,6 +7,45 @@ on:
   pull_request:
 
 jobs:
+  lint:
+    name: Lint (shellcheck, python, playbook syntax)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      # Every operational shell script the roles install, plus repo tooling
+      # (sh/bash shebangs only — audit-notify is python, checked below).
+      - name: Shellcheck role scripts and repo tooling
+        run: |
+          set -euo pipefail
+          files="$(git ls-files 'ansible/roles/*/files/*' 'scripts/*.sh' 'backup/tests/integration/*.sh' 'docker/*.sh' \
+            | while read -r f; do head -n1 "$f" | grep -qE '^#!.*\b(ba)?sh\b' && echo "$f" || true; done)"
+          echo "$files"
+          # shellcheck disable=SC2086
+          shellcheck $files
+
+      - name: Python compile checks
+        run: |
+          python3 -m py_compile ansible/files/compose-audit/check-compose-hardening.py
+          python3 -m py_compile ansible/roles/notify/files/audit-notify
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ansible-core
+        run: python -m pip install --quiet ansible-core
+
+      - name: Playbook syntax checks
+        run: |
+          ansible-galaxy collection install -r ansible/requirements.yml >/dev/null
+          ansible-playbook --syntax-check \
+            ansible/bootstrap.yml ansible/site-first-run.yml ansible/site-quick.yml \
+            ansible/audit-all.yml ansible/audit-openscap.yml ansible/audit-docker.yml \
+            ansible/audit-compose.yml ansible/audit-lynis.yml ansible/audit-vuln.yml
+
   molecule-default:
     name: Molecule Default
     runs-on: ubuntu-latest

@@ -11,6 +11,7 @@
 #   - Verify-only mode does not create new snapshots
 #   - Retention retries on transient lock contention
 #   - Restore recreates data correctly in an alternate database
+#   - Restore drill restores into a throwaway DB, records RPO/RTO, drops it
 #   - Post-restore verification passes on good data
 #   - Rollback: original database is recovered after a failed restore
 #   - Partial failure: one bad service does not abort the others
@@ -39,6 +40,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
 BACKUP_SCRIPT="$REPO_ROOT/ansible/roles/backup/files/backup.sh"
 RESTORE_SCRIPT="$REPO_ROOT/ansible/roles/backup/files/restore.sh"
+DRILL_SCRIPT="$REPO_ROOT/ansible/roles/backup/files/restore-drill.sh"
 
 # PostgreSQL container settings
 PG_CONTAINER="backup-integration-test-postgres"
@@ -267,6 +269,32 @@ test_backup_creates_snapshot() {
   else
     fail "no snapshots found after backup"
   fi
+}
+
+test_restore_drill() {
+  header "test_restore_drill"
+  local drill_state exit_code=0
+  drill_state="$(mktemp -d)"
+
+  BACKUP_CONFIG_DIR="$CONFIG_DIR" DRILL_STATE_DIR="$drill_state" \
+    "$DRILL_SCRIPT" > /dev/null 2>&1 || exit_code=$?
+
+  local report="$drill_state/latest.txt"
+  local drill_db_exists
+  drill_db_exists="$(_psql --dbname postgres --tuples-only \
+    --command "SELECT 1 FROM pg_database WHERE datname = '${PG_DB}_drill'" 2>/dev/null | tr -d ' ')"
+
+  if [[ "$exit_code" -ne 0 ]]; then
+    fail "restore_drill: exited $exit_code"
+  elif ! grep -Eq '^testapp \| mode=db \| snapshot=\S+ \| rpo=\S+ \| rto=\S+ \| PASS$' "$report" 2>/dev/null; then
+    fail "restore_drill: no PASS row with RPO/RTO for testapp in $report"
+  elif [[ "$drill_db_exists" == "1" ]]; then
+    fail "restore_drill: throwaway database ${PG_DB}_drill was not dropped"
+  else
+    pass "restore_drill: PASS row with RPO/RTO recorded and drill DB dropped"
+  fi
+
+  rm -rf "$drill_state"
 }
 
 test_retention_runs_clean() {
@@ -671,6 +699,59 @@ test_backup_paths() {
   fi
 }
 
+test_restore_no_files_skips_file_restore() {
+  header "test_restore_no_files_skips_file_restore"
+
+  # Same fixture shape as test_backup_paths, but the restore runs with
+  # --no-files: the DB must restore, the file paths must STAY deleted.
+  local test_files_dir
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    test_files_dir="$(mktemp -d /private/tmp/backup-test-XXXXXX)"
+  else
+    test_files_dir="$(mktemp -d)"
+  fi
+  mkdir -p "$test_files_dir/data"
+  echo "no-files-marker" > "$test_files_dir/data/marker.txt"
+
+  cp "$CONFIG_DIR/services/testapp.env" "$CONFIG_DIR/services/testapp.env.bak"
+  echo "BACKUP_PATHS=${test_files_dir}" >> "$CONFIG_DIR/services/testapp.env"
+
+  run_backup --service testapp > /dev/null 2>&1
+
+  rm -rf "$test_files_dir"
+
+  local target="testapp_nofiles_test"
+  _psql --dbname postgres --command "DROP DATABASE IF EXISTS \"$target\";" > /dev/null
+
+  local exit_code=0
+  RESTORE_NO_CONFIRM=true run_restore \
+    --service testapp \
+    --target "$target" \
+    --no-files > /dev/null 2>&1 || exit_code=$?
+
+  local db_count
+  db_count="$(_psql --dbname "$target" --tuples-only \
+    --command "SELECT COUNT(*) FROM users" | tr -d ' ')" || db_count=0
+
+  local files_restored="no"
+  [[ -e "$test_files_dir/data/marker.txt" ]] && files_restored="yes"
+
+  cp "$CONFIG_DIR/services/testapp.env.bak" "$CONFIG_DIR/services/testapp.env"
+  rm -f "$CONFIG_DIR/services/testapp.env.bak"
+  rm -rf "$test_files_dir"
+  _psql --dbname postgres --command "DROP DATABASE IF EXISTS \"$target\";" > /dev/null
+
+  if [[ "$exit_code" -ne 0 ]]; then
+    fail "no_files: restore exited $exit_code"
+  elif [[ "$files_restored" == "yes" ]]; then
+    fail "no_files: --no-files restored file paths anyway"
+  elif [[ "$db_count" -eq 3 ]]; then
+    pass "no_files: DB restored ($db_count rows), file paths untouched"
+  else
+    fail "no_files: unexpected DB count=$db_count"
+  fi
+}
+
 test_files_only_service() {
   header "test_files_only_service"
 
@@ -829,6 +910,7 @@ setup
 
 test_dry_run_exits_zero
 test_backup_creates_snapshot
+test_restore_drill
 test_retention_runs_clean
 test_verify_runs_retention_prune
 test_verify_only_does_not_create_snapshot
@@ -841,6 +923,7 @@ test_partial_failure_continues
 test_optional_service_skips_stopped_container
 test_list_snapshots
 test_backup_paths
+test_restore_no_files_skips_file_restore
 test_files_only_service
 test_files_only_optional_skips_when_paths_missing
 test_multi_service_restore

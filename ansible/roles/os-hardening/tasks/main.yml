@@ -23,6 +23,32 @@
     os_mnt_var_tmp_options: "rw,nosuid,nodev,noexec,size={{ oshardening_var_tmp_tmpfs_size }}"
   when: ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
 
+# Activate the hardened mounts NOW, at a controlled point. devsec only writes
+# the fstab entries (mount deferred to a play-end handler), but any service
+# (re)start with PrivateTmp sandboxing — timesyncd/auditd/rsyslog postinsts
+# during later apt runs — makes systemd pull in the generated tmp.mount as a
+# dependency, remounting /tmp MID-TASK and vaporising whatever lives there,
+# including the Ansible module payload of the very task that triggered it.
+# TMPDIR steers this task's own payload out of the blast radius; "already
+# mounted" keeps re-runs idempotent.
+- name: Activate hardened /tmp and /var/tmp mounts
+  ansible.builtin.command:
+    cmd: "mount {{ item }}"
+  environment:
+    TMPDIR: /root
+  register: oshardening_tmp_mounts
+  changed_when: oshardening_tmp_mounts.rc == 0
+  failed_when:
+    - oshardening_tmp_mounts.rc != 0
+    - "'already mounted' not in (oshardening_tmp_mounts.stderr | default(''))"
+  loop:
+    - /tmp
+    - /var/tmp
+  when:
+    - oshardening_harden_tmp_mount | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+    - item not in (ansible_facts.mounts | map(attribute='mount') | list)
+
 - name: Apply safe host networking sysctls
   ansible.posix.sysctl:
     name: "{{ item.key }}"

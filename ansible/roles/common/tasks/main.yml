@@ -34,6 +34,52 @@
       APT::Periodic::Unattended-Upgrade "1";
     mode: "0644"
 
+- name: Install pending-security-updates check script
+  ansible.builtin.copy:
+    src: pending-security-updates
+    dest: /usr/local/bin/pending-security-updates
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Install pending-security-updates.service
+  ansible.builtin.copy:
+    src: pending-security-updates.service
+    dest: /etc/systemd/system/pending-security-updates.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Install pending-security-updates.timer
+  ansible.builtin.template:
+    src: pending-security-updates.timer.j2
+    dest: /etc/systemd/system/pending-security-updates.timer
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Enable and start pending-security-updates timer
+  ansible.builtin.systemd:
+    name: pending-security-updates.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: common_patch_check_enabled | bool
+  tags:
+    - molecule-notest
+
+- name: Disable pending-security-updates timer when turned off
+  ansible.builtin.systemd:
+    name: pending-security-updates.timer
+    enabled: false
+    state: stopped
+  when: not (common_patch_check_enabled | bool)
+  failed_when: false
+  tags:
+    - molecule-notest
+
 - name: Set server timezone
   community.general.timezone:
     name: "{{ server_timezone }}"

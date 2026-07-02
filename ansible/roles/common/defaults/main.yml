@@ -1,4 +1,10 @@
 ---
+# Daily check that unattended-upgrades is keeping up: alerts (via vps-notify)
+# when security updates are sitting unapplied, and logs a PATCH-SLA line to the
+# journal either way — the evidence trail for the ISM/E8 48-hour patch clock.
+common_patch_check_enabled: true
+common_patch_check_schedule: "*-*-* 06:15:00"
+
 common_packages:
   - curl
   - git

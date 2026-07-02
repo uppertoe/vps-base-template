@@ -1,0 +1,19 @@
+# vuln-scan.timer — Daily container image CVE scan.
+#
+# Daily scanning of internet-facing services is the Essential Eight ML1 /
+# ISM cadence; the scan output starts the 48-hour patch clock for fixable
+# critical vulnerabilities.
+#
+# Installed by the vuln-scan Ansible role.
+
+[Unit]
+Description=Container image CVE scan — {{ vuln_scan_schedule }} schedule
+Requires=vuln-scan.service
+
+[Timer]
+OnCalendar={{ vuln_scan_schedule }}
+Persistent=true
+Unit=vuln-scan.service
+
+[Install]
+WantedBy=timers.target

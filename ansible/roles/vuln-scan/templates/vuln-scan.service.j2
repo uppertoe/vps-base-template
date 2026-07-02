@@ -1,0 +1,29 @@
+# vuln-scan.service — Daily CVE scan of the running container images.
+#
+# Triggered by vuln-scan.timer. Do not enable this unit directly.
+# Installed by the vuln-scan Ansible role.
+
+[Unit]
+Description=Container image CVE scan (Trivy, report-only)
+After=docker.service network-online.target
+Wants=network-online.target
+Requisite=docker.service
+
+[Service]
+Type=oneshot
+Environment=TRIVY_IMAGE={{ vuln_scan_trivy_image }}
+Environment=SEVERITY={{ vuln_scan_severity }}
+Environment=CACHE_DIR={{ vuln_scan_cache_dir }}
+Environment=STATE_DIR={{ vuln_scan_state_dir }}
+Environment=RETENTION_DAYS={{ vuln_scan_report_retention_days }}
+ExecStart=/usr/local/bin/vuln-scan.sh
+
+# First run downloads the Trivy DB; scans of a handful of images are minutes.
+TimeoutStartSec=1h
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vuln-scan
+
+[Install]
+WantedBy=multi-user.target

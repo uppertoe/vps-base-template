@@ -23,6 +23,8 @@
       tags: [hardening, os]
     - role: docker
       tags: [docker]
+    - role: vuln-scan
+      tags: [docker, vuln-scan]
     - role: baseline-hardening
       tags: [hardening, baseline]
     - role: firewall

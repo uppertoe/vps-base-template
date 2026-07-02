@@ -1,0 +1,15 @@
+# pending-security-updates.timer — Daily patch-SLA backstop check.
+#
+# Installed by the common Ansible role.
+
+[Unit]
+Description=Pending security updates check — {{ common_patch_check_schedule }} schedule
+Requires=pending-security-updates.service
+
+[Timer]
+OnCalendar={{ common_patch_check_schedule }}
+Persistent=true
+Unit=pending-security-updates.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,209 @@
+---
+# audit-vuln.yml — Container image CVE scan of the RUNNING images via Trivy
+#
+# CIS / docker-bench check container *configuration*; they do not look at the
+# packages inside the images. This playbook closes that gap: it runs Trivy over
+# every image that is actually running on the VPS and reports HIGH/CRITICAL CVEs.
+# Complements the CI Trivy step (which can only see the images CI can pull) by
+# scanning what is really deployed — including private first-party images.
+#
+# Trivy runs as a container (the host already has Docker), so nothing is
+# installed on the host. Its vulnerability DB is cached under /var/cache/trivy
+# so re-runs are fast.
+#
+# Usage:
+#   standalone: ansible-playbook -i ansible/inventory/myserver ansible/audit-vuln.yml
+#   scaffold:   ansible-playbook -i ansible/hosts scaffold/ansible/audit-vuln.yml
+#
+# Reports are saved locally relative to the playbook path so they land in a
+# repo-root reports/ directory in either layout. Run after provisioning and
+# periodically thereafter (e.g. alongside the other audit-*.yml playbooks).
+#
+# This is report-only: an unfixable upstream CVE must not block operations.
+# Findings are saved as artifacts, summarised in the play output, and — when any
+# CRITICAL with an available fix is present — pushed via vps-notify (no-op unless
+# notify_ntfy_url is configured).
+
+- name: Container image CVE audit (Trivy)
+  hosts: all
+  gather_facts: true
+  become: true
+
+  vars:
+    # Override with -e to widen/narrow the gate. We report HIGH+CRITICAL but only
+    # *alert* on fixable CRITICALs (see audit_vuln_notify_severity below).
+    audit_vuln_severity: "HIGH,CRITICAL"
+    audit_vuln_trivy_image: "aquasec/trivy:0.59.1"
+    audit_vuln_cache_dir: /var/cache/trivy
+    audit_vuln_work_dir: /tmp/audit-vuln
+    local_reports_root: >-
+      {{
+        (playbook_dir | dirname | dirname)
+        if (playbook_dir | dirname | basename) == 'scaffold'
+        else (playbook_dir | dirname)
+      }}
+    local_report_dir: "{{ local_reports_root }}/reports/vuln-{{ inventory_hostname }}-{{ ansible_facts['date_time']['date'] }}"
+
+  tasks:
+    - name: Ensure Trivy cache and work directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0750"
+      loop:
+        - "{{ audit_vuln_cache_dir }}"
+        - "{{ audit_vuln_work_dir }}"
+
+    # One shell block keeps the playbook self-contained like the other audit-*.yml.
+    # It enumerates the distinct running images, scans each with Trivy (table for
+    # humans + json for tooling), then aggregates the json into a summary line and
+    # an exit signal we use to drive the notification.
+    - name: Scan every running image with Trivy
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          WORK="{{ audit_vuln_work_dir }}"
+          CACHE="{{ audit_vuln_cache_dir }}"
+          SEV="{{ audit_vuln_severity }}"
+          TRIVY="{{ audit_vuln_trivy_image }}"
+          rm -f "$WORK"/trivy-*.txt "$WORK"/trivy-*.json
+          : > "$WORK/summary.txt"
+
+          # Distinct images backing the running containers (skip the trivy image itself).
+          mapfile -t images < <(docker ps --format '{{ '{{' }}.Image{{ '}}' }}' | sort -u | grep -v -F "$TRIVY" || true)
+          if [[ ${#images[@]} -eq 0 ]]; then
+            echo "No running containers found — nothing to scan." | tee -a "$WORK/summary.txt"
+            exit 0
+          fi
+
+          # Pull trivy once so the per-image runs don't each block on a pull.
+          docker pull -q "$TRIVY" >/dev/null
+
+          for img in "${images[@]}"; do
+            safe="$(printf '%s' "$img" | tr '/:@' '___')"
+            echo "=== Scanning $img ===" | tee -a "$WORK/summary.txt"
+            docker run --rm \
+              -v "$CACHE:/root/.cache/trivy" \
+              -v /var/run/docker.sock:/var/run/docker.sock \
+              "$TRIVY" image --quiet --no-progress --scanners vuln \
+              --severity "$SEV" --format table --output "/dev/stdout" "$img" \
+              > "$WORK/trivy-$safe.txt" 2>/dev/null || true
+            docker run --rm \
+              -v "$CACHE:/root/.cache/trivy" \
+              -v /var/run/docker.sock:/var/run/docker.sock \
+              "$TRIVY" image --quiet --no-progress --scanners vuln \
+              --severity "$SEV" --format json --output "/dev/stdout" "$img" \
+              > "$WORK/trivy-$safe.json" 2>/dev/null || true
+          done
+
+          # Aggregate the json: count HIGH/CRITICAL and fixable CRITICALs across images.
+          python3 - "$WORK" <<'PY' | tee -a "$WORK/summary.txt"
+          import glob, json, os, sys
+          work = sys.argv[1]
+          high = crit = crit_fixable = 0
+          fixable = []
+          for path in sorted(glob.glob(os.path.join(work, "trivy-*.json"))):
+              try:
+                  with open(path) as fh:
+                      doc = json.load(fh)
+              except (ValueError, OSError):
+                  continue
+              for res in doc.get("Results") or []:
+                  for v in res.get("Vulnerabilities") or []:
+                      sev = (v.get("Severity") or "").upper()
+                      if sev == "HIGH":
+                          high += 1
+                      elif sev == "CRITICAL":
+                          crit += 1
+                          if v.get("FixedVersion"):
+                              crit_fixable += 1
+                              fixable.append(
+                                  f"{v.get('VulnerabilityID')} {v.get('PkgName')} "
+                                  f"{v.get('InstalledVersion')} -> {v.get('FixedVersion')}"
+                              )
+          print(f"TOTAL HIGH={high} CRITICAL={crit} CRITICAL_FIXABLE={crit_fixable}")
+          for line in fixable[:25]:
+              print(f"  FIXABLE: {line}")
+          # Machine-readable signal for the next task.
+          with open(os.path.join(work, "gate.txt"), "w") as fh:
+              fh.write(f"{high} {crit} {crit_fixable}\n")
+          PY
+      register: audit_vuln_scan
+      changed_when: false
+
+    - name: Show scan summary
+      ansible.builtin.debug:
+        msg: "{{ audit_vuln_scan.stdout_lines }}"
+
+    - name: Read the fixable-CRITICAL gate
+      ansible.builtin.slurp:
+        src: "{{ audit_vuln_work_dir }}/gate.txt"
+      register: audit_vuln_gate
+      failed_when: false
+
+    - name: Parse gate counts
+      ansible.builtin.set_fact:
+        audit_vuln_crit_fixable: >-
+          {{
+            ((audit_vuln_gate.content | b64decode).split() | last | int)
+            if (audit_vuln_gate.content is defined) else 0
+          }}
+
+    # vps-notify is installed by the notify role and is a silent no-op until
+    # notify_ntfy_url is set, so this is safe to call unconditionally where it exists.
+    - name: Check for vps-notify helper
+      ansible.builtin.stat:
+        path: /usr/local/bin/vps-notify
+      register: audit_vuln_notify_bin
+
+    - name: Push an alert when fixable CRITICAL CVEs are present
+      ansible.builtin.command:
+        cmd: >-
+          /usr/local/bin/vps-notify
+          "Vulnerability scan: {{ audit_vuln_crit_fixable }} fixable CRITICAL CVE(s)"
+          "Trivy found {{ audit_vuln_crit_fixable }} CRITICAL CVE(s) with an available fix in the running images on {{ inventory_hostname }}. Review reports/vuln-{{ inventory_hostname }}-{{ ansible_facts['date_time']['date'] }}/ and update the affected images."
+          urgent
+          rotating_light,package
+      changed_when: false
+      when:
+        - audit_vuln_notify_bin.stat.exists
+        - (audit_vuln_crit_fixable | int) > 0
+
+    - name: Ensure local report directory exists
+      ansible.builtin.file:
+        path: "{{ local_report_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      become: false
+
+    - name: List scan artifacts to fetch
+      ansible.builtin.find:
+        paths: "{{ audit_vuln_work_dir }}"
+        patterns: "trivy-*.txt,trivy-*.json,summary.txt"
+      register: audit_vuln_artifacts
+
+    - name: Fetch scan artifacts
+      ansible.builtin.fetch:
+        src: "{{ item.path }}"
+        dest: "{{ local_report_dir }}/{{ item.path | basename }}"
+        flat: true
+      loop: "{{ audit_vuln_artifacts.files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+
+    - name: Remind how to read results
+      ansible.builtin.debug:
+        msg:
+          - "Per-image tables: {{ local_report_dir }}/trivy-*.txt"
+          - "Machine-readable:  {{ local_report_dir }}/trivy-*.json"
+          - "Summary + counts:  {{ local_report_dir }}/summary.txt"
+          - "Report-only: fixable CRITICALs alert via vps-notify; nothing is blocked."
+          - "Reference: https://trivy.dev/"
+
+    - name: Clean up work directory on the server
+      ansible.builtin.file:
+        path: "{{ audit_vuln_work_dir }}"
+        state: absent

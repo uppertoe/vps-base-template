@@ -1,0 +1,70 @@
+---
+# =============================================================================
+# vuln-scan role — Scheduled CVE scanning of the running container images.
+# =============================================================================
+#
+# After running this role:
+#   - /usr/local/bin/vuln-scan.sh scans every running image with Trivy.
+#   - vuln-scan.timer runs it daily; dated reports land in /var/lib/vuln-scan.
+#   - A fixable CRITICAL pushes an urgent ntfy alert via vps-notify.
+#
+# The ad-hoc equivalent (with artifact fetch into the repo's reports/) is
+# ansible/audit-vuln.yml.
+# =============================================================================
+
+- name: Create scan state and cache directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+  loop:
+    - "{{ vuln_scan_state_dir }}"
+    - "{{ vuln_scan_cache_dir }}"
+
+- name: Install vuln-scan script
+  ansible.builtin.copy:
+    src: vuln-scan.sh
+    dest: /usr/local/bin/vuln-scan.sh
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Install vuln-scan.service
+  ansible.builtin.template:
+    src: vuln-scan.service.j2
+    dest: /etc/systemd/system/vuln-scan.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Install vuln-scan.timer
+  ansible.builtin.template:
+    src: vuln-scan.timer.j2
+    dest: /etc/systemd/system/vuln-scan.timer
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Enable and start vuln-scan timer
+  ansible.builtin.systemd:
+    name: vuln-scan.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: vuln_scan_enabled | bool
+  tags:
+    - molecule-notest
+
+- name: Disable vuln-scan timer when scanning is turned off
+  ansible.builtin.systemd:
+    name: vuln-scan.timer
+    enabled: false
+    state: stopped
+  when: not (vuln_scan_enabled | bool)
+  failed_when: false
+  tags:
+    - molecule-notest

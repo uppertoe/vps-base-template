@@ -1,0 +1,21 @@
+# pending-security-updates.service — Backstop check on unattended-upgrades.
+#
+# Triggered by pending-security-updates.timer. Do not enable directly.
+# Installed by the common Ansible role.
+
+[Unit]
+Description=Alert when security updates are sitting unapplied
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/pending-security-updates
+TimeoutStartSec=15m
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=patch-sla
+
+[Install]
+WantedBy=multi-user.target

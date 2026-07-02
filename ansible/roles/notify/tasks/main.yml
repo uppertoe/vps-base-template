@@ -95,6 +95,12 @@
       (vps-notify will no-op). Set notify_ntfy_url in the inventory to enable.
   when: notify_ntfy_url | length == 0
 
+# Earlier roles install units with a pending "Reload systemd" handler; flush
+# so systemctl sees them NOW — otherwise freshly installed units are missed on
+# the first run and the drop-ins below churn on the next (non-idempotence).
+- name: Flush pending handlers so new units are visible to systemctl
+  ansible.builtin.meta: flush_handlers
+
 - name: Detect which OnFailure target units exist
   ansible.builtin.command: "systemctl cat {{ item }}"
   loop: "{{ notify_onfailure_units }}"

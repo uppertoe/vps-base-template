@@ -16,6 +16,9 @@
 #   --list           List available snapshots for a service and exit.
 #                    Requires exactly one --service.
 #   --dry-run        Print commands without executing.
+#   --no-files       Restore the database only; skip the BACKUP_PATHS file
+#                    snapshot (which would otherwise be restored to /). Used by
+#                    restore-drill.sh so a DB-only drill never touches live files.
 #
 # CONFIGURATION
 #   Global config:   $BACKUP_CONFIG_DIR/config.env     (default: /etc/restic/config.env)
@@ -69,6 +72,7 @@ SNAPSHOT="latest"
 TARGET_DB_ARG=""
 LIST_ONLY=false
 DRY_RUN=false
+NO_FILES=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -78,9 +82,10 @@ while [[ $# -gt 0 ]]; do
     --target)   TARGET_DB_ARG="$2"; shift 2 ;;
     --list)     LIST_ONLY=true;    shift ;;
     --dry-run)  DRY_RUN=true;      shift ;;
+    --no-files) NO_FILES=true;     shift ;;
     *)
       echo "Unknown argument: $1" >&2
-      echo "Usage: $0 [--service NAME]... [--snapshot ID] [--target DB] [--list] [--dry-run]" >&2
+      echo "Usage: $0 [--service NAME]... [--snapshot ID] [--target DB] [--list] [--dry-run] [--no-files]" >&2
       exit 1
       ;;
   esac

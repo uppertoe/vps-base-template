@@ -323,6 +323,28 @@ Compare it against our `group_vars/all.yml` to see what we cover and what we don
 
 ---
 
+## One command: audit-all.yml (evidence bundle)
+
+`audit-all.yml` produces the full dated evidence pack in one run: host
+captures first (swap/crypttab, ufw, AppArmor, effective sshd config, timers,
+patch-SLA trail, latest vuln-scan/restore-drill/log-export state — each tagged
+with the control-matrix rows it evidences in
+`reports/evidence-<host>-<date>/INDEX.md`), then OpenSCAP, Lynis,
+docker-bench, the compose audit, and the Trivy scan.
+
+```bash
+ansible-playbook -i ansible/inventory/myserver ansible/audit-all.yml
+
+# L2 measurement run
+ansible-playbook -i ansible/inventory/myserver ansible/audit-all.yml \
+  -e openscap_tailoring_profile=xccdf_org.ssgproject.content_profile_cis_level2_server_cloud_vps
+```
+
+Run it before a review or attestation; `reports/<...>-<date>/` plus the
+filled-in `docs/templates/` set is the handover pack.
+
+---
+
 ## Recommended audit workflow
 
 ```bash

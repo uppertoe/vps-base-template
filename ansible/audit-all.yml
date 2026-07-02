@@ -1,0 +1,154 @@
+---
+# audit-all.yml — one-command compliance evidence bundle
+#
+# Runs the host evidence captures FIRST (so a bundle exists even when an audit
+# gate fails), then every audit playbook. Each audit writes its own dated
+# reports/<tool>-<host>-<date>/ directory; the captures play adds
+# reports/evidence-<host>-<date>/ with an INDEX.md that tags every artifact
+# with the control-matrix rows it evidences
+# (docs/templates/vic-health-control-matrix.md).
+#
+# Usage:
+#   standalone: ansible-playbook -i ansible/inventory/myserver ansible/audit-all.yml
+#   scaffold:   ansible-playbook -i ansible/hosts scaffold/ansible/audit-all.yml
+#
+# The OpenSCAP profile follows audit-openscap.yml's default (tailored CIS L1);
+# add -e openscap_tailoring_profile=xccdf_org.ssgproject.content_profile_cis_level2_server_cloud_vps
+# for an L2 measurement run.
+
+- name: Host evidence captures
+  hosts: all
+  gather_facts: true
+  become: true
+
+  vars:
+    audit_evidence_work_dir: /tmp/audit-evidence
+    local_reports_root: >-
+      {{
+        (playbook_dir | dirname | dirname)
+        if (playbook_dir | dirname | basename) == 'scaffold'
+        else (playbook_dir | dirname)
+      }}
+    local_report_dir: "{{ local_reports_root }}/reports/evidence-{{ inventory_hostname }}-{{ ansible_facts['date_time']['date'] }}"
+    # name → command → the control-matrix rows the capture evidences.
+    audit_evidence_captures:
+      - name: swap-and-encryption
+        rows: "16"
+        cmd: "swapon --show; echo; echo '--- /etc/crypttab ---'; cat /etc/crypttab 2>/dev/null || echo 'no crypttab'; echo; lsblk -o NAME,TYPE,SIZE,MOUNTPOINT,FSTYPE"
+      - name: firewall
+        rows: "6"
+        cmd: "ufw status verbose"
+      - name: apparmor
+        rows: "10"
+        cmd: "aa-status 2>/dev/null | head -n 20"
+      - name: sshd-effective-config
+        rows: "4"
+        cmd: "sshd -T 2>/dev/null | grep -Ei '^(permitrootlogin|passwordauthentication|pubkeyauthentication|kbdinteractiveauthentication|allowusers|x11forwarding|disableforwarding|macs|ciphers|kexalgorithms)'"
+      - name: scheduled-controls
+        rows: "8,9,11,13,14,17"
+        cmd: "systemctl list-timers --all --no-pager"
+      - name: patch-sla-trail
+        rows: "8"
+        cmd: "cat /etc/apt/apt.conf.d/20auto-upgrades; echo; journalctl -t patch-sla --no-pager -n 14 2>/dev/null || echo 'no PATCH-SLA entries yet'"
+      - name: vuln-scan-latest
+        rows: "9"
+        cmd: "d=$(ls -1 /var/lib/vuln-scan 2>/dev/null | tail -n 1); [ -n \"$d\" ] && cat \"/var/lib/vuln-scan/$d/summary.txt\" || echo 'no vuln-scan runs yet'"
+      - name: restore-drill-latest
+        rows: "14"
+        cmd: "cat /var/lib/backup-drill/latest.txt 2>/dev/null || echo 'no restore drill runs yet'"
+      - name: log-export-chain
+        rows: "12"
+        cmd: "tail -n 14 /var/lib/log-export/hash-chain.log 2>/dev/null || echo 'log export not configured / no exports yet'"
+      - name: docker-daemon
+        rows: "2"
+        cmd: "docker version --format 'engine {{ '{{' }}.Server.Version{{ '}}' }}' 2>/dev/null; docker info --format '{{ '{{' }}json .SecurityOptions{{ '}}' }}' 2>/dev/null"
+
+  tasks:
+    - name: Create work directory
+      ansible.builtin.file:
+        path: "{{ audit_evidence_work_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0750"
+
+    - name: Run evidence captures
+      ansible.builtin.shell:
+        cmd: "( {{ item.cmd }} ) > {{ audit_evidence_work_dir }}/{{ item.name }}.txt 2>&1"
+      loop: "{{ audit_evidence_captures }}"
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: false
+      failed_when: false
+
+    - name: Ensure local report directory exists
+      ansible.builtin.file:
+        path: "{{ local_report_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      become: false
+
+    - name: Fetch evidence captures
+      ansible.builtin.fetch:
+        src: "{{ audit_evidence_work_dir }}/{{ item.name }}.txt"
+        dest: "{{ local_report_dir }}/{{ item.name }}.txt"
+        flat: true
+      loop: "{{ audit_evidence_captures }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Write bundle INDEX
+      ansible.builtin.copy:
+        dest: "{{ local_report_dir }}/INDEX.md"
+        mode: "0644"
+        content: |
+          # Evidence bundle — {{ inventory_hostname }} — {{ ansible_facts['date_time']['date'] }}
+
+          Row numbers reference the control matrix
+          (`docs/templates/vic-health-control-matrix.md`). Audit-tool reports
+          land beside this directory as `reports/<tool>-{{ inventory_hostname }}-{{ ansible_facts['date_time']['date'] }}/`.
+
+          ## Audit tool reports (produced by this run)
+
+          | Report dir | Tool | Matrix rows |
+          |---|---|---|
+          | `openscap-…` | OpenSCAP, CIS Ubuntu 24.04 (tailored) | 1 |
+          | `lynis-…` | Lynis hardening index (drift signal) | 1 |
+          | `docker-bench-…` | CIS Docker §1–4 | 2 |
+          | `compose-audit-…` | CIS Docker §5 + ISM tier separation | 3, 18 |
+          | `vuln-…` | Trivy CVEs in running images | 9 |
+
+          ## Host captures (this directory)
+
+          | File | Matrix rows |
+          |---|---|
+          {% for c in audit_evidence_captures %}
+          | `{{ c.name }}.txt` | {{ c.rows }} |
+          {% endfor %}
+
+          Standing evidence not captured here: CI runs (rows 3, 10 — KICS,
+          image-pins), ntfy alert history (row 11), external monitor history
+          (row 17), and the per-instance governance documents (rows 19–24).
+      delegate_to: localhost
+      become: false
+
+    - name: Clean up work directory
+      ansible.builtin.file:
+        path: "{{ audit_evidence_work_dir }}"
+        state: absent
+
+- name: OS benchmark (OpenSCAP)
+  ansible.builtin.import_playbook: audit-openscap.yml
+
+- name: Hardening index (Lynis)
+  ansible.builtin.import_playbook: audit-lynis.yml
+
+- name: Docker daemon benchmark (docker-bench)
+  ansible.builtin.import_playbook: audit-docker.yml
+
+- name: Container runtime controls (compose audit)
+  ansible.builtin.import_playbook: audit-compose.yml
+
+- name: Image CVE scan (Trivy)
+  ansible.builtin.import_playbook: audit-vuln.yml

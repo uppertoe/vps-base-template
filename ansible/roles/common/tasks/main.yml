@@ -294,6 +294,16 @@
       when: >-
         common_plain_swapoff is skipped or common_plain_swapoff.rc == 0
 
+    # swapon --show prints the CANONICAL device (/dev/dm-0), never the
+    # /dev/mapper symlink — compare resolved paths or every re-run tries to
+    # swapon an already-active device.
+    - name: Resolve encrypted swap device path
+      ansible.builtin.command:
+        cmd: "readlink -f /dev/mapper/{{ host_swap_crypt_name }}"
+      register: common_cryptswap_realpath
+      changed_when: false
+      failed_when: false
+
     - name: Check active swap devices after conversion
       ansible.builtin.command:
         cmd: swapon --show=NAME --noheadings
@@ -303,6 +313,14 @@
     - name: Activate encrypted swap
       ansible.builtin.command:
         cmd: "swapon /dev/mapper/{{ host_swap_crypt_name }}"
+      register: common_cryptswap_swapon
+      changed_when: common_cryptswap_swapon.rc == 0
+      # Belt and braces: systemd's fstab-generated .swap unit can activate the
+      # device between the check and this task — already-active is success.
+      failed_when:
+        - common_cryptswap_swapon.rc != 0
+        - "'busy' not in (common_cryptswap_swapon.stderr | default(''))"
       when:
         - (common_plain_swapoff is skipped or common_plain_swapoff.rc == 0)
+        - (common_cryptswap_realpath.stdout | trim) not in common_active_swaps_after.stdout_lines
         - ("/dev/mapper/" ~ host_swap_crypt_name) not in common_active_swaps_after.stdout_lines

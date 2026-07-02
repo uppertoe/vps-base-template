@@ -14,6 +14,9 @@ export ANSIBLE_HOME="${ANSIBLE_HOME:-$CI_TMP_BASE/ansible}"
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$CI_TMP_BASE/.cache}"
 export ANSIBLE_LOCAL_TEMP="${ANSIBLE_LOCAL_TEMP:-$CI_TMP_BASE/ansible/tmp}"
 export ANSIBLE_REMOTE_TEMP="${ANSIBLE_REMOTE_TEMP:-$CI_TMP_BASE/ansible/tmp}"
+# Moving ANSIBLE_HOME also moves the default collections path — keep the
+# workflow-installed collections (~/.ansible) visible.
+export ANSIBLE_COLLECTIONS_PATH="${ANSIBLE_COLLECTIONS_PATH:-$ANSIBLE_HOME/collections:$HOME/.ansible/collections:/usr/share/ansible/collections}"
 
 mkdir -p "$ANSIBLE_HOME" "$XDG_CACHE_HOME" "$ANSIBLE_LOCAL_TEMP" "$REPO_ROOT/reports"
 

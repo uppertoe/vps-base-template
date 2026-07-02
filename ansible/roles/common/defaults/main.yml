@@ -5,6 +5,11 @@
 common_patch_check_enabled: true
 common_patch_check_schedule: "*-*-* 06:15:00"
 
+# Safety-net defaults so the role works standalone; the scaffold's
+# group_vars/all.yml is the canonical place these are set.
+host_swap_encrypted: true
+host_swap_crypt_name: cryptswap
+
 common_packages:
   - curl
   - git

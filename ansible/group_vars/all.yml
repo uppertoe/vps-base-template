@@ -34,6 +34,14 @@ host_swapfile_enabled: true
 host_swapfile_path: /swapfile
 host_swapfile_size_mb: auto
 
+# Encrypt the managed swapfile with a fresh random key on every boot
+# (dm-crypt via /etc/crypttab; systemd loop-mounts the file source). Secrets
+# and PII paged out of RAM are unrecoverable after reboot — the retrofittable
+# slice of the encryption-at-rest story (HPP 4 / ISM crypto). The swapfile is
+# re-keyed and re-mkswapped each boot, so nothing in it ever persists.
+host_swap_encrypted: true
+host_swap_crypt_name: cryptswap
+
 # Lightweight host monitoring for post-incident analysis on small VPSes.
 host_monitoring_enabled: true
 host_monitoring_packages:

@@ -17,6 +17,14 @@ secure-by-default; opt-in only where a destination/secret is required).
 Priority: **P0** structural (a reviewer presses hardest, hardest to retrofit) ·
 **P1** quick config/CI wins · **P2** enhancements.
 
+> **Status (2026-07-02):** shipped — P1-1 (digest pins + `image-pins` CI gate in
+> the server template), P1-2 (`audit-vuln.yml` + daily `vuln-scan.timer` +
+> `pending-security-updates.timer`), P1-4 (`restore-drill.timer` with RPO/RTO
+> reports), P1-5 (`vps-deadman.timer`). The Victorian-health binding of this
+> roadmap, plus the governance artifacts it doesn't cover, live in
+> [compliance-plan-vic-health.md](compliance-plan-vic-health.md) (templates in
+> [templates/](templates/)). Open: P0-1, P0-2, P1-3, P2-1, P2-2.
+
 ---
 
 ## P0-1 · Encryption at rest

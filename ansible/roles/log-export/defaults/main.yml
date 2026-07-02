@@ -6,7 +6,7 @@
 # auditd/auth/sshd/sudo and all unit logs are covered), plus the raw audit.log
 # rotations and Caddy JSON access logs, into a zstd tarball whose SHA-256 is
 # chained onto the previous export's hash — editing or dropping any earlier
-# archive breaks the chain. The tarball is uploaded with `aws s3 cp`.
+# archive breaks the chain. The tarball is uploaded via boto3 (s3:PutObject).
 #
 # The tamper-PROOF half lives bucket-side and is deliberately not something
 # the box can grant itself. Create the destination with:

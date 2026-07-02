@@ -8,11 +8,13 @@
 # half of the control lives bucket-side by design.
 # =============================================================================
 
+# python3-boto3 handles the S3 upload — Ubuntu 24.04 dropped awscli from the
+# apt archive, and boto3 is a fraction of the footprint on a small VPS.
 - name: Install export dependencies
   ansible.builtin.apt:
     name:
       - zstd
-      - awscli
+      - python3-boto3
     state: present
 
 - name: Create state directories
@@ -85,6 +87,7 @@
   when:
     - log_export_enabled | bool
     - log_export_s3_uri | length > 0
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
   tags:
     - molecule-notest
 
@@ -93,7 +96,9 @@
     name: log-export.timer
     enabled: false
     state: stopped
-  when: not (log_export_enabled | bool and log_export_s3_uri | length > 0)
+  when:
+    - not (log_export_enabled | bool and log_export_s3_uri | length > 0)
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
   failed_when: false
   tags:
     - molecule-notest

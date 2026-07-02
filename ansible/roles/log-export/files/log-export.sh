@@ -11,7 +11,7 @@
 #      rotations, Caddy JSON access logs).
 #   3. tar --zstd → archive; SHA-256 chained onto the previous archive's
 #      hash in hash-chain.log (GENESIS for the first link).
-#   4. aws s3 cp to $LOG_EXPORT_S3_URI/<host>/<year>/ — an Object-Locked,
+#   4. upload (boto3) to $LOG_EXPORT_S3_URI/<host>/<year>/ — an Object-Locked,
 #      write-only-credential bucket (see role defaults for the IAM shape).
 #
 # Failed uploads stay in $STATE_DIR/pending/ and are retried on the next run
@@ -39,6 +39,25 @@ fi
 HOST="$(hostname -s)"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 YEAR="$(date -u +%Y)"
+
+# s3://bucket[/prefix] → bucket + optional key prefix
+S3_PATH="${S3_URI#s3://}"
+S3_BUCKET="${S3_PATH%%/*}"
+S3_PREFIX="${S3_PATH#"$S3_BUCKET"}"
+S3_PREFIX="${S3_PREFIX#/}"
+
+# boto3 upload (awscli is no longer apt-installable on Ubuntu 24.04).
+# upload_file does multipart automatically and s3:PutObject covers it.
+s3_upload() {
+  python3 - "$1" "$S3_BUCKET" "${S3_PREFIX:+$S3_PREFIX/}$2" <<'PY'
+import sys
+import boto3
+from botocore.config import Config
+
+path, bucket, key = sys.argv[1:4]
+boto3.client("s3", config=Config(retries={"max_attempts": 3})).upload_file(path, bucket, key)
+PY
+}
 PENDING="$STATE_DIR/pending"
 WORK="$STATE_DIR/work"
 CHAIN="$STATE_DIR/hash-chain.log"
@@ -87,7 +106,7 @@ chmod 640 "$CHAIN"
 fail=0
 while IFS= read -r f; do
   base="$(basename "$f")"
-  if aws s3 cp --only-show-errors "$f" "$S3_URI/$HOST/$YEAR/$base"; then
+  if s3_upload "$f" "$HOST/$YEAR/$base"; then
     log "Uploaded $base"
     rm -f "$f"
   else
@@ -96,7 +115,7 @@ while IFS= read -r f; do
   fi
 done < <(find "$PENDING" -name 'logs-*.tar.zst' -type f | sort)
 
-if ! aws s3 cp --only-show-errors "$CHAIN" "$S3_URI/$HOST/hash-chain.log"; then
+if ! s3_upload "$CHAIN" "$HOST/hash-chain.log"; then
   log "Upload FAILED for hash-chain.log"
   fail=1
 fi

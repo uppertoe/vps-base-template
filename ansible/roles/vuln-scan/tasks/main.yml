@@ -55,7 +55,9 @@
     enabled: true
     state: started
     daemon_reload: true
-  when: vuln_scan_enabled | bool
+  when:
+    - vuln_scan_enabled | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
   tags:
     - molecule-notest
 
@@ -64,7 +66,9 @@
     name: vuln-scan.timer
     enabled: false
     state: stopped
-  when: not (vuln_scan_enabled | bool)
+  when:
+    - not (vuln_scan_enabled | bool)
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
   failed_when: false
   tags:
     - molecule-notest

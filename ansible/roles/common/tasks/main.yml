@@ -66,7 +66,9 @@
     enabled: true
     state: started
     daemon_reload: true
-  when: common_patch_check_enabled | bool
+  when:
+    - common_patch_check_enabled | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
   tags:
     - molecule-notest
 
@@ -75,7 +77,9 @@
     name: pending-security-updates.timer
     enabled: false
     state: stopped
-  when: not (common_patch_check_enabled | bool)
+  when:
+    - not (common_patch_check_enabled | bool)
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
   failed_when: false
   tags:
     - molecule-notest

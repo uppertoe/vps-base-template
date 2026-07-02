@@ -70,7 +70,9 @@
     enabled: true
     state: started
     daemon_reload: true
-  when: notify_deadman_url | length > 0
+  when:
+    - notify_deadman_url | length > 0
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
   tags:
     - molecule-notest
 
@@ -79,7 +81,9 @@
     name: vps-deadman.timer
     enabled: false
     state: stopped
-  when: notify_deadman_url | length == 0
+  when:
+    - notify_deadman_url | length == 0
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
   failed_when: false
   tags:
     - molecule-notest

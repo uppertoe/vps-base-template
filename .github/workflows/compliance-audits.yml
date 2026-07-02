@@ -15,11 +15,14 @@ jobs:
   compliance-audits:
     name: OpenSCAP and Docker Audits
     runs-on: ubuntu-24.04
+    # Ansible temp/caches must stay OUT of /tmp and /var/tmp: the play mounts
+    # both as tmpfs mid-run (os-hardening), which vaporises the executing
+    # module's own payload. ${{ runner.temp }} lives under /home and is safe.
     env:
-      ANSIBLE_HOME: /tmp/ansible
-      XDG_CACHE_HOME: /tmp/.cache
-      ANSIBLE_LOCAL_TEMP: /tmp/ansible/tmp
-      ANSIBLE_REMOTE_TEMP: /tmp/ansible/tmp
+      ANSIBLE_HOME: ${{ runner.temp }}/ansible
+      XDG_CACHE_HOME: ${{ runner.temp }}/.cache
+      ANSIBLE_LOCAL_TEMP: ${{ runner.temp }}/ansible/tmp
+      ANSIBLE_REMOTE_TEMP: ${{ runner.temp }}/ansible/tmp
     steps:
       - name: Check out repository
         uses: actions/checkout@v4

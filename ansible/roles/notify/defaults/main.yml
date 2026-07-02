@@ -5,6 +5,13 @@ notify_ntfy_url: ""
 notify_ntfy_token: ""
 notify_default_priority: high
 
+# External dead-man's switch. The on-box ntfy cannot alert when the host itself
+# is down, so a small timer pings an external monitor (Healthchecks.io,
+# UptimeRobot heartbeat, etc.) — silence past the monitor's grace period is the
+# host-down alarm. Opt-in: empty URL installs nothing active.
+notify_deadman_url: ""
+notify_deadman_interval_min: 5
+
 # Units whose failure should trigger a push (OnFailure=). Only units that exist
 # on the host get a drop-in; the rest are skipped. dailyaidecheck failing is the
 # AIDE "file integrity changed / scan errored" signal.
@@ -16,3 +23,6 @@ notify_onfailure_units:
   - dailyaidecheck.service
   - backup.service
   - backup-verify.service
+  - restore-drill.service
+  - vuln-scan.service
+  - pending-security-updates.service

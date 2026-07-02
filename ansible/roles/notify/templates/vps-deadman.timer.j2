@@ -1,0 +1,16 @@
+# vps-deadman.timer — Heartbeat schedule for the external monitor.
+#
+# Installed by the notify role. Match the monitor's expected period + grace to
+# {{ notify_deadman_interval_min }} minute(s).
+
+[Unit]
+Description=External dead-man's-switch heartbeat (every {{ notify_deadman_interval_min }} min)
+Requires=vps-deadman.service
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec={{ notify_deadman_interval_min }}min
+Unit=vps-deadman.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,16 @@
+#!/bin/bash
+# vps-deadman — ping an external dead-man's-switch monitor.
+#
+# Reads DEADMAN_URL from /etc/vps-scaffold/notify.env. The monitor alarms when
+# pings STOP arriving, so a failed ping needs no local alerting: the silence
+# itself is the signal. Exits non-zero on failure so the journal records it.
+set -u
+
+CONF="${VPS_NOTIFY_CONF:-/etc/vps-scaffold/notify.env}"
+# shellcheck disable=SC1090
+[ -r "$CONF" ] && . "$CONF"
+
+DEADMAN_URL="${DEADMAN_URL:-}"
+[ -z "$DEADMAN_URL" ] && exit 0   # not configured → no-op
+
+exec curl -fsS --max-time 15 --retry 3 -o /dev/null "$DEADMAN_URL"

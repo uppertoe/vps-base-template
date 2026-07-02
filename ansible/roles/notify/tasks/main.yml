@@ -35,6 +35,55 @@
     group: root
     mode: "0600"
 
+# External dead-man's switch: the one alerting hole the on-box ntfy model has
+# is "the whole host is down". A tiny heartbeat timer pings an external monitor;
+# the monitor alarms when the pings stop. Opt-in via notify_deadman_url.
+- name: Install dead-man's-switch heartbeat script
+  ansible.builtin.copy:
+    src: vps-deadman
+    dest: /usr/local/bin/vps-deadman
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install vps-deadman.service
+  ansible.builtin.copy:
+    src: vps-deadman.service
+    dest: /etc/systemd/system/vps-deadman.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Install vps-deadman.timer
+  ansible.builtin.template:
+    src: vps-deadman.timer.j2
+    dest: /etc/systemd/system/vps-deadman.timer
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Enable and start dead-man's-switch heartbeat
+  ansible.builtin.systemd:
+    name: vps-deadman.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: notify_deadman_url | length > 0
+  tags:
+    - molecule-notest
+
+- name: Disable dead-man's-switch heartbeat when unconfigured
+  ansible.builtin.systemd:
+    name: vps-deadman.timer
+    enabled: false
+    state: stopped
+  when: notify_deadman_url | length == 0
+  failed_when: false
+  tags:
+    - molecule-notest
+
 - name: Warn if notifications are unconfigured
   ansible.builtin.debug:
     msg: >-

@@ -31,6 +31,33 @@ CONTROLS = [
     ("5.26 healthcheck", "healthcheck"),
 ]
 
+# Data-tier separation (ISM-1269/1270/1271): a database container must not be
+# reachable except from its own app — no published host ports, and never on
+# the shared reverse-proxy network where every app (and Caddy) could reach it.
+DB_IMAGE_MARKERS = ("postgres", "mysql", "mariadb", "mongo", "redis", "valkey")
+SHARED_PROXY_NETWORK = "caddy"
+DB_CONTROLS = [
+    ("ISM-1271 db: no published ports", "db_no_published_ports"),
+    ("ISM-1270 db: off the shared proxy network", "db_off_proxy_network"),
+]
+
+
+def is_db_container(c):
+    image = ((c.get("Config") or {}).get("Image") or "").lower()
+    base = image.split("@")[0].rsplit(":", 1)[0].rsplit("/", 1)[-1]
+    return any(m in base for m in DB_IMAGE_MARKERS)
+
+
+def evaluate_db(c):
+    host = c.get("HostConfig") or {}
+    bindings = host.get("PortBindings") or {}
+    published = any(v for v in bindings.values())
+    networks = ((c.get("NetworkSettings") or {}).get("Networks") or {}).keys()
+    return {
+        "db_no_published_ports": not published,
+        "db_off_proxy_network": SHARED_PROXY_NETWORK not in networks,
+    }
+
 
 def docker(args):
     return subprocess.run(
@@ -98,9 +125,13 @@ def main():
     for name in names:
         c = json.loads(docker(["inspect", name]))[0]
         results = evaluate(c)
+        controls = list(CONTROLS)
+        if is_db_container(c):
+            results.update(evaluate_db(c))
+            controls += DB_CONTROLS
         excepted = set(exceptions.get(name, []))
         report["containers"][name] = {}
-        for label, key in CONTROLS:
+        for label, key in controls:
             ok = results[key]
             if ok:
                 status = "PASS"
@@ -125,7 +156,7 @@ def main():
         with open(args.md, "w") as fh:
             fh.write("# Container runtime (CIS Docker §5) audit\n\n")
             fh.write(f"{s['pass']} pass, {s['warn']} warn, {s['excepted']} excepted\n\n")
-            cols = [k for _, k in CONTROLS]
+            cols = [k for _, k in CONTROLS + DB_CONTROLS]
             fh.write("| container | " + " | ".join(cols) + " |\n")
             fh.write("|" + "---|" * (len(cols) + 1) + "\n")
             for name, res in report["containers"].items():

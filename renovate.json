@@ -5,6 +5,12 @@
   "docker": {
     "pinDigests": true
   },
+  "docker-compose": {
+    "managerFilePatterns": ["/(^|/)(?:docker-)?compose[^/]*\\.ya?ml$/", "/^docker/caddy\\.base\\.yml$/"]
+  },
+  "github-actions": {
+    "enabled": true
+  },
   "packageRules": [
     {
       "description": "Group Docker image digest bumps so base-image CVE fixes flow through in one PR",

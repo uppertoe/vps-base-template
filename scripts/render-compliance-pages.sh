@@ -20,10 +20,15 @@ commit_short="${commit_sha:0:9}"
 repo_url="https://github.com/uppertoe/vps-base-template"
 
 # --- Extract summaries (defensive: every field defaults to n/a) -------------
-oscap_xml="$(find "$SITE_ROOT/reports" -name 'results.xml' -path '*openscap*' 2>/dev/null | head -n1 || true)"
+oscap_l1_xml="$(find "$SITE_ROOT/reports" -name 'results.xml' -path '*openscap*l1*' 2>/dev/null | head -n1 || true)"
+[[ -n "$oscap_l1_xml" ]] || oscap_l1_xml="$(find "$SITE_ROOT/reports" -name 'results.xml' -path '*openscap*' -not -path '*l2*' 2>/dev/null | head -n1 || true)"
+oscap_l2_xml="$(find "$SITE_ROOT/reports" -name 'results.xml' -path '*openscap*l2*' 2>/dev/null | head -n1 || true)"
 bench_log="$(find "$SITE_ROOT/reports" -name 'docker-bench.log' 2>/dev/null | head -n1 || true)"
+compose_json="$(find "$SITE_ROOT/reports" -name 'compose-audit.json' 2>/dev/null | head -n1 || true)"
+vuln_summary="$(find "$SITE_ROOT/reports" -name 'summary.txt' -path '*vuln*' 2>/dev/null | head -n1 || true)"
 
-read -r OS_PASS OS_FAIL OS_NOTSEL OS_NA OS_ERR <<< "$(python3 - "$oscap_xml" <<'PY'
+oscap_counts() {
+  python3 - "$1" <<'PY'
 import re, sys
 path = sys.argv[1] if len(sys.argv) > 1 else ""
 try:
@@ -35,7 +40,24 @@ try:
 except Exception:
     print("n/a n/a n/a n/a n/a")
 PY
+}
+read -r OS_PASS OS_FAIL OS_NOTSEL OS_NA OS_ERR <<< "$(oscap_counts "$oscap_l1_xml")"
+read -r L2_PASS L2_FAIL L2_NOTSEL L2_NA L2_ERR <<< "$(oscap_counts "$oscap_l2_xml")"
+
+read -r CA_PASS CA_WARN CA_EXC <<< "$(python3 - "$compose_json" <<'PY'
+import json, sys
+try:
+    s = json.load(open(sys.argv[1]))["summary"]
+    print(s.get("pass", 0), s.get("warn", 0), s.get("excepted", 0))
+except Exception:
+    print("n/a n/a n/a")
+PY
 )"
+
+VULN_LINE="n/a"
+if [[ -n "$vuln_summary" && -r "$vuln_summary" ]]; then
+  VULN_LINE="$(grep -m1 '^TOTAL' "$vuln_summary" || echo n/a)"
+fi
 
 BENCH_SCORE="n/a"; BENCH_CHECKS="n/a"
 if [[ -n "$bench_log" && -r "$bench_log" ]]; then
@@ -84,20 +106,36 @@ links_for() {
   <p>Generated <code>${timestamp}</code> from commit
      <a href="${repo_url}/commit/${commit_sha}"><code>${commit_short}</code></a>.
      CI provisions a fresh Ubuntu 24.04 runner with <code>bootstrap.yml</code> +
-     <code>site-first-run.yml</code>, then audits it with
-     <code>audit-openscap.yml</code> (CIS, tailored) and <code>audit-docker.yml</code>.</p>
+     <code>site-first-run.yml</code>, boots the server template's compose stack
+     (the same digest-pinned images a production instance runs), and audits
+     host (CIS L1 + L2, tailored), daemon, running containers and images.</p>
 
   <div class="tiles">
     <div class="tile">
-      <h3>Host OS — CIS Ubuntu 24.04 (OpenSCAP, tailored)</h3>
+      <h3>Host OS — CIS L1 Server (OpenSCAP, tailored)</h3>
       <div class="big"><span class="ok">${OS_PASS} pass</span> · <span class="warn">${OS_FAIL} fail</span></div>
       <div class="muted">${OS_NOTSEL} notselected (documented exceptions) ·
         ${OS_NA} n/a · ${OS_ERR} error (manually adjudicated)</div>
     </div>
     <div class="tile">
+      <h3>Host OS — CIS L2 Server (deployment target profile)</h3>
+      <div class="big"><span class="ok">${L2_PASS} pass</span> · <span class="warn">${L2_FAIL} fail</span></div>
+      <div class="muted">${L2_NOTSEL} notselected · ${L2_NA} n/a · ${L2_ERR} error</div>
+    </div>
+    <div class="tile">
       <h3>Docker daemon — CIS Docker §1–4 (docker-bench)</h3>
       <div class="big">score ${BENCH_SCORE}</div>
       <div class="muted">${BENCH_CHECKS} checks (informational index, not a KPI)</div>
+    </div>
+    <div class="tile">
+      <h3>Running stack — CIS Docker §5 + ISM tier separation</h3>
+      <div class="big"><span class="ok">${CA_PASS} pass</span> · <span class="warn">${CA_WARN} warn</span></div>
+      <div class="muted">${CA_EXC} excepted · audited against the server template's live compose stack</div>
+    </div>
+    <div class="tile">
+      <h3>Image CVEs — Trivy over the running images</h3>
+      <div class="big" style="font-size:1.05rem">${VULN_LINE}</div>
+      <div class="muted">report-only; fixable CRITICALs page the operator on real hosts</div>
     </div>
   </div>
 
@@ -111,9 +149,19 @@ links_for() {
     audited via <code>audit-all.yml</code>.
   </div>
 
-  <h2>Host OS (OpenSCAP)</h2>
+  <h2>Host OS (OpenSCAP — L1 and L2 tailored profiles)</h2>
   <ul>
 $(links_for '*openscap*')
+  </ul>
+
+  <h2>Running stack (compose audit — §5 + data-tier separation)</h2>
+  <ul>
+$(links_for '*compose-audit*')
+  </ul>
+
+  <h2>Image CVEs (Trivy)</h2>
+  <ul>
+$(links_for '*vuln*')
   </ul>
 
   <h2>Docker daemon (docker-bench)</h2>
@@ -130,12 +178,13 @@ $(links_for '*ci-diagnostics*')
   <p>This page is a <strong>regression signal for the scaffold</strong>: the same
      hardening code, applied to a clean machine, audited on every change to
      <code>main</code> and weekly. It does not audit a production VPS. The
-     controls that only exist against a live stack are audited on-host with
+     controls that only exist on a long-lived host are audited on-VPS with
      <code>audit-all.yml</code> (see
      <a href="${repo_url}/blob/main/docs/06-auditing.md">docs/06-auditing.md</a>):
-     container runtime §5 + data-tier separation (<code>audit-compose</code>),
-     image CVEs (Trivy), AIDE integrity, backup restore drills (RPO/RTO), and
-     off-host log-export chains.</p>
+     AIDE integrity over time, backup restore drills (RPO/RTO), off-host
+     log-export chains, and the per-instance apps beyond the bundled stack.
+     Production audit bundles are deliberately <strong>not</strong> published
+     here — instance evidence is private to the audit pack.</p>
   <ul>
     <li><a href="${repo_url}/blob/main/docs/08-security-model.md">Security model &amp; exceptions register</a></li>
     <li><a href="${repo_url}/blob/main/docs/compliance-plan-vic-health.md">Victorian health compliance plan</a></li>

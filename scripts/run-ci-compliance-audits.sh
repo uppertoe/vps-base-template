@@ -45,14 +45,12 @@ ansible-playbook -i "$INVENTORY_FILE" ansible/bootstrap.yml \
 # skip in place so the workflow reaches the reports. Also keep AIDE DB
 # initialization off in CI while iterating; it makes the runner take well over
 # an hour and still does not produce a stable signal on the hosted image.
-# Safe-upgrade as a best-effort CI step: a transient upstream package break
-# (e.g. a bad amd64 postinst in noble-updates, seen 2026-07-03) must not kill
-# the evidence pipeline. Runners are freshly imaged, and the audited control
-# is the unattended-upgrades configuration, not the act of upgrading. Real
-# provisions still run the upgrade inside site-first-run and fail loudly.
-sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade --with-new-pkgs -y \
-  || echo "WARN: safe upgrade failed (upstream package issue?) — continuing"
-
+# NO package upgrade in CI, deliberately: runners are freshly imaged by
+# GitHub, the audited control is the unattended-upgrades CONFIGURATION (not
+# the act of upgrading), and upstream churn has repeatedly broken or stalled
+# evidence runs (2026-07-03: a bad amd64 postinst, then a 191kB/s GNOME snap
+# transition). Real provisions run the safe upgrade inside site-first-run
+# and fail loudly there.
 ansible-playbook -i "$INVENTORY_FILE" ansible/site-first-run.yml \
   -e "{\"deploy_user_public_key\": \"${DEPLOY_USER_PUBLIC_KEY}\"}" \
   -e common_run_safe_upgrade=false \
@@ -91,4 +89,32 @@ mkdir -p "$DIAGNOSTICS_DIR"
 } > "$DIAGNOSTICS_DIR/network-and-firewall.txt"
 
 ansible-playbook -i "$INVENTORY_FILE" ansible/audit-openscap.yml
+# Keep the L1 report distinct, then audit the L2 deployment-target profile too.
+for d in "$REPO_ROOT"/reports/openscap-*; do
+  [[ -d "$d" && "$d" != *-l1 && "$d" != *-l2 ]] && mv "$d" "${d}-l1"
+done
+ansible-playbook -i "$INVENTORY_FILE" ansible/audit-openscap.yml \
+  -e openscap_tailoring_profile=xccdf_org.ssgproject.content_profile_cis_level2_server_cloud_vps
+for d in "$REPO_ROOT"/reports/openscap-*; do
+  [[ -d "$d" && "$d" != *-l1 && "$d" != *-l2 ]] && mv "$d" "${d}-l2"
+done
+
 ansible-playbook -i "$INVENTORY_FILE" ansible/audit-docker.yml
+
+# --- Audit the REAL container stack, not just the bare host -----------------
+# Boot the server template's compose stack (the same digest-pinned caddy/auth/
+# ntfy images a production instance runs) and audit the running containers:
+# CIS Docker §5 + data-tier separation (audit-compose, enforcing) and image
+# CVEs (audit-vuln, report-only).
+STACK_DIR="$CI_TMP_BASE/stack"
+rm -rf "$STACK_DIR"
+git clone --depth 1 https://github.com/uppertoe/server-instance-template "$STACK_DIR"
+git -C "$STACK_DIR" -c url."https://github.com/".insteadOf=git@github.com: \
+  submodule update --init --recursive
+echo "DOMAIN=ci.invalid" > "$STACK_DIR/.env"
+(cd "$STACK_DIR" && sudo docker compose up -d --wait)
+
+ansible-playbook -i "$INVENTORY_FILE" ansible/audit-compose.yml
+ansible-playbook -i "$INVENTORY_FILE" ansible/audit-vuln.yml
+
+(cd "$STACK_DIR" && sudo docker compose down -v) || true

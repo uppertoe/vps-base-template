@@ -54,6 +54,15 @@
 		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_package_nftables_installed" selected="false"/>
 		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_service_nftables_disabled" selected="false"/>
 		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_set_nftables_base_chain" selected="false"/>
+		<!-- Docker requires ip_forward=1; UFW (an nftables frontend) is the
+		     scaffold's firewall, so the standalone-nftables service/persistence
+		     rules and package_ufw_removed conflict with the architecture. All
+		     four are documented in the docs/08 register (previously deselected
+		     only in the L2 profile). -->
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_sysctl_net_ipv4_ip_forward" selected="false"/>
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_package_ufw_removed" selected="false"/>
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_service_nftables_enabled" selected="false"/>
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_nftables_rules_permanent" selected="false"/>
 		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_grub2_password" selected="false"/>
 		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_grub2_uefi_password" selected="false"/>
 	</xccdf-1.2:Profile>

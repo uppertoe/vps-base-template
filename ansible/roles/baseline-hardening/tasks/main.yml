@@ -392,6 +392,24 @@
       notify: Restart auditd
       when: os_auditd_enabled | bool
 
+    # CIS file_permissions_etc_audit_rulesd: every *.rules must be 0640 or
+    # stricter — the auditd package ships its default audit.rules looser.
+    - name: Find audit rules files with permissive modes
+      ansible.builtin.command:
+        cmd: find /etc/audit/rules.d -type f -perm /0137
+      register: baseline_lax_audit_rules
+      changed_when: false
+      when: os_auditd_enabled | bool
+
+    - name: Restrict permissions on audit rules files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        mode: "0640"
+        owner: root
+        group: root
+      loop: "{{ baseline_lax_audit_rules.stdout_lines | default([]) }}"
+      when: os_auditd_enabled | bool
+
     # CIS Level 2: SSG-derived audit ruleset (time/identity/perm/access/export/
     # delete/modules/MAC/logins/session/privileged + immutable -e 2). These are
     # the exact SSG rule files captured from a remediated host, so the OVAL checks

@@ -16,6 +16,13 @@
     - baseline_cis_l2_audit_rules | default(false) | bool
     - "'DisableForwarding yes' not in (sshd_custom_options | default([]))"
 
+# CIS sshd_disable_gssapi_auth wants the directive EXPLICIT in sshd_config;
+# devsec disables GSSAPI by default but omits the line entirely.
+- name: Append explicit GSSAPIAuthentication no to sshd_custom_options
+  ansible.builtin.set_fact:
+    sshd_custom_options: "{{ (sshd_custom_options | default([])) + ['GSSAPIAuthentication no'] }}"
+  when: "'GSSAPIAuthentication no' not in (sshd_custom_options | default([]))"
+
 - name: Apply SSH hardening via dev-sec.io
   ansible.builtin.include_role:
     name: devsec.hardening.ssh_hardening

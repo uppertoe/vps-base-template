@@ -54,6 +54,7 @@ ansible-playbook -i "$INVENTORY_FILE" ansible/bootstrap.yml \
 ansible-playbook -i "$INVENTORY_FILE" ansible/site-first-run.yml \
   -e "{\"deploy_user_public_key\": \"${DEPLOY_USER_PUBLIC_KEY}\"}" \
   -e common_run_safe_upgrade=false \
+  -e baseline_cis_l2_audit_rules=true \
   -e baseline_manage_apparmor_profile_modes=false \
   -e baseline_initialize_aide_database=false
 

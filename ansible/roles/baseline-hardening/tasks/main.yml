@@ -431,6 +431,22 @@
     - baseline_enable_aide | bool
     - baseline_cis_l2_audit_rules | bool
 
+# CIS aide_disable_silentreports: findings must be reported, not swallowed.
+- name: Disable AIDE silent reports
+  ansible.builtin.lineinfile:
+    path: /etc/default/aide
+    regexp: '^#?SILENTREPORTS='
+    line: 'SILENTREPORTS=no'
+  when: baseline_enable_aide | bool
+
+# CIS account_disable_post_pw_expiration: disable accounts 30 days after
+# password expiry (defence in depth — all scaffold accounts are key-only).
+- name: Disable accounts 30 days after password expiry
+  ansible.builtin.lineinfile:
+    path: /etc/default/useradd
+    regexp: '^#?INACTIVE='
+    line: 'INACTIVE=30'
+
 # Bridge the wrapper's exit-0-on-change behaviour to the notify role's OnFailure
 # hook: an ExecStartPost that fails the unit when AIDE's latest report shows
 # differences, turning a detected change into the failed state that

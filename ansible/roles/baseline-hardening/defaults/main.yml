@@ -22,6 +22,8 @@ baseline_unneeded_packages:
   - sendmail
   - sendmail-bin
   - sendmail-cf
+  - xserver-common
+  - xwayland
 
 baseline_docker_audit_watch_candidates:
   - /usr/bin/docker

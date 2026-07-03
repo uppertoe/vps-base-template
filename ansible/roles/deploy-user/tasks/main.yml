@@ -11,6 +11,12 @@
     create_home: true
     state: present
 
+# CIS file_permissions_home_directories: 750 or stricter.
+- name: Restrict deploy home directory permissions
+  ansible.builtin.file:
+    path: "/home/{{ deploy_user }}"
+    mode: "0750"
+
 - name: Add SSH public key to authorized_keys
   ansible.posix.authorized_key:
     user: "{{ deploy_user }}"
@@ -35,6 +41,11 @@
     shell: /bin/bash
     create_home: true
     state: present
+
+- name: Restrict admin home directory permissions
+  ansible.builtin.file:
+    path: "/home/{{ deploy_admin_user }}"
+    mode: "0750"
 
 - name: Add SSH public key to admin authorized_keys
   ansible.posix.authorized_key:

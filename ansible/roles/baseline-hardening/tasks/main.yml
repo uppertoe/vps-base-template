@@ -388,9 +388,10 @@
         dest: /etc/audit/rules.d/99-vps-scaffold.rules
         owner: root
         group: root
-        mode: "0640"
+        mode: "0600"
       notify: Restart auditd
       when: os_auditd_enabled | bool
+
 
     # CIS Level 2: SSG-derived audit ruleset (time/identity/perm/access/export/
     # delete/modules/MAC/logins/session/privileged + immutable -e 2). These are
@@ -408,6 +409,25 @@
       loop_control:
         label: "{{ item | basename }}"
       notify: Restart auditd
+
+    # SSG file_permissions_etc_audit_rulesd (ubuntu2404) demands 0600 — the
+    # auditd package ships its default audit.rules at 0640. Runs after every
+    # rules.d writer above.
+    - name: Find audit rules files looser than 0600
+      ansible.builtin.command:
+        cmd: find /etc/audit/rules.d -type f -perm /0177
+      register: baseline_lax_audit_rules
+      changed_when: false
+      when: os_auditd_enabled | bool
+
+    - name: Restrict audit rules files to 0600
+      ansible.builtin.file:
+        path: "{{ item }}"
+        mode: "0600"
+        owner: root
+        group: root
+      loop: "{{ baseline_lax_audit_rules.stdout_lines | default([]) }}"
+      when: os_auditd_enabled | bool
       when:
         - os_auditd_enabled | bool
         - baseline_cis_l2_audit_rules | bool
@@ -430,6 +450,22 @@
   when:
     - baseline_enable_aide | bool
     - baseline_cis_l2_audit_rules | bool
+
+# CIS aide_disable_silentreports: findings must be reported, not swallowed.
+- name: Disable AIDE silent reports
+  ansible.builtin.lineinfile:
+    path: /etc/default/aide
+    regexp: '^#?SILENTREPORTS='
+    line: 'SILENTREPORTS=no'
+  when: baseline_enable_aide | bool
+
+# CIS account_disable_post_pw_expiration: disable accounts 30 days after
+# password expiry (defence in depth — all scaffold accounts are key-only).
+- name: Disable accounts 30 days after password expiry
+  ansible.builtin.lineinfile:
+    path: /etc/default/useradd
+    regexp: '^#?INACTIVE='
+    line: 'INACTIVE=30'
 
 # Bridge the wrapper's exit-0-on-change behaviour to the notify role's OnFailure
 # hook: an ExecStartPost that fails the unit when AIDE's latest report shows

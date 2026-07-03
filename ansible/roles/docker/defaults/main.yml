@@ -19,8 +19,8 @@ docker_daemon_config:
   # binaries. Applied as a default — individual containers can override.
   no-new-privileges: true
 
-  # Log rotation — prevents Docker logs filling the disk on a long-lived server
-  log-driver: json-file
-  log-opts:
-    max-size: "10m"
-    max-file: "3"
+  # Container stdout/stderr goes to journald: rides journald's size caps, is
+  # captured by auditable retention, and ships off-host on the log-export
+  # chain (docker-bench 2.13 / ISM centralised logging). `docker logs` and
+  # `docker compose logs` still work with this driver.
+  log-driver: journald

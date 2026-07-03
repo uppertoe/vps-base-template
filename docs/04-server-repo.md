@@ -88,7 +88,7 @@ container that skips them shows up as a finding. The rules:
 
 | Control | Why |
 |---------|-----|
-| `image: …@sha256:` digest, never `:latest` | reproducible, tamper-evident pulls (Renovate keeps digests fresh) |
+| `image: …@sha256:` digest, never `:latest` | reproducible, tamper-evident pulls (weekly digest-freshness check flags drift; enable the Renovate app for automated bump PRs) |
 | `user:` non-root | a container escape lands as an unprivileged user |
 | `cap_drop: [ALL]` (+ minimal `cap_add`) | remove kernel capabilities the app never uses |
 | `security_opt: [no-new-privileges:true]` | block setuid privilege escalation (also a daemon default) |

@@ -27,7 +27,7 @@ Each layer has one governing benchmark and one tool that measures it. Nothing is
 | **Host (2nd opinion)** | Lynis hardening index (not a benchmark — a drift signal) | same roles | `audit-lynis.yml` |
 | **Docker daemon / host** | CIS Docker Benchmark **§1–4** | `docker` + `firewall` + `baseline-hardening` roles | `audit-docker.yml` (docker-bench-security) |
 | **Containers (runtime)** | CIS Docker Benchmark **§5** | per-service compose declarations (`caddy.base.yml`, `apps/*/docker-compose.yml`) | `audit-compose.yml` + CI compose-lint (KICS) |
-| **Images (supply chain)** | Trivy CVE policy + Dockle best-practice | digest pins + Renovate | CI (`Trivy`, `Dockle`) |
+| **Images (supply chain)** | Trivy CVE policy + Dockle best-practice | digest pins + weekly freshness check (Renovate app optional for auto-PRs) | CI (`Trivy`, `Dockle`) |
 
 ### Why these tools, and the version reality
 
@@ -68,8 +68,13 @@ tailoring file in lock-step.
 |-------------|----------|--------------|
 | `mount_option_var_{nodev,nosuid}`, `mount_option_var_log_{nodev,noexec,nosuid}`, `mount_option_var_log_audit_{nodev,noexec,nosuid}`, `mount_option_home_{nodev,nosuid}` | Separate-partition mount options | A single-disk cloud image has no dedicated `/var`, `/var/log`, `/var/log/audit`, `/home` filesystems; these options cannot be set without repartitioning. CIS's own benchmark text accepts the cloud-resize caveat. |
 | `grub2_password`, `grub2_uefi_password` | Bootloader password | No physical/console access on a managed hypervisor; recovery is via the provider console/rebuild. A GRUB password risks locking out provider rescue. |
+| `package_nftables_installed`, `service_nftables_disabled`, `set_nftables_base_chain` | Standalone nftables setup | The scaffold's firewall is UFW (an nftables frontend — live nft ruleset active and persistent) with Docker-aware `DOCKER-USER` filtering. The benchmark's standalone-nftables path conflicts with that architecture; same rationale as the L2 `package_ufw_removed` family. Deselected 2026-07-04. |
 
 > **Satisfied, not excepted** (kept selected and driven to *pass* by the roles):
+> `account_disable_post_pw_expiration` (INACTIVE=30), `file_permissions_home_directories`
+> (0750 on deploy/admin homes), `aide_disable_silentreports`, explicit
+> `GSSAPIAuthentication no`, and a `containerd.sock` auditd watch — closed
+> 2026-07-04 from the CI rule-level review. Previously noted:
 > `/tmp` and `/var/tmp` are size-capped tmpfs (`os-hardening` role) → satisfies
 > `partition_for_tmp` + `mount_option_tmp_*` / `mount_option_var_tmp_*`; `/dev/shm`
 > is hardened by devsec defaults; `usb-storage` is blacklisted by
@@ -207,7 +212,7 @@ container declares it explicitly so the audit is unambiguous.
    tailoring file *and* this register.
 3. **Docker §1–4 / §5:** daemon findings → scaffold roles; per-container findings →
    the app's `docker-compose.yml`.
-4. **Images:** Trivy HIGH/CRITICAL → bump the digest (Renovate) or rebuild;
+4. **Images:** Trivy HIGH/CRITICAL → bump the digest (freshness issue / Renovate PR) or rebuild;
    report-only in CI so an unfixable upstream CVE does not block deploys.
 5. **Lynis:** read qualitatively; investigate large regressions, don't chase 100.
 

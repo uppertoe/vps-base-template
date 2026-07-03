@@ -45,6 +45,24 @@
 		<!-- GRUB bootloader passwords: no physical/console access on a managed
 		     hypervisor; recovery is via the provider console/rebuild. Setting a GRUB
 		     password risks locking out provider rescue. N/A. -->
+		<!-- Firewall architecture: the scaffold deliberately uses UFW (an nftables
+		     frontend, live nft ruleset active and persistent) with Docker-aware
+		     DOCKER-USER filtering. The benchmark's standalone-nftables path
+		     (install nftables, disable its service until configured, define base
+		     chains by hand) conflicts with that model. Same rationale as the L2
+		     package_ufw_removed/service_nftables_enabled deselections. -->
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_package_nftables_installed" selected="false"/>
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_service_nftables_disabled" selected="false"/>
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_set_nftables_base_chain" selected="false"/>
+		<!-- Docker requires ip_forward=1; UFW (an nftables frontend) is the
+		     scaffold's firewall, so the standalone-nftables service/persistence
+		     rules and package_ufw_removed conflict with the architecture. All
+		     four are documented in the docs/08 register (previously deselected
+		     only in the L2 profile). -->
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_sysctl_net_ipv4_ip_forward" selected="false"/>
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_package_ufw_removed" selected="false"/>
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_service_nftables_enabled" selected="false"/>
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_nftables_rules_permanent" selected="false"/>
 		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_grub2_password" selected="false"/>
 		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_grub2_uefi_password" selected="false"/>
 	</xccdf-1.2:Profile>

@@ -62,6 +62,7 @@
     # an exit signal we use to drive the notification.
     - name: Scan every running image with Trivy
       ansible.builtin.shell:
+        executable: /bin/bash  # mapfile/pipefail — the default /bin/sh is dash
         cmd: |
           set -euo pipefail
           WORK="{{ audit_vuln_work_dir }}"

@@ -73,7 +73,7 @@
 
           # Distinct images backing the running containers (skip the trivy image itself).
           mapfile -t images < <(docker ps --format '{{ '{{' }}.Image{{ '}}' }}' | sort -u | grep -v -F "$TRIVY" || true)
-          if [[ ${#images[@]} -eq 0 ]]; then
+          if [[ {% raw %}${#images[@]}{% endraw %} -eq 0 ]]; then
             echo "No running containers found — nothing to scan." | tee -a "$WORK/summary.txt"
             exit 0
           fi

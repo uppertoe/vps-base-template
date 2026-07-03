@@ -34,6 +34,7 @@ playbooks) or `CI`.
 | 21 | Retention/deletion honours 7-year/age-25 + deletion logs | 4.2–4.4 | — | — | — | ⟨⟩ | app level + [retention-deletion-design.md](retention-deletion-design.md) | app deletion logs | ➖ per instance |
 | 22 | Incident response wired to DH 1-hour reporting | — | — | — | Std 6 | ⟨⟩ | [incident-response-runbook.md](incident-response-runbook.md) | runbook + annual test record | ➖ per instance |
 | 23 | Quarterly access review (keys, admin emails, credentials) | 4.1 | — | restrict admin | E11.120 / Std 4 | ⟨⟩ | review cadence (see SSP §6) | dated review entries in repo | ➖ per instance |
+| 25 | Secrets handling: 0600 file-based, AIDE-monitored, encrypted off-host copies, documented rotation (HPP 4; VPDSS E11.150) | 4.1 | 1449 analog | — | E11.150 | ⟨⟩ | `.env` pattern + `env-files` restic service + docs/08 secrets position | recovery-root entry in password manager; `restic snapshots --tag env-files` | ➖ enable per instance |
 | 24 | EDR or accepted compensating controls | — | — | — | — | ⟨⟩ | auditd+AIDE+ntfy+Trivy stack | written acceptance from health service | ➖ decision C2 |
 
 **Version note (⟨date⟩):** measurement of record is CIS Ubuntu 24.04 **v1.0.0**

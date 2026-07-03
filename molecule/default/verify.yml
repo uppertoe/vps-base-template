@@ -673,3 +673,42 @@
         that:
           - prune_timer.stat.exists
         msg: "docker-prune.timer unit not found"
+
+    # -------------------------------------------------------------------------
+    # Compliance timers (vuln-scan, patch-SLA, dead-man, log-export)
+    # -------------------------------------------------------------------------
+    - name: Check compliance control artifacts exist
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: compliance_artifacts
+      loop:
+        - /usr/local/bin/vuln-scan.sh
+        - /etc/systemd/system/vuln-scan.service
+        - /etc/systemd/system/vuln-scan.timer
+        - /usr/local/bin/pending-security-updates
+        - /etc/systemd/system/pending-security-updates.timer
+        - /usr/local/bin/vps-deadman
+        - /etc/systemd/system/vps-deadman.timer
+        - /usr/local/bin/vps-notify
+        - /etc/vps-scaffold/notify.env
+        - /usr/local/bin/log-export.sh
+        - /etc/systemd/system/log-export.timer
+        - /etc/vps-scaffold/log-export.env
+
+    - name: Assert compliance control artifacts exist
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+        msg: "missing compliance artifact: {{ item.item }}"
+      loop: "{{ compliance_artifacts.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Check secret env files are root-only
+      ansible.builtin.assert:
+        that:
+          - (compliance_artifacts.results | selectattr('item', 'equalto', item) | first).stat.mode == '0600'
+        msg: "{{ item }} must be mode 0600"
+      loop:
+        - /etc/vps-scaffold/notify.env
+        - /etc/vps-scaffold/log-export.env

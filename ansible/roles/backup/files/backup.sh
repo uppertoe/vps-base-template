@@ -561,9 +561,11 @@ backup_service() {
     if "$FILES_ONLY"; then
       files_snapshot_state="snapshot not saved"
     fi
+    # ${arr[@]+...} keeps the empty-excludes expansion legal under set -u on
+    # bash 3.2 (macOS), where a bare "${arr[@]}" on an empty array is fatal.
     if ! restic backup \
       "${_paths[@]}" \
-      "${_excludes[@]}" \
+      ${_excludes[@]+"${_excludes[@]}"} \
       --tag "${SERVICE_NAME}-files" \
       --tag "$TIMESTAMP"; then
       warn "[$SERVICE_NAME] File backup failed."
@@ -676,7 +678,7 @@ main() {
       if [[ "${retention_repos[$idx]}" == "$repo" && "${retention_passwords[$idx]}" == "$password" ]]; then
         case ",${retention_labels[$idx]}," in
           *",$label,"*) ;;
-          *) retention_labels[$idx]="${retention_labels[$idx]},$label" ;;
+          *) retention_labels[idx]="${retention_labels[$idx]},$label" ;;
         esac
         return 0
       fi

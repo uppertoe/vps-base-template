@@ -1,0 +1,19 @@
+# vps-deadman.service — One heartbeat ping to the external monitor.
+#
+# Triggered by vps-deadman.timer. Do not enable directly.
+# Installed by the notify role.
+#
+# No OnFailure hook on purpose: the external monitor alarms on missing pings,
+# which covers every failure mode of this unit including total host loss.
+
+[Unit]
+Description=External dead-man's-switch heartbeat
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/vps-deadman
+
+[Install]
+WantedBy=multi-user.target

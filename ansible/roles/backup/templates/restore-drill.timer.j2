@@ -1,0 +1,19 @@
+# restore-drill.timer — Periodic backup restore drill.
+#
+# Monthly by default: frequent enough to keep the restore path and the
+# RPO/RTO evidence trail warm, rare enough that the extra restore load and
+# object-storage reads stay negligible.
+#
+# Installed by the backup Ansible role.
+
+[Unit]
+Description=Backup restore drill — {{ backup_restore_drill_schedule }} schedule
+Requires=restore-drill.service
+
+[Timer]
+OnCalendar={{ backup_restore_drill_schedule }}
+Persistent=true
+Unit=restore-drill.service
+
+[Install]
+WantedBy=timers.target

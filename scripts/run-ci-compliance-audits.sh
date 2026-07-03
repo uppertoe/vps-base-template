@@ -4,15 +4,24 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-export ANSIBLE_HOME="${ANSIBLE_HOME:-/tmp/ansible}"
-export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/tmp/.cache}"
-export ANSIBLE_LOCAL_TEMP="${ANSIBLE_LOCAL_TEMP:-/tmp/ansible/tmp}"
-export ANSIBLE_REMOTE_TEMP="${ANSIBLE_REMOTE_TEMP:-/tmp/ansible/tmp}"
+# Ansible temp/caches must live OUTSIDE /tmp and /var/tmp: the play itself
+# converts both into size-capped tmpfs mounts (os-hardening), and when the
+# mount activates mid-run everything underneath vanishes — including the
+# AnsiballZ payload of the task currently executing (the June 2026 weekly
+# failures: apt module dying with FileNotFoundError on its own payload zip).
+CI_TMP_BASE="${RUNNER_TEMP:-$HOME/.vps-scaffold-ci-tmp}"
+export ANSIBLE_HOME="${ANSIBLE_HOME:-$CI_TMP_BASE/ansible}"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$CI_TMP_BASE/.cache}"
+export ANSIBLE_LOCAL_TEMP="${ANSIBLE_LOCAL_TEMP:-$CI_TMP_BASE/ansible/tmp}"
+export ANSIBLE_REMOTE_TEMP="${ANSIBLE_REMOTE_TEMP:-$CI_TMP_BASE/ansible/tmp}"
+# Moving ANSIBLE_HOME also moves the default collections path — keep the
+# workflow-installed collections (~/.ansible) visible.
+export ANSIBLE_COLLECTIONS_PATH="${ANSIBLE_COLLECTIONS_PATH:-$ANSIBLE_HOME/collections:$HOME/.ansible/collections:/usr/share/ansible/collections}"
 
 mkdir -p "$ANSIBLE_HOME" "$XDG_CACHE_HOME" "$ANSIBLE_LOCAL_TEMP" "$REPO_ROOT/reports"
 
-INVENTORY_FILE="$(mktemp /tmp/vps-scaffold-ci-inventory.XXXXXX)"
-SSH_KEY_FILE="$(mktemp /tmp/vps-scaffold-ci-key.XXXXXX)"
+INVENTORY_FILE="$(mktemp "$CI_TMP_BASE/vps-scaffold-ci-inventory.XXXXXX")"
+SSH_KEY_FILE="$(mktemp "$CI_TMP_BASE/vps-scaffold-ci-key.XXXXXX")"
 trap 'rm -f "$INVENTORY_FILE" "$SSH_KEY_FILE" "$SSH_KEY_FILE.pub"' EXIT
 
 cat > "$INVENTORY_FILE" <<'EOF'

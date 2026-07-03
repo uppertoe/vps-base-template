@@ -15,11 +15,10 @@ jobs:
   compliance-audits:
     name: OpenSCAP and Docker Audits
     runs-on: ubuntu-24.04
-    env:
-      ANSIBLE_HOME: /tmp/ansible
-      XDG_CACHE_HOME: /tmp/.cache
-      ANSIBLE_LOCAL_TEMP: /tmp/ansible/tmp
-      ANSIBLE_REMOTE_TEMP: /tmp/ansible/tmp
+    # No ANSIBLE_* env here on purpose: run-ci-compliance-audits.sh defaults
+    # them under $RUNNER_TEMP. They must stay OUT of /tmp and /var/tmp — the
+    # play mounts both as tmpfs mid-run (os-hardening), which vaporises the
+    # executing module's own payload.
     steps:
       - name: Check out repository
         uses: actions/checkout@v4

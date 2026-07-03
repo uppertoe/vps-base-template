@@ -1,0 +1,32 @@
+# restore-drill.service — Periodic proof that backups actually restore.
+#
+# Triggered by restore-drill.timer. Do not enable this unit directly.
+# Installed by the backup Ansible role.
+#
+# Restores the latest snapshot of every service into a throwaway target
+# (drill database / scratch dir), never touching live data, and records
+# achieved RPO/RTO to /var/lib/backup-drill/. Failure fires OnFailure=notify@.
+
+[Unit]
+Description=Backup restore drill (RPO/RTO evidence)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+
+# Load global backup config (AWS creds, retention).
+# Per-service configs are sourced by the script itself.
+EnvironmentFile=/etc/restic/config.env
+
+ExecStart=/opt/backup/restore-drill.sh
+
+# Full-repo restores can be slow on cold object storage.
+TimeoutStartSec=2h
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=restore-drill
+
+[Install]
+WantedBy=multi-user.target

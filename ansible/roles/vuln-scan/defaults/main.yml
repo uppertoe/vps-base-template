@@ -1,0 +1,29 @@
+---
+# Scheduled container-image CVE scanning (Trivy) of the RUNNING images.
+#
+# The Essential Eight / ISM patching model expects *daily* vulnerability
+# scanning of internet-facing services, with a 48-hour patch clock for
+# critical/exploited vulnerabilities. The scheduled scan is what starts that
+# clock: it runs Trivy over every image actually running on the VPS, keeps a
+# dated report under /var/lib/vuln-scan (SLA evidence), and pushes an urgent
+# ntfy alert when a CRITICAL CVE with an available fix is present.
+#
+# Report-only: an unfixable upstream CVE must never block operations. The
+# ad-hoc audit-vuln.yml playbook uses the same approach and additionally
+# fetches artifacts into the repo's reports/ directory.
+vuln_scan_enabled: true
+
+# When to scan (systemd OnCalendar, UTC). Daily, offset from the backup and
+# AIDE timers so the 2 GB box never runs two heavy jobs at once.
+vuln_scan_schedule: "*-*-* 05:41:00"
+
+# Severities to record in reports. Alerts only fire for fixable CRITICALs.
+vuln_scan_severity: "HIGH,CRITICAL"
+
+# Trivy runs as a container so nothing is installed on the host.
+vuln_scan_trivy_image: "aquasec/trivy:0.59.1"
+
+# Vulnerability DB cache (shared with audit-vuln.yml) and report retention.
+vuln_scan_cache_dir: /var/cache/trivy
+vuln_scan_state_dir: /var/lib/vuln-scan
+vuln_scan_report_retention_days: 400

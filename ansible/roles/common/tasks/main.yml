@@ -34,6 +34,56 @@
       APT::Periodic::Unattended-Upgrade "1";
     mode: "0644"
 
+- name: Install pending-security-updates check script
+  ansible.builtin.copy:
+    src: pending-security-updates
+    dest: /usr/local/bin/pending-security-updates
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Install pending-security-updates.service
+  ansible.builtin.copy:
+    src: pending-security-updates.service
+    dest: /etc/systemd/system/pending-security-updates.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Install pending-security-updates.timer
+  ansible.builtin.template:
+    src: pending-security-updates.timer.j2
+    dest: /etc/systemd/system/pending-security-updates.timer
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Enable and start pending-security-updates timer
+  ansible.builtin.systemd:
+    name: pending-security-updates.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+  when:
+    - common_patch_check_enabled | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+  tags:
+    - molecule-notest
+
+- name: Disable pending-security-updates timer when turned off
+  ansible.builtin.systemd:
+    name: pending-security-updates.timer
+    enabled: false
+    state: stopped
+  when:
+    - not (common_patch_check_enabled | bool)
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+  failed_when: false
+  tags:
+    - molecule-notest
+
 - name: Set server timezone
   community.general.timezone:
     name: "{{ server_timezone }}"
@@ -150,17 +200,127 @@
     - host_swapfile_enabled | bool
     - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
 
+# --- Plain (unencrypted) swap path -----------------------------------------
+
 - name: Ensure managed swapfile is persistent in fstab
   ansible.builtin.lineinfile:
     path: /etc/fstab
     regexp: "^{{ host_swapfile_path | regex_escape() }}\\s+none\\s+swap\\s+sw\\s+0\\s+0$"
     line: "{{ host_swapfile_path }} none swap sw 0 0"
     state: present
+  when:
+    - host_swapfile_enabled | bool
+    - not (host_swap_encrypted | bool)
 
 - name: Ensure managed swapfile is active
   ansible.builtin.command:
     cmd: "swapon {{ host_swapfile_path }}"
   when:
     - host_swapfile_enabled | bool
+    - not (host_swap_encrypted | bool)
     - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
     - host_swapfile_path not in common_active_swaps.stdout_lines
+
+# --- Encrypted swap path ----------------------------------------------------
+# dm-crypt over the managed swapfile with a fresh /dev/urandom key each boot
+# (systemd loop-mounts file sources listed in crypttab and re-runs mkswap via
+# the 'swap' option). Anything paged out of RAM — session secrets, PII — is
+# unrecoverable after reboot. This is the retrofittable slice of
+# encryption-at-rest; volumes/root need provider support (see the compliance
+# plan, item B1).
+
+- name: Encrypted swap
+  when:
+    - host_swapfile_enabled | bool
+    - host_swap_encrypted | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+  block:
+    - name: Install cryptsetup
+      ansible.builtin.apt:
+        name: cryptsetup
+        state: present
+
+    - name: Remove plain swapfile entry from fstab
+      ansible.builtin.lineinfile:
+        path: /etc/fstab
+        regexp: "^{{ host_swapfile_path | regex_escape() }}\\s+none\\s+swap\\s+"
+        state: absent
+
+    - name: Configure random-key encrypted swap in crypttab
+      ansible.builtin.lineinfile:
+        path: /etc/crypttab
+        regexp: "^{{ host_swap_crypt_name }}\\s"
+        line: "{{ host_swap_crypt_name }} {{ host_swapfile_path }} /dev/urandom swap,cipher=aes-xts-plain64,size=512,plain"
+        create: true
+        owner: root
+        group: root
+        mode: "0644"
+      register: common_crypttab
+
+    - name: Ensure encrypted swap is persistent in fstab
+      ansible.builtin.lineinfile:
+        path: /etc/fstab
+        regexp: "^/dev/mapper/{{ host_swap_crypt_name }}\\s+none\\s+swap\\s+"
+        line: "/dev/mapper/{{ host_swap_crypt_name }} none swap sw 0 0"
+        state: present
+
+    # Live conversion: turn the plain swapfile off before dm-crypt claims it.
+    # swapoff needs the swapped-out pages to fit back into RAM; if it fails,
+    # nothing has been broken — the encrypted mapping simply activates on the
+    # next reboot instead.
+    - name: Deactivate plain swapfile before encrypting
+      ansible.builtin.command:
+        cmd: "swapoff {{ host_swapfile_path }}"
+      register: common_plain_swapoff
+      failed_when: false
+      changed_when: common_plain_swapoff.rc == 0
+      when: host_swapfile_path in common_active_swaps.stdout_lines
+
+    - name: Warn when live swapoff could not complete
+      ansible.builtin.debug:
+        msg: >-
+          swapoff {{ host_swapfile_path }} failed (likely not enough free RAM
+          to absorb swapped pages). Encrypted swap is fully configured and will
+          activate on the next reboot; the plain swapfile stays active until then.
+      when:
+        - common_plain_swapoff is not skipped
+        - common_plain_swapoff.rc != 0
+
+    - name: Start the encrypted swap mapping
+      ansible.builtin.systemd:
+        name: "systemd-cryptsetup@{{ host_swap_crypt_name }}.service"
+        state: started
+        daemon_reload: true
+      when: >-
+        common_plain_swapoff is skipped or common_plain_swapoff.rc == 0
+
+    # swapon --show prints the CANONICAL device (/dev/dm-0), never the
+    # /dev/mapper symlink — compare resolved paths or every re-run tries to
+    # swapon an already-active device.
+    - name: Resolve encrypted swap device path
+      ansible.builtin.command:
+        cmd: "readlink -f /dev/mapper/{{ host_swap_crypt_name }}"
+      register: common_cryptswap_realpath
+      changed_when: false
+      failed_when: false
+
+    - name: Check active swap devices after conversion
+      ansible.builtin.command:
+        cmd: swapon --show=NAME --noheadings
+      register: common_active_swaps_after
+      changed_when: false
+
+    - name: Activate encrypted swap
+      ansible.builtin.command:
+        cmd: "swapon /dev/mapper/{{ host_swap_crypt_name }}"
+      register: common_cryptswap_swapon
+      changed_when: common_cryptswap_swapon.rc == 0
+      # Belt and braces: systemd's fstab-generated .swap unit can activate the
+      # device between the check and this task — already-active is success.
+      failed_when:
+        - common_cryptswap_swapon.rc != 0
+        - "'busy' not in (common_cryptswap_swapon.stderr | default(''))"
+      when:
+        - (common_plain_swapoff is skipped or common_plain_swapoff.rc == 0)
+        - (common_cryptswap_realpath.stdout | trim) not in common_active_swaps_after.stdout_lines
+        - ("/dev/mapper/" ~ host_swap_crypt_name) not in common_active_swaps_after.stdout_lines

@@ -250,6 +250,19 @@ deploy_allowed_app_manage_commands:
   - shell
 ```
 
+## Access Review Cadence (applies today)
+
+Unlike the target model above, this is current practice, not aspiration:
+**quarterly**, review and record in the server repo (a dated markdown entry is
+enough — it becomes control-matrix row 23 evidence):
+
+- `~deploy/.ssh/authorized_keys` — every key still maps to a person who needs it
+- `ADMIN_EMAILS` (and user activity) in `apps/auth/.env`
+- credentials the box holds: backup S3 keys, SES/SMTP, registry tokens —
+  rotate anything unexplained or older than 12 months
+- dormant access: anything unused for ~45 days gets removed, not kept "just
+  in case" (the Essential Eight ML2 dormancy rule, applied at our scale)
+
 ## What This Does Not Solve
 
 This model improves access control, but it does not by itself solve:

@@ -129,12 +129,28 @@ app.{$DOMAIN} {
 }
 ```
 
-## Admin two-factor (optional)
+## Admin two-factor (default on)
 
 Email codes inherit the security of the user's inbox. For the higher-trust admin
-tier you can require TOTP: set `TOTP_ENABLED=true` in `apps/auth/.env`. Admins
-are enrolled on first login (shown an `otpauth://` URL for their authenticator
-app) and challenged for a code thereafter. Regular users stay code-only.
+tier TOTP is required by default (`TOTP_ENABLED=true` in the template
+`apps/auth/.env.example`). Admins are enrolled on first login (shown an
+`otpauth://` URL for their authenticator app) and challenged for a code
+thereafter. Regular users stay code-only.
+
+The resulting factor posture — cite it this way in a security review (and in
+the SSP template, `docs/templates/system-security-plan.md`):
+
+- **Host administration:** key-only SSH (possession factor; passphrase-protect
+  the key so it is possession + knowledge), root login disabled.
+- **Application admin:** email OTP **+ TOTP** — two factors on privileged app
+  access (the ISM-1173 / Essential Eight expectation).
+- **Regular users:** email OTP, single factor by design — document the
+  rationale (clinical usability, no accounts/passwords to phish or reuse) and
+  the upgrade path (per-user TOTP or WebAuthn are natural extensions of the
+  same service).
+
+Disabling `TOTP_ENABLED` is a documented exception: record it and the reason
+in the instance's control matrix (row 5).
 
 ## Local end-to-end test
 

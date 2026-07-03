@@ -41,10 +41,11 @@ cleanup() { docker rm -f "$CONTAINER" proof-caddy proof-bad >/dev/null 2>&1 || t
 trap cleanup EXIT
 
 rm -rf "$OUT_DIR"; mkdir -p "$OUT_DIR"
-: > "$SUMMARY"
-echo "# Local proof — $(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> "$SUMMARY"
-echo >> "$SUMMARY"
-echo "Regression / mechanics proof (privileged $IMAGE container). NOT a faithful host CIS score." >> "$SUMMARY"
+{
+  echo "# Local proof — $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  echo
+  echo "Regression / mechanics proof (privileged $IMAGE container). NOT a faithful host CIS score."
+} > "$SUMMARY"
 
 # ---------------------------------------------------------------------------
 log "Starting privileged $IMAGE container and installing OpenSCAP + SSG"

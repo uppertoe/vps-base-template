@@ -1,0 +1,34 @@
+#!/bin/bash
+# pending-security-updates — alert when security updates are sitting unapplied.
+#
+# unattended-upgrades applies security updates daily, so anything still pending
+# at this check has been waiting ~a day already — inside the ISM/E8 48-hour
+# window for critical fixes but worth an immediate look. The PATCH-SLA journal
+# line (present on every run, pending or not) is the audit evidence that the
+# check happens daily.
+#
+# Alerting goes through vps-notify (silent no-op until configured). The unit
+# fails only when apt itself is broken, which fires OnFailure=notify@.
+set -u
+export DEBIAN_FRONTEND=noninteractive
+
+apt-get update -qq >/dev/null 2>&1 || true
+
+mapfile -t pending < <(apt-get -s dist-upgrade 2>/dev/null | awk '/^Inst/ && /-security/ {print $2}')
+count=${#pending[@]}
+
+if (( count > 0 )); then
+  pkg_list="$(printf '%s ' "${pending[@]}")"
+  echo "PATCH-SLA: ${count} security update(s) pending: ${pkg_list}"
+  if [ -x /usr/local/bin/vps-notify ]; then
+    /usr/local/bin/vps-notify \
+      "Security updates pending (${count})" \
+      "Security updates are waiting on this host despite unattended-upgrades: ${pkg_list}. Check 'unattended-upgrades --dry-run' — a held or failed upgrade eats into the 48-hour patch window." \
+      urgent \
+      package,warning
+  fi
+else
+  echo "PATCH-SLA: no security updates pending"
+fi
+
+exit 0

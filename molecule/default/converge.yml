@@ -22,4 +22,7 @@
     - role: os-hardening
     - role: baseline-hardening
     - role: docker
+    - role: vuln-scan
     - role: firewall
+    - role: log-export
+    - role: notify

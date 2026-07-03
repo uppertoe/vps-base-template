@@ -17,6 +17,19 @@ secure-by-default; opt-in only where a destination/secret is required).
 Priority: **P0** structural (a reviewer presses hardest, hardest to retrofit) ·
 **P1** quick config/CI wins · **P2** enhancements.
 
+> **Status (2026-07-02):** shipped — P1-1 (digest pins + `image-pins` CI gate in
+> the server template), P1-2 (`audit-vuln.yml` + daily `vuln-scan.timer` +
+> `pending-security-updates.timer`), P1-3 (admin TOTP default-on), P1-4
+> (`restore-drill.timer` with RPO/RTO reports), P1-5 (`vps-deadman.timer`),
+> P2-2 (`audit-all.yml` bundle + `docs/templates/`), the P0-1 encrypted-swap
+> slice (`host_swap_encrypted`, default on), and the P0-2 Tier-1 path
+> (`log-export` role: hash-chained nightly export to an Object-Locked bucket).
+> The Victorian-health binding of this roadmap, plus the governance artifacts
+> it doesn't cover, live in
+> [compliance-plan-vic-health.md](compliance-plan-vic-health.md) (templates in
+> [templates/](templates/)). Open: P0-1 volumes/FDE, P0-2 real-time SIEM
+> forwarding (Tier 2), P2-1 container egress control.
+
 ---
 
 ## P0-1 · Encryption at rest

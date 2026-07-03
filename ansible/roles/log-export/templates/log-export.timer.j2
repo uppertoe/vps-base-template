@@ -1,0 +1,15 @@
+# log-export.timer — Nightly off-host log shipment.
+#
+# Installed by the log-export role.
+
+[Unit]
+Description=Off-host log export — {{ log_export_schedule }} schedule
+Requires=log-export.service
+
+[Timer]
+OnCalendar={{ log_export_schedule }}
+Persistent=true
+Unit=log-export.service
+
+[Install]
+WantedBy=timers.target

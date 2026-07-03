@@ -23,9 +23,15 @@
       tags: [hardening, os]
     - role: docker
       tags: [docker]
+    - role: vuln-scan
+      tags: [docker, vuln-scan]
     - role: baseline-hardening
       tags: [hardening, baseline]
     - role: firewall
       tags: [firewall]
+    # notify goes LAST: it detects installed units to wire OnFailure hooks,
+    # so every unit-installing role must have run before it.
+    - role: log-export
+      tags: [logging, log-export]
     - role: notify
       tags: [notify]

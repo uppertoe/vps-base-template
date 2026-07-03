@@ -73,10 +73,11 @@ services:
     networks:
       - caddy
 
+# Must be byte-identical to the stanza in scaffold/docker/caddy.base.yml:
+# Compose v5 include-merge rejects conflicting definitions of the same network.
 networks:
   caddy:
-    external: true
-    name: caddy
+    name: caddy  # fixed name so app containers can join it
 ```
 
 ### Container hardening (CIS Docker §5)

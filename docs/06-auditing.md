@@ -255,6 +255,58 @@ Findings map to the app's `docker-compose.yml` (see
 
 ---
 
+## Image CVEs — audit-vuln (Trivy) and the daily vuln-scan timer
+
+The CIS tools check *configuration*; they never look at the packages inside the
+images. Two Trivy paths close that gap:
+
+- **`ansible/audit-vuln.yml`** — ad-hoc scan of every image actually running on
+  the VPS, artifacts fetched to `reports/vuln-<host>-<date>/`.
+- **`vuln-scan.timer`** (installed by the `vuln-scan` role, daily) — the same
+  scan on-host, with dated evidence accumulating under `/var/lib/vuln-scan/`
+  and an urgent ntfy push when a CRITICAL CVE **with an available fix** is
+  present. Daily scanning of internet-facing services is the Essential Eight
+  ML1 / ISM cadence, and the alert starts the 48-hour patch clock.
+
+Both are report-only — an unfixable upstream CVE must never block operations.
+The `common` role's `pending-security-updates.timer` is the OS-package
+counterpart: a daily `PATCH-SLA` journal line, plus an alert if security
+updates sit unapplied despite unattended-upgrades.
+
+```bash
+# Ad-hoc, with artifacts fetched into reports/
+ansible-playbook -i ansible/inventory/myserver ansible/audit-vuln.yml
+
+# Evidence trail on the host
+ssh <host> 'ls /var/lib/vuln-scan/ && cat /var/lib/vuln-scan/$(date -u +%F)/summary.txt'
+journalctl -u pending-security-updates --grep PATCH-SLA
+```
+
+---
+
+## Backups that provably restore — restore-drill.timer
+
+`backup-verify.timer` proves the repository is *intact*; the restore drill
+proves it *restores*. `restore-drill.sh` (installed by the `backup` role,
+monthly by default) restores the latest snapshot of every service into a
+throwaway target — DB services through the real `restore.sh` path into a
+`<db>_drill` database that is then dropped, files-only services into a scratch
+directory — and appends a dated report to `/var/lib/backup-drill/` recording
+the snapshot id, achieved **RPO** (snapshot age; fails if older than 26 h by
+default) and achieved **RTO** (restore duration). Any failure fires the
+`OnFailure=notify@` push.
+
+```bash
+# On demand (all services, or one)
+ssh <host> 'sudo /opt/backup/restore-drill.sh'
+ssh <host> 'sudo /opt/backup/restore-drill.sh --service myapp'
+
+# Latest evidence
+ssh <host> 'cat /var/lib/backup-drill/latest.txt'
+```
+
+---
+
 ## Manual cross-reference sources
 
 If you want to read the controls rather than just run them:
@@ -268,6 +320,28 @@ If you want to read the controls rather than just run them:
 The `ansible-lockdown/UBUNTU24-CIS` `defaults/main.yml` is particularly useful:
 every control has a variable you can toggle, each tagged with its CIS rule ID.
 Compare it against our `group_vars/all.yml` to see what we cover and what we don't.
+
+---
+
+## One command: audit-all.yml (evidence bundle)
+
+`audit-all.yml` produces the full dated evidence pack in one run: host
+captures first (swap/crypttab, ufw, AppArmor, effective sshd config, timers,
+patch-SLA trail, latest vuln-scan/restore-drill/log-export state — each tagged
+with the control-matrix rows it evidences in
+`reports/evidence-<host>-<date>/INDEX.md`), then OpenSCAP, Lynis,
+docker-bench, the compose audit, and the Trivy scan.
+
+```bash
+ansible-playbook -i ansible/inventory/myserver ansible/audit-all.yml
+
+# L2 measurement run
+ansible-playbook -i ansible/inventory/myserver ansible/audit-all.yml \
+  -e openscap_tailoring_profile=xccdf_org.ssgproject.content_profile_cis_level2_server_cloud_vps
+```
+
+Run it before a review or attestation; `reports/<...>-<date>/` plus the
+filled-in `docs/templates/` set is the handover pack.
 
 ---
 

@@ -629,16 +629,19 @@
           - (daemon_json_raw.content | b64decode | from_json)['userland-proxy'] == false
         msg: "Docker daemon does not disable the userland proxy"
 
-    - name: Check deploy user is in docker group
-      ansible.builtin.command: id deploy
-      register: deploy_id
+    # deploy's docker-group membership is mode-dependent and asserted in the
+    # access-model section above (converge runs restricted: deploy NOT in the
+    # group, admin IS).
+    - name: Check admin user is in docker group
+      ansible.builtin.command: id admin
+      register: admin_id
       changed_when: false
 
-    - name: Assert deploy user is in docker group
+    - name: Assert admin user is in docker group
       ansible.builtin.assert:
         that:
-          - "'docker' in deploy_id.stdout"
-        msg: "deploy user is not in the docker group"
+          - "'docker' in admin_id.stdout"
+        msg: "admin user is not in the docker group"
 
     # -------------------------------------------------------------------------
     # Firewall

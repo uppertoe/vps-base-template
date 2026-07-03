@@ -82,4 +82,32 @@ mkdir -p "$DIAGNOSTICS_DIR"
 } > "$DIAGNOSTICS_DIR/network-and-firewall.txt"
 
 ansible-playbook -i "$INVENTORY_FILE" ansible/audit-openscap.yml
+# Keep the L1 report distinct, then audit the L2 deployment-target profile too.
+for d in "$REPO_ROOT"/reports/openscap-*; do
+  [[ -d "$d" && "$d" != *-l1 && "$d" != *-l2 ]] && mv "$d" "${d}-l1"
+done
+ansible-playbook -i "$INVENTORY_FILE" ansible/audit-openscap.yml \
+  -e openscap_tailoring_profile=xccdf_org.ssgproject.content_profile_cis_level2_server_cloud_vps
+for d in "$REPO_ROOT"/reports/openscap-*; do
+  [[ -d "$d" && "$d" != *-l1 && "$d" != *-l2 ]] && mv "$d" "${d}-l2"
+done
+
 ansible-playbook -i "$INVENTORY_FILE" ansible/audit-docker.yml
+
+# --- Audit the REAL container stack, not just the bare host -----------------
+# Boot the server template's compose stack (the same digest-pinned caddy/auth/
+# ntfy images a production instance runs) and audit the running containers:
+# CIS Docker §5 + data-tier separation (audit-compose, enforcing) and image
+# CVEs (audit-vuln, report-only).
+STACK_DIR="$CI_TMP_BASE/stack"
+rm -rf "$STACK_DIR"
+git clone --depth 1 https://github.com/uppertoe/server-instance-template "$STACK_DIR"
+git -C "$STACK_DIR" -c url."https://github.com/".insteadOf=git@github.com: \
+  submodule update --init --recursive
+echo "DOMAIN=ci.invalid" > "$STACK_DIR/.env"
+(cd "$STACK_DIR" && sudo docker compose up -d --wait)
+
+ansible-playbook -i "$INVENTORY_FILE" ansible/audit-compose.yml
+ansible-playbook -i "$INVENTORY_FILE" ansible/audit-vuln.yml
+
+(cd "$STACK_DIR" && sudo docker compose down -v) || true

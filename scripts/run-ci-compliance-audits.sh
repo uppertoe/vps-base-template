@@ -45,8 +45,17 @@ ansible-playbook -i "$INVENTORY_FILE" ansible/bootstrap.yml \
 # skip in place so the workflow reaches the reports. Also keep AIDE DB
 # initialization off in CI while iterating; it makes the runner take well over
 # an hour and still does not produce a stable signal on the hosted image.
+# Safe-upgrade as a best-effort CI step: a transient upstream package break
+# (e.g. a bad amd64 postinst in noble-updates, seen 2026-07-03) must not kill
+# the evidence pipeline. Runners are freshly imaged, and the audited control
+# is the unattended-upgrades configuration, not the act of upgrading. Real
+# provisions still run the upgrade inside site-first-run and fail loudly.
+sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade --with-new-pkgs -y \
+  || echo "WARN: safe upgrade failed (upstream package issue?) — continuing"
+
 ansible-playbook -i "$INVENTORY_FILE" ansible/site-first-run.yml \
   -e "{\"deploy_user_public_key\": \"${DEPLOY_USER_PUBLIC_KEY}\"}" \
+  -e common_run_safe_upgrade=false \
   -e baseline_manage_apparmor_profile_modes=false \
   -e baseline_initialize_aide_database=false
 

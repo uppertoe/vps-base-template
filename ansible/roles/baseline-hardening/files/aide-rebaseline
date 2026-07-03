@@ -12,10 +12,50 @@
 # never triggers a re-baseline here and still alerts; auditd also catches
 # config-path writes in real time.
 #
+# EVERY re-baseline is preceded by a recorded check: `aide --init` acknowledges
+# the WHOLE tree, not just package paths, so the pre-check diff is written to
+# the journal (shipped off-host, tamper-evident, by log-export) and a push
+# notification announces what was acknowledged. A non-package change slipped in
+# between two daily checks therefore still leaves a recorded, alerted trace
+# instead of being silently legitimised.
+#
 # Idle CPU/IO priority is set by the unit. Idempotent.
 set -eu
 
-aide --config=/etc/aide/aide.conf --init
+CONF=/etc/aide/aide.conf
+
+# --- Pre-re-baseline check: record what is about to be acknowledged ---------
+if [ -f /var/lib/aide/aide.db ]; then
+  set +e
+  check_out="$(aide --config="$CONF" --check 2>&1)"
+  rc=$?
+  set -e
+
+  if [ "$rc" -eq 0 ]; then
+    summary="no changes since last baseline"
+  elif [ "$rc" -le 7 ]; then
+    # aide exit bits: 1 = added, 2 = removed, 4 = changed
+    summary="$(printf '%s\n' "$check_out" \
+      | grep -E '(Added|Removed|Changed) entries:' \
+      | tr -s ' \t' ' ' | paste -sd',' -)"
+    summary="${summary:-changes detected (rc=$rc)}"
+    # Full diff into the journal — retained off-host via log-export.
+    printf '%s\n' "$check_out" | tail -n 200 | logger -t aide-rebaseline
+  else
+    summary="pre-check errored (rc=$rc); baseline rebuilt anyway"
+  fi
+
+  logger -t aide-rebaseline "pre-rebaseline check: $summary"
+  if [ -x /usr/local/bin/vps-notify ]; then
+    /usr/local/bin/vps-notify \
+      "AIDE baseline rebuilt (apt)" \
+      "Acknowledging: ${summary}. Full diff: journalctl -t aide-rebaseline (also retained off-host via log-export)." \
+      || true
+  fi
+fi
+
+# --- Rebuild the baseline ----------------------------------------------------
+aide --config="$CONF" --init
 [ -f /var/lib/aide/aide.db.new ]    && cp -f /var/lib/aide/aide.db.new    /var/lib/aide/aide.db
 [ -f /var/lib/aide/aide.db.new.gz ] && cp -f /var/lib/aide/aide.db.new.gz /var/lib/aide/aide.db.gz
 logger -t aide-rebaseline "AIDE baseline rebuilt"

@@ -1,4 +1,8 @@
 ---
+# Safety-net default so the role works standalone; the scaffold's
+# group_vars/all.yml is the canonical place this is set.
+deploy_restricted_mode: false
+
 # Docker daemon configuration written to /etc/docker/daemon.json
 # See: https://docs.docker.com/engine/reference/commandline/dockerd/#daemon-configuration-file
 docker_daemon_config:

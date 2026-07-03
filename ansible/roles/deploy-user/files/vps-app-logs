@@ -1,0 +1,19 @@
+#!/bin/bash
+# vps-app-logs — root-owned, read-only log access for the deploy user
+# (managed by Ansible, deploy-user role).
+#
+#   vps-app-logs <service> [lines]
+set -euo pipefail
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+usage() { echo "usage: vps-app-logs <service> [lines]" >&2; exit 2; }
+
+[[ $# -ge 1 && $# -le 2 ]] || usage
+service="$1"
+lines="${2:-200}"
+
+[[ "$service" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]*$ ]] || { echo "vps-app-logs: invalid service name" >&2; exit 2; }
+[[ "$lines" =~ ^[0-9]+$ ]] || { echo "vps-app-logs: lines must be numeric" >&2; exit 2; }
+
+cd /opt/deploy
+exec docker compose logs --no-color --tail "$lines" "$service"

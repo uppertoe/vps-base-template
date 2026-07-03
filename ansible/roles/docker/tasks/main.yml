@@ -95,8 +95,22 @@
     name: docker
     state: present
 
+# Restricted mode (docs/05): deploy loses ad-hoc Docker access; the root-owned
+# vps-deploy / vps-app-manage wrappers are its only container path. The admin
+# break-glass account keeps docker-group membership (deploy-user role).
 - name: Add deploy user to docker group
   ansible.builtin.user:
     name: "{{ deploy_user }}"
     groups: docker
     append: true
+  when: not (deploy_restricted_mode | bool)
+
+- name: Remove deploy user from docker group (restricted mode)
+  ansible.builtin.command:
+    cmd: "gpasswd -d {{ deploy_user }} docker"
+  register: docker_deploy_degroup
+  changed_when: docker_deploy_degroup.rc == 0
+  failed_when:
+    - docker_deploy_degroup.rc != 0
+    - "'is not a member' not in (docker_deploy_degroup.stderr ~ docker_deploy_degroup.stdout)"
+  when: deploy_restricted_mode | bool

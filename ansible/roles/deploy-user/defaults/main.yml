@@ -1,3 +1,32 @@
 ---
 deploy_user: deploy
 deploy_user_public_key: "{{ lookup('file', ((ansible_ssh_private_key_file | default('~/.ssh/id_ed25519')) ~ '.pub')) }}"
+
+# --- Access model (docs/05-access-model.md) ---------------------------------
+# Restricted mode narrows deploy from root-equivalent (NOPASSWD:ALL + docker
+# group) to a wrapper-only sudo allowlist (vps-deploy / vps-app-manage /
+# vps-app-logs) with no docker group. The admin account is the break-glass
+# operator identity and — in restricted mode — the identity Ansible site plays
+# must run as (ansible_user=admin), since deploy can no longer become root.
+#
+# Default stays false until the restricted path is proven on the real VPS
+# (the docs/05 staged rollout); molecule converges with true so the target
+# posture is what CI continuously proves. Reversible: flipping back restores
+# broad sudo + the docker group on the next site run.
+deploy_restricted_mode: false
+
+deploy_admin_user: admin
+# Defaults to the same public key as deploy; set a DEDICATED key in the
+# inventory for a real separation of identities.
+deploy_admin_public_key: "{{ deploy_user_public_key }}"
+# Give admin the docker group (docs/05 docker-access option 2).
+deploy_allow_direct_docker_for_admin: true
+
+# Verb -> command map for vps-app-manage, rendered into root-owned
+# /etc/vps-scaffold/app-manage.allow. The command runs via
+# `docker compose exec <service> <command>`. Empty = nothing allowed.
+# Example:
+#   deploy_allowed_app_manage_commands:
+#     migrate: "python manage.py migrate --noinput"
+#     collectstatic: "python manage.py collectstatic --noinput"
+deploy_allowed_app_manage_commands: {}

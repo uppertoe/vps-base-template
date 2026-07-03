@@ -11,6 +11,10 @@
   serial: 1
   vars:
     ansible_ssh_private_key_file: "{{ playbook_dir }}/fixtures/id_ed25519_molecule"
+    # Converge in RESTRICTED mode: CI continuously proves the target access
+    # posture (wrapper-only sudo, no docker group for deploy, admin account).
+    # Production default remains false until proven on the real VPS (docs/05).
+    deploy_restricted_mode: true
   pre_tasks:
     - name: Mark this as a Molecule test run (disables kernel-level hardening)
       ansible.builtin.set_fact:

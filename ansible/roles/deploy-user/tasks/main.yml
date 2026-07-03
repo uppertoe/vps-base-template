@@ -1,4 +1,9 @@
 ---
+# =============================================================================
+# deploy-user role — the deploy identity, the admin (break-glass) identity,
+# and the root-owned wrapper entrypoints. See docs/05-access-model.md.
+# =============================================================================
+
 - name: Create deploy user
   ansible.builtin.user:
     name: "{{ deploy_user }}"
@@ -13,12 +18,54 @@
     state: present
     exclusive: true  # only this key — remove all others
 
-- name: Grant passwordless sudo to deploy user
-  ansible.builtin.copy:
+# Restricted mode replaces broad sudo with the wrapper allowlist. Both
+# renderings go through visudo validation; the switch is reversible.
+- name: Configure sudo policy for deploy user
+  ansible.builtin.template:
+    src: sudoers-deploy.j2
     dest: "/etc/sudoers.d/{{ deploy_user }}"
-    content: "{{ deploy_user }} ALL=(ALL) NOPASSWD:ALL\n"
     mode: "0440"
-    validate: "visudo -cf %s"  # validates syntax before writing
+    validate: "visudo -cf %s"
+
+# --- Admin (break-glass operator) identity ----------------------------------
+
+- name: Create admin user
+  ansible.builtin.user:
+    name: "{{ deploy_admin_user }}"
+    shell: /bin/bash
+    create_home: true
+    state: present
+
+- name: Add SSH public key to admin authorized_keys
+  ansible.posix.authorized_key:
+    user: "{{ deploy_admin_user }}"
+    key: "{{ deploy_admin_public_key }}"
+    state: present
+    exclusive: true
+
+- name: Grant passwordless sudo to admin user
+  ansible.builtin.copy:
+    dest: "/etc/sudoers.d/{{ deploy_admin_user }}"
+    content: "{{ deploy_admin_user }} ALL=(ALL) NOPASSWD:ALL\n"
+    mode: "0440"
+    validate: "visudo -cf %s"
+
+# The docker role also ensures this group; creating it here keeps bootstrap
+# (which runs only common + deploy-user) self-contained.
+- name: Ensure docker group exists for admin membership
+  ansible.builtin.group:
+    name: docker
+    state: present
+  when: deploy_allow_direct_docker_for_admin | bool
+
+- name: Add admin user to docker group
+  ansible.builtin.user:
+    name: "{{ deploy_admin_user }}"
+    groups: docker
+    append: true
+  when: deploy_allow_direct_docker_for_admin | bool
+
+# --- Deploy tree and entrypoints ---------------------------------------------
 
 - name: Create deploy directory for docker projects
   ansible.builtin.file:
@@ -28,9 +75,44 @@
     group: "{{ deploy_user }}"
     mode: "0755"
 
-- name: Install deploy script to home directory
+- name: Create vps-scaffold config directory
+  ansible.builtin.file:
+    path: /etc/vps-scaffold
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Install root-owned deploy wrapper
+  ansible.builtin.template:
+    src: vps-deploy.j2
+    dest: /usr/local/sbin/vps-deploy
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Install root-owned app-manage and app-logs wrappers
   ansible.builtin.copy:
-    src: deploy
+    src: "{{ item }}"
+    dest: "/usr/local/sbin/{{ item }}"
+    owner: root
+    group: root
+    mode: "0750"
+  loop:
+    - vps-app-manage
+    - vps-app-logs
+
+- name: Install app-manage verb allowlist
+  ansible.builtin.template:
+    src: app-manage.allow.j2
+    dest: /etc/vps-scaffold/app-manage.allow
+    owner: root
+    group: root
+    mode: "0640"
+
+- name: Install deploy helper to home directory
+  ansible.builtin.template:
+    src: deploy.j2
     dest: "/home/{{ deploy_user }}/deploy"
     owner: "{{ deploy_user }}"
     group: "{{ deploy_user }}"

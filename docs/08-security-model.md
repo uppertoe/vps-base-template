@@ -142,6 +142,26 @@ ansible-playbook -i ansible/hosts scaffold/ansible/audit-openscap.yml \
 | `/opt/deploy` uses `DeployConf` (Full minus mtime/ctime) | Deploys re-chmod the working tree, bumping ctime with no content change. Content hashes, permissions, owner and inode data — the real tripwire — are retained. |
 | Auto re-baseline after apt (`baseline_aide_rebaseline_on_apt`) | apt is treated as the trusted change channel (signed packages); whitelisting `/usr/bin` instead would blind the tripwire to backdoored binaries. **Every re-baseline is preceded by a recorded `aide --check`** whose diff goes to the journal (retained ≥12 months off-host via log-export) and is announced via ntfy — a non-package change slipped in between checks leaves a recorded, alerted trace instead of being silently legitimised. Set `false` for manual-acknowledgement posture. |
 
+### Secrets handling (design position)
+
+Secrets are **file-based by design**: per-app `.env` files (gitignored, forced
+to 0600, owner-only), root-owned config under `/etc/restic` and
+`/etc/vps-scaffold` (0600). No secrets manager is used — a deliberate call,
+not an omission:
+
+| Aspect | Treatment |
+|--------|-----------|
+| At rest on host | 0600 file perms + single-operator access model (restricted mode confines readers to root/admin); disk-level encryption is the open B1 register item and is the real at-rest control. Encrypted swap prevents paged-out secrets persisting. |
+| In containers | Compose `env_file:` puts values in container env, visible to `docker inspect` / `/proc/*/environ`. **Accepted**: only root/admin (and the daemon) can inspect; apps publish no ports and log via journald (no env dumps). Improvement path when images support `*_FILE`: Compose file-based `secrets:`. |
+| Change detection | The deploy tree (incl. `.env` files) is AIDE-monitored with content hashing (`DeployConf`); auditd records writes. |
+| Off-host / DR | The `env-files` files-only restic service (server template) keeps client-side-encrypted copies; its repository+passphrase pair is the **recovery root**, held in the operator's password manager — the one secret deliberately kept off-box. |
+| Rotation | Quarterly access review (docs/05): rotate anything unexplained or older than 12 months; app-level secrets (SESSION_SECRET etc.) per their app docs. |
+| In-app | The auth service envelope-encrypts reversible secrets (AES-256-GCM) rather than trusting file perms alone; AWS credentials are minted least-privilege per function (backup RW-scoped; log export write-only). |
+
+A secrets manager is re-evaluated when any of: a second operator (per-person
+access + audit trail), a second host (central rotation), or an app requiring
+dynamic credentials.
+
 ### Benchmark version lag (watch items)
 
 | Item | Status |

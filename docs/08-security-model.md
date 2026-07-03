@@ -83,7 +83,7 @@ tailoring file in lock-step.
 | Ports 80/443 open; bound to all interfaces (UFW + KICS) | A public reverse proxy must listen publicly. (Docker Bench 5.8, KICS privileged-ports / host-interface.) |
 | `net.ipv4.ip_forward=1` | Docker requires IP forwarding. |
 | UFW kept instead of nftables | The scaffold uses UFW + Docker-aware `DOCKER-USER` filtering deliberately. |
-| `deploy` user in the `docker` group (Docker Bench 1.1.2) | The deployment model runs `docker compose` as the deploy user. |
+| `deploy` user in the `docker` group (Docker Bench 1.1.2) | One half of a single accepted risk: **in default mode, `deploy` is root-equivalent** (docker group here + passwordless sudo, see the L2 `sudo_require_authentication` row — same risk, one entry in spirit). Compensating: key-only SSH, single operator, auditd on sudo/docker paths, quarterly access review. **Closure implemented:** `deploy_restricted_mode` (docs/05) removes both grants; flip before any second operator is added. |
 | Caddy keeps `cap_add: NET_BIND_SERVICE` | Single retained capability so Caddy binds 80/443 as a non-root user. It still `cap_drop: ALL` first. |
 
 ### Host OS — CIS Level 2 (deselected in the L2 tailoring profile)
@@ -99,7 +99,7 @@ not an unmet control:
 | `package_ufw_removed`, `service_nftables_enabled`, `nftables_rules_permanent` | Host uses UFW, which *is* an nftables frontend (live `nft` ruleset is active and persistent). CIS's standalone-nftables path conflicts with that architecture. |
 | `kernel_module_overlayfs_disabled` | `overlay` backs Docker's `overlayfs` storage driver — disabling it breaks Docker. |
 | `sysctl_net_ipv4_ip_forward` | Docker requires `ip_forward=1` for container networking. |
-| `sudo_require_authentication` | The `deploy` user needs passwordless sudo for unattended Ansible + the `~/deploy` helper. Compensated by key-only SSH, single-user access, and auditd rules on `sudo`/`sudoers`. |
+| `sudo_require_authentication` | Other half of the deploy root-equivalence risk (see the docker-group row above). Passwordless sudo is needed for unattended Ansible + `~/deploy` in default mode. **Closure implemented:** in `deploy_restricted_mode` the sudoers file becomes a three-line wrapper allowlist and site plays run as `admin`; this exception then applies to `admin` (break-glass) only. |
 | `auditd_data_disk_error_action`, `auditd_data_disk_full_action`, `auditd_data_retention_space_left_action`, `auditd_data_retention_admin_space_left_action` | CIS wants `single`/`halt`, which drops a console-less remote VPS offline on a full audit disk (self-DoS). We keep `SUSPEND` + `SYSLOG` and rely on log rotation + monitoring. |
 
 > **Satisfied, not excepted** (driven to *pass* by `baseline_cis_l2_audit_rules`):
@@ -132,6 +132,38 @@ two `grub2_*` rules). Audit the host with:
 ansible-playbook -i ansible/hosts scaffold/ansible/audit-openscap.yml \
   -e openscap_tailoring_profile=xccdf_org.ssgproject.content_profile_cis_level2_server_cloud_vps
 ```
+
+### File integrity (AIDE) — deliberate churn exceptions
+
+| Exception | Why accepted |
+|-----------|--------------|
+| `/var/lib/*` churn subtrees excluded (docker, containerd, apt, aide, systemd/timers+timesync+random-seed, fail2ban, sudo, logrotate, cloud, ubuntu-advantage, update-notifier, vuln-scan, backup-drill, log-export) | Narrowed from a former blanket `/var/lib` exclusion (which blinded the tripwire to `dpkg/info` maintainer scripts). What remains excluded churns by design on its own timers. The evidence state dirs' integrity anchor is the journal + the **off-host Object-Locked copies** (log-export), not AIDE — the local `hash-chain.log` changes nightly and would be pure alert noise. `dpkg`, `polkit-1` and the rest of `/var/lib/systemd` are now monitored. |
+| `~/.bash_history` excluded | Churns on every session and is trivially forgeable; auditd execve records (L2 `privileged.rules`) are the authoritative command trail. `.ssh/authorized_keys`, `.bashrc`, `.profile` stay fully monitored. |
+| `/opt/deploy` uses `DeployConf` (Full minus mtime/ctime) | Deploys re-chmod the working tree, bumping ctime with no content change. Content hashes, permissions, owner and inode data — the real tripwire — are retained. |
+| Auto re-baseline after apt (`baseline_aide_rebaseline_on_apt`) | apt is treated as the trusted change channel (signed packages); whitelisting `/usr/bin` instead would blind the tripwire to backdoored binaries. **Every re-baseline is preceded by a recorded `aide --check`** whose diff goes to the journal (retained ≥12 months off-host via log-export) and is announced via ntfy — a non-package change slipped in between checks leaves a recorded, alerted trace instead of being silently legitimised. Set `false` for manual-acknowledgement posture. |
+
+### Benchmark version lag (watch items)
+
+| Item | Status |
+|------|--------|
+| CIS Ubuntu 24.04: measured against **v1.0.0** (SSG profiles); CIS catalogue at **v2.0.0** (Jun 2026) | Adopt when ComplianceAsCode ships v2.0.0-aligned profiles; regenerate the tailoring file per the procedure below and re-verify the register. |
+| CIS Docker: docker-bench trails catalogue **v1.8.0** (2025) | Adopt when docker-bench-security updates; §5 checks are asserted independently by `audit-compose.yml`. |
+
+### Register verification log
+
+Claims in this register are tied to scans, not intent — record verification
+events here:
+
+- **2026-07-02** — full register exercised by the real-VM compliance CI run
+  (branch dispatch, then main). Notable: the `/var/tmp` tmpfs "satisfied"
+  claim was found to be **false** (devsec silently skips non-mountpoint
+  paths) and fixed the same day — the register had overclaimed since the
+  entry was written. Lesson: re-verify "satisfied" rows after any change to
+  the roles that implement them.
+- **2026-07-03** — AIDE exceptions narrowed (blanket `/var/lib` removed),
+  pre-re-baseline recording added, deploy root-equivalence closure
+  (`deploy_restricted_mode`) implemented; restricted posture proven by
+  molecule; default-mode path proven by real-VM CI.
 
 ## Container CIS Docker §5 controls
 

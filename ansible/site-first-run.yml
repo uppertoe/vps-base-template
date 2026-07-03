@@ -17,6 +17,10 @@
   roles:
     - role: common
       tags: [common, baseline]
+    # deploy-user runs here too (not just bootstrap) so access-model changes —
+    # e.g. flipping deploy_restricted_mode — apply on a normal site run.
+    - role: deploy-user
+      tags: [access, deploy-user]
     - role: ssh-hardening
       tags: [hardening, ssh]
     - role: os-hardening

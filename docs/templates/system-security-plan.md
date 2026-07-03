@@ -62,6 +62,11 @@ Model: [docs/05-access-model.md](../05-access-model.md). Current holders:
 | Backup S3 credentials | on-host root config | — | ⟨date⟩ |
 | Registry / GitHub | ⟨names⟩ | ⟨MFA type⟩ | ⟨date⟩ |
 
+**Secrets classes and rotation** (docs/08 “Secrets handling”): ⟨list per
+class — app `.env` secrets, restic passphrases, AWS keys, ntfy/deadman tokens —
+with owner, storage, rotation cadence (≤12 months or on personnel change), and
+the recovery-root password-manager entry for the `env-files` repository⟩.
+
 Quarterly access review entries: ⟨link to review log in server repo⟩.
 
 ## 7. Assessment history

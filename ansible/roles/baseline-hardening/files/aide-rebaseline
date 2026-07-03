@@ -35,8 +35,10 @@ if [ -f /var/lib/aide/aide.db ]; then
     summary="no changes since last baseline"
   elif [ "$rc" -le 7 ]; then
     # aide exit bits: 1 = added, 2 = removed, 4 = changed
+    # Match only the summary lines with trailing counts, not the detail-section
+    # headers of the same name.
     summary="$(printf '%s\n' "$check_out" \
-      | grep -E '(Added|Removed|Changed) entries:' \
+      | grep -E '(Added|Removed|Changed) entries:[[:space:]]+[0-9]+$' \
       | tr -s ' \t' ' ' | paste -sd',' -)"
     summary="${summary:-changes detected (rc=$rc)}"
     # Full diff into the journal — retained off-host via log-export.

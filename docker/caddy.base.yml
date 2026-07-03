@@ -15,11 +15,42 @@
 #   ACME_EMAIL  → Let's Encrypt registration email (optional)
 
 services:
+  # One-shot volume initialiser: fresh named volumes are created root-owned
+  # (the caddy image ships /data, /config and no /var/log/caddy at all), so the
+  # non-root hardened caddy below cannot write TLS material or access logs on a
+  # first provision — the log FileWriter is a hard config-load failure. Runs as
+  # root with exactly the two capabilities chown needs, then exits.
+  caddy-init:
+    image: caddy:2-alpine@sha256:86deaf5e3d3408a6ccec08fbb79989783dd26e206ae10bcf78a801dc8c9ab794
+    restart: "no"
+    user: "0:0"
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    mem_limit: 64m
+    pids_limit: 32
+    network_mode: none
+    entrypoint: ["/bin/sh", "-c", "chown -R 1000:1000 /data /config /var/log/caddy"]
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+      - caddy_logs:/var/log/caddy
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+
   caddy:
     # Pinned by digest (multi-arch index). Renovate bumps the digest; the :2-alpine
     # tag is kept for human readability. See scaffold/docs/08-security-model.md.
     image: caddy:2-alpine@sha256:86deaf5e3d3408a6ccec08fbb79989783dd26e206ae10bcf78a801dc8c9ab794
     restart: unless-stopped
+    depends_on:
+      caddy-init:
+        condition: service_completed_successfully
     read_only: true
     # CIS Docker §5 runtime hardening. The caddy image runs as root by default;
     # run non-root and bind 80/443 via the single retained capability.

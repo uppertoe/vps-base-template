@@ -1,0 +1,43 @@
+#!/bin/bash
+# vps-app-manage — root-owned, allowlisted app maintenance entrypoint
+# (managed by Ansible, deploy-user role).
+#
+#   vps-app-manage <service> <verb>
+#
+# Maps approved verbs to fixed `docker compose exec` commands. The verb table
+# lives in root-owned /etc/vps-scaffold/app-manage.allow (templated from
+# deploy_allowed_app_manage_commands); anything not listed is rejected loudly.
+set -euo pipefail
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+ALLOW=/etc/vps-scaffold/app-manage.allow
+
+usage() { echo "usage: vps-app-manage <service> <verb>" >&2; exit 2; }
+
+[[ $# -eq 2 ]] || usage
+service="$1"
+verb="$2"
+
+[[ "$service" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]*$ ]] || { echo "vps-app-manage: invalid service name" >&2; exit 2; }
+[[ "$verb" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]*$ ]] || { echo "vps-app-manage: invalid verb" >&2; exit 2; }
+
+[[ -r "$ALLOW" ]] || { echo "vps-app-manage: no allowlist at $ALLOW" >&2; exit 1; }
+
+line="$(grep -E "^${verb}[[:space:]]" "$ALLOW" | head -n 1 || true)"
+if [[ -z "$line" ]]; then
+  echo "vps-app-manage: verb '${verb}' is not in the allowlist ($ALLOW)" >&2
+  exit 1
+fi
+cmd="${line#"$verb"}"
+cmd="${cmd#"${cmd%%[![:space:]]*}"}"
+
+cd /opt/deploy
+
+tty_args=()
+if [[ ! -t 0 || ! -t 1 ]]; then
+  tty_args=(-T)
+fi
+
+logger -t vps-app-manage "service=${service} verb=${verb} by=${SUDO_USER:-$(id -un)}"
+# shellcheck disable=SC2086  # the allowlisted command is intentionally word-split
+exec docker compose exec "${tty_args[@]}" "$service" $cmd

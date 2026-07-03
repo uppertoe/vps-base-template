@@ -1,0 +1,7 @@
+# Managed by Ansible (deploy-user role). Root-owned verb allowlist for
+# /usr/local/sbin/vps-app-manage: one entry per line, "<verb> <command...>".
+# The command runs via `docker compose exec <service> <command...>` from
+# /opt/deploy. Empty file = nothing allowed.
+{% for verb, cmd in deploy_allowed_app_manage_commands.items() %}
+{{ verb }} {{ cmd }}
+{% endfor %}

@@ -69,12 +69,93 @@
         src: /etc/sudoers.d/deploy
       register: deploy_sudoers_raw
 
-    - name: Assert deploy sudoers grants passwordless sudo
+    # Converge runs with deploy_restricted_mode: true — assert the wrapper
+    # allowlist, and that broad sudo is GONE.
+    - name: Assert deploy sudoers is the restricted wrapper allowlist
       ansible.builtin.assert:
         that:
-          - >-
-            'deploy ALL=(ALL) NOPASSWD:ALL' in (deploy_sudoers_raw.content | b64decode)
-        msg: "deploy sudoers does not grant expected passwordless sudo access"
+          - "'NOPASSWD:/usr/local/sbin/vps-deploy' in (deploy_sudoers_raw.content | b64decode)"
+          - "'NOPASSWD:/usr/local/sbin/vps-app-manage *' in (deploy_sudoers_raw.content | b64decode)"
+          - "'NOPASSWD:/usr/local/sbin/vps-app-logs *' in (deploy_sudoers_raw.content | b64decode)"
+          - "'NOPASSWD:ALL' not in (deploy_sudoers_raw.content | b64decode)"
+        msg: "deploy sudoers is not the restricted wrapper-only allowlist"
+
+    - name: Gather deploy group memberships
+      ansible.builtin.command: id -nG deploy
+      register: deploy_groups
+      changed_when: false
+
+    - name: Assert deploy is NOT in the docker group (restricted mode)
+      ansible.builtin.assert:
+        that:
+          - "'docker' not in deploy_groups.stdout.split()"
+        msg: "restricted mode must remove deploy from the docker group"
+
+    # -------------------------------------------------------------------------
+    # Admin (break-glass) identity + wrapper entrypoints
+    # -------------------------------------------------------------------------
+    - name: Gather admin user info
+      ansible.builtin.getent:
+        database: passwd
+        key: admin
+      register: admin_user_info
+
+    - name: Read admin sudoers file
+      ansible.builtin.slurp:
+        src: /etc/sudoers.d/admin
+      register: admin_sudoers_raw
+
+    - name: Gather admin group memberships
+      ansible.builtin.command: id -nG admin
+      register: admin_groups
+      changed_when: false
+
+    - name: Assert admin identity is a working break-glass account
+      ansible.builtin.assert:
+        that:
+          - "'admin' in admin_user_info.ansible_facts.getent_passwd"
+          - "'admin ALL=(ALL) NOPASSWD:ALL' in (admin_sudoers_raw.content | b64decode)"
+          - "'docker' in admin_groups.stdout.split()"
+        msg: "admin break-glass account is missing sudo or docker access"
+
+    - name: Check wrapper entrypoints and allowlist
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: wrapper_files
+      loop:
+        - /usr/local/sbin/vps-deploy
+        - /usr/local/sbin/vps-app-manage
+        - /usr/local/sbin/vps-app-logs
+        - /etc/vps-scaffold/app-manage.allow
+
+    - name: Assert wrappers are installed root-owned and non-writable
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.pw_name == 'root'
+          - item.stat.gr_name == 'root'
+          - item.stat.mode in ['0750', '0640']
+        msg: "missing or badly-permissioned wrapper: {{ item.item }}"
+      loop: "{{ wrapper_files.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Try a non-allowlisted vps-app-manage verb
+      ansible.builtin.command: /usr/local/sbin/vps-app-manage caddy not-a-verb
+      register: app_manage_reject
+      changed_when: false
+      failed_when: app_manage_reject.rc == 0
+
+    - name: Read restricted ~/deploy helper
+      ansible.builtin.slurp:
+        src: /home/deploy/deploy
+      register: deploy_helper_raw
+
+    - name: Assert deploy helper delegates to the wrapper
+      ansible.builtin.assert:
+        that:
+          - "'sudo /usr/local/sbin/vps-deploy' in (deploy_helper_raw.content | b64decode)"
+        msg: "restricted-mode ~/deploy helper does not delegate to vps-deploy"
 
     # -------------------------------------------------------------------------
     # SSH hardening
@@ -548,16 +629,19 @@
           - (daemon_json_raw.content | b64decode | from_json)['userland-proxy'] == false
         msg: "Docker daemon does not disable the userland proxy"
 
-    - name: Check deploy user is in docker group
-      ansible.builtin.command: id deploy
-      register: deploy_id
+    # deploy's docker-group membership is mode-dependent and asserted in the
+    # access-model section above (converge runs restricted: deploy NOT in the
+    # group, admin IS).
+    - name: Check admin user is in docker group
+      ansible.builtin.command: id admin
+      register: admin_id
       changed_when: false
 
-    - name: Assert deploy user is in docker group
+    - name: Assert admin user is in docker group
       ansible.builtin.assert:
         that:
-          - "'docker' in deploy_id.stdout"
-        msg: "deploy user is not in the docker group"
+          - "'docker' in admin_id.stdout"
+        msg: "admin user is not in the docker group"
 
     # -------------------------------------------------------------------------
     # Firewall

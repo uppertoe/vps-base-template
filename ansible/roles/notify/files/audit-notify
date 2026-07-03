@@ -64,11 +64,11 @@ def field(record, name):
     return None
 
 
-def notify(title, body):
+def notify(title, body, priority="high"):
     # Fire-and-forget: a slow ntfy POST must not back up the audit pipe.
     try:
         subprocess.Popen(
-            [VPS_NOTIFY, title, body, "high", "rotating_light,lock"],
+            [VPS_NOTIFY, title, body, priority, "rotating_light,lock"],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -77,7 +77,39 @@ def notify(title, body):
         pass
 
 
+# auditd daemon self-events. DAEMON_SUSPEND fires when admin_space_left_action
+# = SUSPEND stops the daemon writing (the audit trail silently ends unless we
+# alert here — the unit does not fail, so OnFailure=notify@ never sees it).
+DAEMON_EVENTS = {
+    "DAEMON_SUSPEND": "auditd SUSPENDED logging (audit disk threshold reached)",
+    "DAEMON_ABORT": "auditd ABORTED (internal fault)",
+    "DAEMON_ERR": "auditd internal error",
+}
+
+
+def handle_daemon_event(line):
+    """Daemon records carry no key= field, so they need their own matcher."""
+    for ev, desc in DAEMON_EVENTS.items():
+        if "type=" + ev not in line:
+            continue
+        now = time.time()
+        if now - _last.get(ev, 0) >= COOLDOWN:
+            _last[ev] = now
+            notify(
+                "audit: %s" % desc,
+                "The kernel audit trail may no longer be written to disk.\n"
+                "Free space under /var/log/audit, then restart auditd.\n"
+                "Record: %s" % line.strip()[:300],
+                priority="urgent",
+            )
+            syslog.syslog(syslog.LOG_ERR, "audit-notify: %s" % desc)
+        return True
+    return False
+
+
 def handle(line):
+    if handle_daemon_event(line):
+        return
     if "type=SYSCALL" not in line:
         return
     key = field(line, "key")

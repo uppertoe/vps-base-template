@@ -79,8 +79,16 @@ ssh_macs:
   - hmac-sha2-256-etm@openssh.com
   - hmac-sha2-512
   - hmac-sha2-256
-# Only allow the deploy user to connect via SSH
-ssh_allow_users: "{{ deploy_user }}"
+# Only the deploy and admin identities may connect via SSH
+# (admin = break-glass operator, created by the deploy-user role; in
+# restricted mode it is also the identity the site plays run as).
+ssh_allow_users: "{{ deploy_user }} {{ deploy_admin_user | default('admin') }}"
+
+# Access model switch (docs/05-access-model.md): false = deploy keeps broad
+# sudo + docker group (current model); true = wrapper-only sudo, no docker
+# group, ansible_user must be the admin account. Flip per host in the
+# inventory once the restricted path is verified (see the migration runbook).
+deploy_restricted_mode: false
 
 # -----------------------------------------------------------------------------
 # OS hardening (passed to devsec.hardening.os_hardening)

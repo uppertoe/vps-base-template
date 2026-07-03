@@ -46,6 +46,7 @@ ansible-playbook -i "$INVENTORY_FILE" ansible/bootstrap.yml \
 # initialization off in CI while iterating; it makes the runner take well over
 # an hour and still does not produce a stable signal on the hosted image.
 ansible-playbook -i "$INVENTORY_FILE" ansible/site-first-run.yml \
+  -e "{\"deploy_user_public_key\": \"${DEPLOY_USER_PUBLIC_KEY}\"}" \
   -e baseline_manage_apparmor_profile_modes=false \
   -e baseline_initialize_aide_database=false
 

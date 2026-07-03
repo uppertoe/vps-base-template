@@ -1,0 +1,8 @@
+# Managed by Ansible (deploy-user role). See docs/05-access-model.md.
+{% if deploy_restricted_mode | bool %}
+{{ deploy_user }} ALL=(root) NOPASSWD:/usr/local/sbin/vps-deploy
+{{ deploy_user }} ALL=(root) NOPASSWD:/usr/local/sbin/vps-app-manage *
+{{ deploy_user }} ALL=(root) NOPASSWD:/usr/local/sbin/vps-app-logs *
+{% else %}
+{{ deploy_user }} ALL=(ALL) NOPASSWD:ALL
+{% endif %}

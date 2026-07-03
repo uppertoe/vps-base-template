@@ -1,16 +1,24 @@
 #!/usr/bin/env bash
 # deploy — pull latest changes, run optional app hooks, and restart containers.
 # Run from anywhere: ~/deploy
+# Managed by Ansible (deploy-user role).
+{% if deploy_restricted_mode | bool %}
+# Restricted mode: all privileged work happens in the root-owned, sudoers-
+# allowlisted wrapper. See docs/05-access-model.md.
+exec sudo /usr/local/sbin/vps-deploy "$@"
+{% else %}
 set -euo pipefail
 
 cd /opt/deploy
 git pull --recurse-submodules
 docker compose pull --policy always
 
-# Keep server and app env files readable only by the deploy user.
+# Keep server and app env files readable only by the deploy user. Only chmod
+# files that are not already 600 — an unconditional chmod bumps ctime on every
+# deploy and trips the AIDE tripwire on the deployed tree for no real change.
 find . \
   \( -path './.env' -o -path './apps/*/.env' -o -path './backup/config.env' -o -path './backup/services/*.env' \) \
-  -type f -exec chmod 600 {} +
+  -type f ! -perm 600 -exec chmod 600 {} +
 
 for hook in ./apps/*/deploy.sh; do
   if [[ -x "$hook" ]]; then
@@ -20,3 +28,4 @@ for hook in ./apps/*/deploy.sh; do
 done
 
 docker compose up -d --remove-orphans --wait --force-recreate
+{% endif %}

@@ -1,16 +1,38 @@
 # Access Model
 
-This document describes a future access-control model for the scaffold. It is
-not the current implementation.
+**Status: implemented as a staged rollout.** The split-trust model below is
+built into the `deploy-user` and `docker` roles behind
+`deploy_restricted_mode` (default **false** — the simple model — until the
+restricted path is proven on your real VPS). Molecule converges with the flag
+**on**, so CI continuously proves the restricted posture. See the
+[migration runbook](#migration-runbook) below to flip a live host.
 
-The current scaffold intentionally optimizes for simplicity:
+In the default (unrestricted) mode the scaffold optimizes for simplicity:
 
 - `deploy` can SSH into the host
 - `deploy` has passwordless `sudo`
 - `deploy` is in the `docker` group
 
 That is operationally convenient, but it means `deploy` is effectively a
-high-trust account. Compromise of `deploy` is close to host compromise.
+high-trust account. Compromise of `deploy` is close to host compromise — this
+is a documented exception in
+[08-security-model.md](08-security-model.md#exceptions-register), and
+restricted mode is its closure.
+
+In **restricted mode** (`deploy_restricted_mode: true`):
+
+- `deploy` keeps SSH, but its sudoers file becomes a three-line allowlist for
+  the root-owned wrappers `/usr/local/sbin/vps-deploy`, `vps-app-manage`,
+  `vps-app-logs` — and it is removed from the `docker` group.
+- `admin` (created in both modes) is the break-glass operator: own key
+  (dedicated key recommended — defaults to the deploy key), full sudo, docker
+  group. **Ansible site plays must run as `admin`** (`ansible_user=admin`),
+  since deploy can no longer become root.
+- `~/deploy` still works — it delegates to `sudo vps-deploy`, which runs git
+  as `deploy` (repo ownership intact) and docker/hooks as root.
+- `vps-app-manage <service> <verb>` executes only verbs listed in root-owned
+  `/etc/vps-scaffold/app-manage.allow` (templated from
+  `deploy_allowed_app_manage_commands`, default empty).
 
 ## Goal
 
@@ -220,20 +242,27 @@ The idempotent parts are:
 The runtime deploy commands themselves are not configuration-idempotent in the
 Ansible sense, but that is already true today and is not a blocker.
 
-## Recommended Rollout Strategy
+## Migration Runbook
 
-This should not replace the current model in one step.
+Stages 1–3 of the original rollout plan (admin account, wrappers, the
+`deploy_restricted_mode` flag) are implemented and applied on every site run.
+To flip a live host to restricted mode **without locking yourself out**:
 
-Recommended sequence:
-
-1. add `admin` account support
-2. add root-owned wrapper scripts
-3. add an optional `restricted_deploy_mode` variable
-4. when enabled:
-   - remove `deploy` from `docker`
-   - replace broad `sudo` with wrapper-only `sudo`
-5. keep the current model as default until the restricted path is proven on a
-   real VPS
+1. Run the site play as usual (`ansible_user=deploy`). This creates `admin`
+   with its key, full sudo and docker group — restricted mode still off.
+2. **Verify admin works before restricting anything:**
+   `ssh admin@<host> 'sudo -n true && docker ps >/dev/null && echo ADMIN-OK'`
+   (set a dedicated `deploy_admin_public_key` in the inventory first if you
+   want separate key material — recommended).
+3. In the inventory: set `deploy_restricted_mode=true` as a host var and
+   switch `ansible_user=admin`.
+4. Re-run `site-quick.yml`. Deploy's sudoers becomes the wrapper allowlist and
+   it leaves the docker group.
+5. Verify: `bash scripts/post-provision-smoke-test.sh <host>` (mode-aware),
+   then `ssh <host> ./deploy` still deploys (via `sudo vps-deploy`).
+6. Rollback at any point: set the flag back to false and re-run the site play
+   (idempotent in both directions). Update the docs/08 register entry with the
+   flip date.
 
 ## Suggested Variables
 

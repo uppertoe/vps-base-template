@@ -91,6 +91,17 @@ baseline_docker_audit_watch_candidates:
 # stock narrower include rules under these trees still win where present).
 # Re-baseline (aide --init) after a legitimate change to a monitored tree, e.g.
 # a deploy that touches /opt/deploy's working tree.
+# /var/lib is deliberately NOT excluded wholesale: that would blind the
+# tripwire to /var/lib/dpkg/info (root-executed maintainer scripts),
+# /var/lib/polkit-1 and most of /var/lib/systemd. Only known-churny subtrees
+# are excluded; dpkg churn from apt operations is legitimised by the
+# apt-triggered re-baseline (which records a pre-check diff first). Evidence
+# state dirs (vuln-scan, backup-drill, log-export) churn on their own timers
+# by design — their integrity anchor is the journal + the off-host
+# Object-Locked copies, not AIDE.
+# Shell history churns constantly and is trivially forgeable — auditd's execve
+# records are the authoritative command trail; .ssh/authorized_keys, .bashrc
+# and .profile stay fully monitored.
 baseline_aide_exclude_paths:
   - /run
   - /tmp
@@ -99,10 +110,27 @@ baseline_aide_exclude_paths:
   - /root/.cache
   - /var/log
   - /var/backups
-  - /var/lib
+  - /var/lib/docker
+  - /var/lib/containerd
+  - /var/lib/apt
+  - /var/lib/aide
+  - /var/lib/systemd/timers
+  - /var/lib/systemd/timesync
+  - /var/lib/systemd/random-seed
+  - /var/lib/fail2ban
+  - /var/lib/sudo
+  - /var/lib/logrotate
+  - /var/lib/cloud
+  - /var/lib/ubuntu-advantage
+  - /var/lib/update-notifier
+  - /var/lib/vuln-scan
+  - /var/lib/backup-drill
+  - /var/lib/log-export
   - /etc/ufw/user.rules
   - /etc/ufw/user6.rules
   - /opt/deploy/.git
+  - '/root/\.bash_history'
+  - '/home/[^/]+/\.bash_history'
 
 # Raw aide.conf rule lines (not exclusions) written verbatim into a managed block.
 # Use for per-node rule overrides that '!' exclusion can't express.
@@ -117,9 +145,17 @@ baseline_aide_exclude_paths:
 #               every library install -- it's a derived cache, not a stable
 #               baseline (the meaningful tripwire is /etc/ld.so.conf.d, still
 #               fully monitored). VarFile keeps owner/perms but drops hash/mtime.
+#   DeployConf on /opt/deploy   Every deploy re-runs chmod over the working
+#               tree, bumping ctime with no content change. DeployConf keeps
+#               content hashes, permissions, owner and inode data (the real
+#               tripwire on the deployed tree) and drops only the two
+#               forgeable timestamps (mtime/ctime). /opt/deploy/.git stays
+#               excluded by longest-match.
 baseline_aide_rule_overrides:
   - "=/ VarDir"
   - '=/etc/ld\.so\.cache VarFile'
+  - "DeployConf = InodeData+Checksums"
+  - "/opt/deploy DeployConf"
 
 # Re-baseline AIDE after apt package operations (unattended-upgrades, manual
 # installs). Package upgrades legitimately change /usr/bin, /usr/lib, etc. -- the

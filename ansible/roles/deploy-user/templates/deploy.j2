@@ -2,7 +2,7 @@
 # deploy — pull latest changes, run optional app hooks, and restart containers.
 # Run from anywhere: ~/deploy
 # Managed by Ansible (deploy-user role).
-{% if deploy_restricted_mode %}
+{% if deploy_restricted_mode | bool %}
 # Restricted mode: all privileged work happens in the root-owned, sudoers-
 # allowlisted wrapper. See docs/05-access-model.md.
 exec sudo /usr/local/sbin/vps-deploy "$@"

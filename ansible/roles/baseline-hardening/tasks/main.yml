@@ -467,6 +467,24 @@
     regexp: '^#?INACTIVE='
     line: 'INACTIVE=30'
 
+# CIS file_permission_user_init_files: user init (dot) files must be 0740 or
+# less permissive — Ubuntu's skel default is 0644 (world-readable).
+- name: Find user init files more permissive than 0740
+  ansible.builtin.shell: |
+    set -eu
+    find /home -mindepth 2 -maxdepth 2 -type f -name '.*' -perm /0037 2>/dev/null || true
+    find /root -mindepth 1 -maxdepth 1 -type f -name '.*' -perm /0037 2>/dev/null || true
+  args:
+    executable: /bin/bash
+  register: baseline_lax_init_files
+  changed_when: false
+
+- name: Restrict user init files to 0740 or stricter
+  ansible.builtin.file:
+    path: "{{ item }}"
+    mode: "g-w,o-rwx"
+  loop: "{{ baseline_lax_init_files.stdout_lines }}"
+
 # Bridge the wrapper's exit-0-on-change behaviour to the notify role's OnFailure
 # hook: an ExecStartPost that fails the unit when AIDE's latest report shows
 # differences, turning a detected change into the failed state that

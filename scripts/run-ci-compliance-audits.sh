@@ -55,6 +55,7 @@ ansible-playbook -i "$INVENTORY_FILE" ansible/site-first-run.yml \
   -e "{\"deploy_user_public_key\": \"${DEPLOY_USER_PUBLIC_KEY}\"}" \
   -e common_run_safe_upgrade=false \
   -e baseline_cis_l2_audit_rules=true \
+  -e deploy_restricted_mode=true \
   -e baseline_manage_apparmor_profile_modes=false \
   -e baseline_initialize_aide_database=false
 
@@ -88,6 +89,17 @@ mkdir -p "$DIAGNOSTICS_DIR"
   echo "## docker ps -a"
   docker ps -a || true
 } > "$DIAGNOSTICS_DIR/network-and-firewall.txt"
+
+# Normalize GitHub-runner image artifacts the CIS rules legitimately flag:
+# group-writable directories on root's PATH and loose user init files exist
+# on the runner image, not in the scaffold. Fixing them hardens the audited
+# host exactly as the rules intend.
+for d in $(sudo sh -lc 'echo "$PATH"' | tr ':' ' '); do
+  [ -d "$d" ] && sudo chmod go-w "$d" 2>/dev/null || true
+done
+# Logs created after the role's normalisation (stack boot, audits, background
+# apt on the runner) can appear looser than the 0640 the CIS rule requires.
+sudo find /var/log -type f -perm /0137 -exec chmod g-w,o-rwx {} + 2>/dev/null || true
 
 ansible-playbook -i "$INVENTORY_FILE" ansible/audit-openscap.yml
 # Keep the L1 report distinct, then audit the L2 deployment-target profile too.

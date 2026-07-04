@@ -74,11 +74,19 @@ ssh_print_last_log: true
 sshd_log_level: INFO
 ssh_banner: true
 ssh_banner_path: /etc/issue.net
+# ETM variants only: plain hmac-sha2-* use encrypt-and-MAC construction
+# (ssh-audit [warn]); every OpenSSH since 6.2 supports the -etm forms.
 ssh_macs:
   - hmac-sha2-512-etm@openssh.com
   - hmac-sha2-256-etm@openssh.com
-  - hmac-sha2-512
-  - hmac-sha2-256
+
+# Host keys: ed25519 (preferred) + RSA-4096 (compat). The ECDSA/NIST-P256 key
+# is deliberately not offered — no client needs it when ed25519 is present,
+# and ssh-audit flags the NIST curves. (P-256 remains ASD-approved; this is
+# polish, not a compliance requirement.)
+ssh_host_key_files:
+  - /etc/ssh/ssh_host_ed25519_key
+  - /etc/ssh/ssh_host_rsa_key
 # Only the deploy and admin identities may connect via SSH
 # (admin = break-glass operator, created by the deploy-user role; in
 # restricted mode it is also the identity the site plays run as).

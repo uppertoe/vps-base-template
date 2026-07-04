@@ -316,11 +316,11 @@
       ansible.builtin.assert:
         that:
           - >-
-            'MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512,hmac-sha2-256'
+            'MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com'
             in sshd_config or
             (sshd_config_d_raw.results | default([]) |
              map(attribute='content') | map('b64decode') |
-             select('search', 'MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512,hmac-sha2-256') | list | length > 0)
+             select('search', 'MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com') | list | length > 0)
         msg: "SSH config does not configure the expected benchmark MACs"
 
     - name: Read root shadow entry

@@ -1,0 +1,9 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Alert when the pinned scaffold falls behind upstream main
+ConditionPathExists=/opt/deploy/scaffold
+OnFailure=notify@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/scaffold-drift-check

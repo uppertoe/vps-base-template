@@ -1,0 +1,11 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Weekly check that the scaffold submodule tracks upstream
+
+[Timer]
+OnCalendar={{ scaffold_drift_schedule }}
+RandomizedDelaySec=3600
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -143,10 +143,13 @@ links_for() {
     <strong>Read the numbers in context.</strong> <em>notselected</em> results are
     deliberate, documented exceptions from the
     <a href="${repo_url}/blob/main/docs/08-security-model.md#exceptions-register">exceptions register</a>
-    (encoded in the OpenSCAP tailoring file). CI-runner <em>fail</em>s include
-    GitHub-runner-specific deltas (e.g. AppArmor profile enforcement and AIDE
-    initialisation are disabled in CI); the authoritative score is a real VPS
-    audited via <code>audit-all.yml</code>.
+    (encoded in the OpenSCAP tailoring file). The remaining CI-runner
+    <em>fail</em>s are all GitHub-runner deltas with no real-host analogue:
+    AIDE database initialisation and AppArmor profile enforcement are
+    deliberately disabled in CI, and the Actions machinery churns its own
+    runner-user dot files after provisioning (real hosts are normalised by
+    the baseline role). The authoritative score is a real VPS audited via
+    <code>audit-all.yml</code>.
   </div>
 
   <h2>Host OS (OpenSCAP — L1 and L2 tailored profiles)</h2>

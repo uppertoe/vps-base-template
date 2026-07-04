@@ -1,0 +1,11 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Daily unattended application of CI-gated upstream changes
+
+[Timer]
+OnCalendar={{ deploy_auto_update_schedule }}
+RandomizedDelaySec=3600
+Persistent=true
+
+[Install]
+WantedBy=timers.target

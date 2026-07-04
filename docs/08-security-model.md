@@ -203,6 +203,19 @@ stack and fails if a non-excepted container is missing any of:
 The daemon also sets `no-new-privileges: true` globally as a backstop, but each
 container declares it explicitly so the audit is unambiguous.
 
+## Unattended updates (change-management position)
+
+Two sanctioned unattended-change channels exist, both modelled on the
+`unattended-upgrades` pattern Essential Eight mandates for OS packages:
+(1) security patches via unattended-upgrades, and (2) container digest bumps
+via Renovate automerge + the `auto-deploy` timer — every change is proposed
+by a bot, validated by repo CI (compose smoke, image-pin enforcement,
+container security scans), merged only on green, applied at a scheduled
+window, announced via ntfy, and reversible via git. The Ansible/OS-config
+layer is deliberately excluded from unattended application: those changes
+carry UPGRADING.md operator actions and land only when an operator runs the
+site play (the `scaffold-drift` timer alerts when any are pending).
+
 ## How to read a result
 
 1. **Run the audits** (see [06-auditing.md](06-auditing.md)): `audit-openscap.yml`,

@@ -1,0 +1,9 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Apply upstream server-repo changes (CI-gated fast path)
+ConditionPathExists=/opt/deploy/.git
+OnFailure=notify@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/auto-deploy

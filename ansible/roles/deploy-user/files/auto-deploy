@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# auto-deploy — unattended application of upstream server-repo changes.
+#
+# The hands-off fast path: Renovate proposes digest bumps, repo CI validates
+# them, Renovate automerges on green, and this timer applies the result. Only
+# the compose/Caddy layer flows this way — Ansible-layer scaffold changes
+# still require an operator running site-quick (see UPGRADING.md).
+#
+# Applies ONLY when the remote has new commits; every applied change is
+# announced via ntfy, and failure trips the unit's OnFailure alert.
+set -euo pipefail
+
+REPO=/opt/deploy
+cd "$REPO"
+
+runuser -u deploy -- git fetch --quiet origin
+
+local_head="$(runuser -u deploy -- git rev-parse HEAD)"
+remote_head="$(runuser -u deploy -- git rev-parse '@{u}')"
+
+if [[ "$local_head" == "$remote_head" ]]; then
+  exit 0
+fi
+
+/usr/local/sbin/vps-deploy
+
+/usr/local/bin/vps-notify "Auto-deploy applied" \
+  "${local_head:0:12} -> ${remote_head:0:12} (CI-gated upstream change)" || true

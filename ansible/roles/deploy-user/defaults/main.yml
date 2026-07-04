@@ -30,3 +30,15 @@ deploy_allow_direct_docker_for_admin: true
 #     migrate: "python manage.py migrate --noinput"
 #     collectstatic: "python manage.py collectstatic --noinput"
 deploy_allowed_app_manage_commands: {}
+
+# --- Hands-off updates ---------------------------------------------------
+# The CI-gated fast path: Renovate proposes digest/submodule bumps, repo CI
+# validates, Renovate automerges, and the auto-deploy timer applies them
+# (compose/Caddy layer only). Opt-in per host. The Ansible layer is
+# DELIBERATELY excluded — those changes carry UPGRADING.md operator actions;
+# the scaffold-drift timer alerts when they are waiting.
+deploy_auto_update: false
+deploy_auto_update_schedule: "*-*-* 05:15:00"
+# Weekly awareness alert when the scaffold submodule is behind upstream main.
+scaffold_drift_check: true
+scaffold_drift_schedule: "Mon *-*-* 07:05:00"

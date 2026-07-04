@@ -23,6 +23,29 @@ of the actions, once.
 
 ---
 
+## 2026-07-04 — Hands-off update fast path
+
+**What lands automatically on the next `site-quick.yml`:** the
+`auto-deploy` and `scaffold-drift` timers (installed but auto-deploy is
+opt-in), and Renovate automerge rules for digest-class updates in both
+repos' `renovate.json`.
+
+**The model:** Renovate proposes digest/submodule bumps → repo CI validates →
+Renovate automerges on green → the daily `auto-deploy.timer` applies the
+result on the box (announced via ntfy; failures alert). Only the
+compose/Caddy layer flows this way. Ansible-layer scaffold changes still
+require an operator (they carry the actions in this file) — the weekly
+`scaffold-drift.timer` alerts when any are waiting.
+
+**Operator actions:**
+
+1. Enable the fast path per host: `deploy_auto_update=true` in
+   `ansible/hosts`, re-run `site-quick.yml`.
+2. Install the Mend Renovate app on your server repo (and the scaffold, if
+   you fork it) — automerge does nothing until Renovate is opening PRs.
+3. First run by hand to see the loop end-to-end:
+   `sudo systemctl start auto-deploy.service` (no-op when already current).
+
 ## 2026-07-04 — Victorian health compliance wave
 
 Covers everything merged 2026-07-02 → 2026-07-04 (compliance controls, the

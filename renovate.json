@@ -1,12 +1,19 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended"],
-  "labels": ["dependencies"],
+  "extends": [
+    "config:recommended"
+  ],
+  "labels": [
+    "dependencies"
+  ],
   "docker": {
     "pinDigests": true
   },
   "docker-compose": {
-    "managerFilePatterns": ["/(^|/)(?:docker-)?compose[^/]*\\.ya?ml$/", "/^docker/caddy\\.base\\.yml$/"]
+    "managerFilePatterns": [
+      "/(^|/)(?:docker-)?compose[^/]*\\.ya?ml$/",
+      "/^docker/caddy\\.base\\.yml$/"
+    ]
   },
   "github-actions": {
     "enabled": true
@@ -14,9 +21,29 @@
   "packageRules": [
     {
       "description": "Group Docker image digest bumps so base-image CVE fixes flow through in one PR",
-      "matchManagers": ["docker-compose", "dockerfile"],
-      "matchUpdateTypes": ["digest", "pin", "pinDigest"],
-      "groupName": "docker image digests"
+      "matchManagers": [
+        "docker-compose",
+        "dockerfile"
+      ],
+      "matchUpdateTypes": [
+        "digest",
+        "pin",
+        "pinDigest"
+      ],
+      "groupName": "docker image digests",
+      "automerge": true
+    },
+    {
+      "description": "Automerge action pin/digest updates; version bumps stay manual",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchUpdateTypes": [
+        "digest",
+        "pin",
+        "pinDigest"
+      ],
+      "automerge": true
     }
   ]
 }

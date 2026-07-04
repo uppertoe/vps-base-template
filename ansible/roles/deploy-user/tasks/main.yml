@@ -128,3 +128,50 @@
     owner: "{{ deploy_user }}"
     group: "{{ deploy_user }}"
     mode: "0755"
+
+# --- Hands-off updates (see defaults for the model) ----------------------
+
+- name: Install auto-deploy and scaffold-drift scripts
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "/usr/local/sbin/{{ item }}"
+    owner: root
+    group: root
+    mode: "0750"
+  loop:
+    - auto-deploy
+    - scaffold-drift-check
+
+- name: Install auto-deploy and scaffold-drift units
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - auto-deploy.service
+    - auto-deploy.timer
+    - scaffold-drift.service
+    - scaffold-drift.timer
+  notify: Reload systemd
+
+- name: Enable or disable the auto-deploy timer
+  ansible.builtin.systemd:
+    name: auto-deploy.timer
+    enabled: "{{ deploy_auto_update | bool }}"
+    state: "{{ 'started' if deploy_auto_update | bool else 'stopped' }}"
+    daemon_reload: true
+  when: ansible_facts['virtualization_type'] | default('') not in ['docker', 'container', 'lxc']
+  tags:
+    - molecule-notest
+
+- name: Enable or disable the scaffold-drift timer
+  ansible.builtin.systemd:
+    name: scaffold-drift.timer
+    enabled: "{{ scaffold_drift_check | bool }}"
+    state: "{{ 'started' if scaffold_drift_check | bool else 'stopped' }}"
+    daemon_reload: true
+  when: ansible_facts['virtualization_type'] | default('') not in ['docker', 'container', 'lxc']
+  tags:
+    - molecule-notest

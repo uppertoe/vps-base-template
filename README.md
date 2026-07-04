@@ -1,5 +1,7 @@
 # vps-base-template
 
+> Upgrading an existing instance? Read [UPGRADING.md](UPGRADING.md) — it records the operator actions required for each scaffold change.
+
 [![CI](https://github.com/uppertoe/vps-base-template/actions/workflows/ci.yml/badge.svg)](https://github.com/uppertoe/vps-base-template/actions/workflows/ci.yml)
 
 Infrastructure base for hardened VPS instances running Dockerised apps behind

@@ -170,6 +170,77 @@ ansible-playbook -i ansible/inventory/myserver ansible/site-quick.yml --tags doc
 ansible-playbook -i ansible/inventory/myserver ansible/site-quick.yml --tags hardening
 ```
 
+## Step 8 — Alerting and availability
+
+```bash
+# On the server: mint an ntfy publish token, then set it in the inventory
+ssh myserver 'cd /opt/deploy && docker compose exec ntfy ntfy token add admin'
+# ansible/hosts:  notify_ntfy_url=http://127.0.0.1:8080/alerts  notify_ntfy_token=tk_...
+
+# Dead-man's switch (host-down alarm) — Gatus external endpoint or
+# Healthchecks URL; see ansible/hosts.example for both dialects:
+#   notify_deadman_url=...   notify_deadman_token=...   (Gatus)
+ansible-playbook -i ansible/inventory/myserver ansible/site-quick.yml
+```
+
+## Step 9 — Backups, secret recovery, off-host logs
+
+All three run from your laptop against AWS, then land via Ansible:
+
+```bash
+pip install boto3
+# Backup bucket + scoped IAM user → values into backup/config.env
+python3 scripts/aws-backup-setup.py --profile my-aws-admin --bucket myserver-backups --iam-user myserver-backup
+# Object-locked log bucket + WRITE-ONLY IAM user → log_export_* vars into ansible/hosts
+python3 scripts/aws-logs-setup.py --profile my-aws-admin --bucket myserver-logs --iam-user myserver-log-writer
+
+# Secret recovery (the .env files exist only on the box otherwise):
+cp backup/services/env-files.env.example backup/services/env-files.env
+$EDITOR backup/services/env-files.env
+# >>> store THIS service's RESTIC_REPOSITORY + RESTIC_PASSWORD in your
+# >>> password manager now — it is the recovery root after a total loss.
+
+ansible-playbook -i ansible/hosts scaffold/ansible/site-quick.yml
+ansible-playbook -i ansible/hosts ansible/backup.yml
+```
+
+## Step 10 — Auth tier (if any app needs a login wall)
+
+Uncomment the `apps/auth` include, create `apps/auth/.env` (keep
+`TOTP_ENABLED=true` — admins get email-OTP **plus** TOTP), and guard routes
+with `import protected <upstream>`. See [07-auth.md](07-auth.md).
+
+## Step 11 — Restricted access mode (staged)
+
+The `admin` break-glass account exists from bootstrap. Once you have verified
+`ssh admin@host 'sudo -n true && docker ps'`, flip
+`deploy_restricted_mode=true` + `ansible_user=admin` per the runbook in
+[05-access-model.md](05-access-model.md). Reversible; retires the register's
+biggest exception.
+
+## Step 12 — Evidence baseline
+
+```bash
+# Mode-aware end-to-end smoke test:
+bash scripts/post-provision-smoke-test.sh myserver --require-backup
+# Full audit bundle (OpenSCAP L1+L2, docker-bench, compose audit, Trivy,
+# Lynis, host captures with a control-tagged INDEX):
+ansible-playbook -i ansible/hosts scaffold/ansible/audit-all.yml
+# Fire the timers once, eyeball their output:
+ssh myserver 'sudo systemctl start vuln-scan.service restore-drill.service log-export.service'
+```
+
+Copy [templates/](templates/) into the server repo's `compliance/` directory
+and fill them in — that pack plus the `reports/` bundle is what you hand a
+reviewer (see [compliance-plan-vic-health.md](compliance-plan-vic-health.md)).
+
+## Upgrading an existing instance
+
+Scaffold changes reach instances only when you bump the submodule pointer.
+The mechanics plus the **per-change operator actions** live in
+[../UPGRADING.md](../UPGRADING.md) — read every entry newer than your current
+pointer before re-running the site play.
+
 ---
 
 Next: [04-server-repo.md](04-server-repo.md)

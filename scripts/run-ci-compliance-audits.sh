@@ -97,9 +97,9 @@ mkdir -p "$DIAGNOSTICS_DIR"
 for d in $(sudo sh -lc 'echo "$PATH"' | tr ':' ' '); do
   [ -d "$d" ] && sudo chmod go-w "$d" 2>/dev/null || true
 done
-sudo find /root /home -maxdepth 2 \( -name '.bashrc' -o -name '.profile' \
-  -o -name '.bash_logout' -o -name '.bash_profile' \) -type f \
-  -exec chmod go-w {} + 2>/dev/null || true
+# Logs created after the role's normalisation (stack boot, audits, background
+# apt on the runner) can appear looser than the 0640 the CIS rule requires.
+sudo find /var/log -type f -perm /0137 -exec chmod g-w,o-rwx {} + 2>/dev/null || true
 
 ansible-playbook -i "$INVENTORY_FILE" ansible/audit-openscap.yml
 # Keep the L1 report distinct, then audit the L2 deployment-target profile too.

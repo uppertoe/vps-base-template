@@ -95,7 +95,7 @@ mkdir -p "$DIAGNOSTICS_DIR"
 # on the runner image, not in the scaffold. Fixing them hardens the audited
 # host exactly as the rules intend.
 for d in $(sudo sh -lc 'echo "$PATH"' | tr ':' ' '); do
-  [ -d "$d" ] && sudo chmod go-w "$d" 2>/dev/null || true
+  if [ -d "$d" ]; then sudo chmod go-w "$d" 2>/dev/null || true; fi
 done
 # Logs created after the role's normalisation (stack boot, audits, background
 # apt on the runner) can appear looser than the 0640 the CIS rule requires.

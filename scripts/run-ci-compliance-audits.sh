@@ -129,5 +129,13 @@ echo "DOMAIN=ci.invalid" > "$STACK_DIR/.env"
 
 ansible-playbook -i "$INVENTORY_FILE" ansible/audit-compose.yml
 ansible-playbook -i "$INVENTORY_FILE" ansible/audit-vuln.yml
+ansible-playbook -i "$INVENTORY_FILE" ansible/audit-lynis.yml
+
+# ssh-audit: algorithm-level SSH scoring (complements the CIS config rules).
+# The runner's sshd is hardened by the play but not necessarily running.
+mkdir -p "$REPO_ROOT/reports/ssh-audit-ci"
+sudo systemctl start ssh 2>/dev/null || true
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ssh-audit >/dev/null 2>&1 || true
+(ssh-audit --no-colors 127.0.0.1 2>&1 || true) | tee "$REPO_ROOT/reports/ssh-audit-ci/ssh-audit.txt"
 
 (cd "$STACK_DIR" && sudo docker compose down -v) || true

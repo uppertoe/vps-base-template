@@ -59,6 +59,9 @@
       - name: log-export-chain
         rows: "12"
         cmd: "tail -n 14 /var/lib/log-export/hash-chain.log 2>/dev/null || echo 'log export not configured / no exports yet'"
+      - name: ssh-audit
+        rows: "4"
+        cmd: "(command -v ssh-audit >/dev/null 2>&1 || DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ssh-audit >/dev/null 2>&1 || true); ssh-audit --no-colors 127.0.0.1 2>&1 || true"
       - name: docker-daemon
         rows: "2"
         cmd: "docker version --format 'engine {{ '{{' }}.Server.Version{{ '}}' }}' 2>/dev/null; docker info --format '{{ '{{' }}json .SecurityOptions{{ '}}' }}' 2>/dev/null"

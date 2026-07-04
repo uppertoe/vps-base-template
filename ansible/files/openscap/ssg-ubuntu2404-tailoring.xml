@@ -65,6 +65,14 @@
 		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_nftables_rules_permanent" selected="false"/>
 		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_grub2_password" selected="false"/>
 		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_grub2_uefi_password" selected="false"/>
+		<!-- Upstream content bug (verified 2026-07-05 on a live 24.04 host): the
+		     aide_build_database OVAL greps aide.conf for the AIDE 0.17 directive
+		     `database=file:` but Ubuntu 24.04 ships AIDE 0.18.6, which renamed it
+		     to `database_in=` — the rule can never pass regardless of host state.
+		     The database demonstrably exists (34MB /var/lib/aide/aide.db, built by
+		     aide-rebaseline with journalled pre-checks; daily check timer).
+		     Re-select when ComplianceAsCode fixes the regex. -->
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_aide_build_database" selected="false"/>
 	</xccdf-1.2:Profile>
 	<xccdf-1.2:Profile id="xccdf_org.ssgproject.content_profile_cis_level2_server_cloud_vps" extends="xccdf_org.ssgproject.content_profile_cis_level2_server">
 		<xccdf-1.2:title override="true">CIS Ubuntu 24.04 L2 Server - vps-scaffold cloud VPS tailoring</xccdf-1.2:title>
@@ -110,5 +118,13 @@
 		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_auditd_data_disk_full_action" selected="false"/>
 		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_auditd_data_retention_admin_space_left_action" selected="false"/>
 		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_auditd_data_retention_space_left_action" selected="false"/>
+		<!-- Upstream content bug (verified 2026-07-05 on a live 24.04 host): the
+		     aide_build_database OVAL greps aide.conf for the AIDE 0.17 directive
+		     `database=file:` but Ubuntu 24.04 ships AIDE 0.18.6, which renamed it
+		     to `database_in=` — the rule can never pass regardless of host state.
+		     The database demonstrably exists (34MB /var/lib/aide/aide.db, built by
+		     aide-rebaseline with journalled pre-checks; daily check timer).
+		     Re-select when ComplianceAsCode fixes the regex. -->
+		<xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_aide_build_database" selected="false"/>
 	</xccdf-1.2:Profile>
 </xccdf-1.2:Tailoring>

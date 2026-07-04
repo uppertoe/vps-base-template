@@ -59,6 +59,20 @@ if [[ -n "$vuln_summary" && -r "$vuln_summary" ]]; then
   VULN_LINE="$(grep -m1 '^TOTAL' "$vuln_summary" || echo n/a)"
 fi
 
+LYNIS_INDEX="n/a"
+lynis_dat="$(find "$SITE_ROOT/reports" -name 'report.dat' -path '*lynis*' 2>/dev/null | head -n1 || true)"
+if [[ -n "$lynis_dat" && -r "$lynis_dat" ]]; then
+  LYNIS_INDEX="$(awk -F= '/^hardening_index/ {print $2}' "$lynis_dat" | head -n1)"
+  LYNIS_INDEX="${LYNIS_INDEX:-n/a}"
+fi
+
+SSH_FAILS="n/a"; SSH_WARNS="n/a"
+ssh_txt="$(find "$SITE_ROOT/reports" -name 'ssh-audit.txt' 2>/dev/null | head -n1 || true)"
+if [[ -n "$ssh_txt" && -r "$ssh_txt" ]] && grep -q '(gen)' "$ssh_txt"; then
+  SSH_FAILS="$(grep -c '\[fail\]' "$ssh_txt" || true)"
+  SSH_WARNS="$(grep -c '\[warn\]' "$ssh_txt" || true)"
+fi
+
 BENCH_SCORE="n/a"; BENCH_CHECKS="n/a"
 if [[ -n "$bench_log" && -r "$bench_log" ]]; then
   BENCH_SCORE="$(sed -e $'s/\x1b\[[0-9;]*m//g' "$bench_log" | awk -F': ' '/Score:/ {print $2}' | tail -n1)"
@@ -137,6 +151,16 @@ links_for() {
       <div class="big" style="font-size:1.05rem">${VULN_LINE}</div>
       <div class="muted">report-only; fixable CRITICALs page the operator on real hosts</div>
     </div>
+    <div class="tile">
+      <h3>Lynis hardening index</h3>
+      <div class="big">${LYNIS_INDEX}</div>
+      <div class="muted">qualitative drift signal, not a KPI (docs/08)</div>
+    </div>
+    <div class="tile">
+      <h3>SSH algorithms — ssh-audit</h3>
+      <div class="big"><span class="warn">${SSH_FAILS} fail</span> · ${SSH_WARNS} warn</div>
+      <div class="muted">key-exchange/cipher/MAC scoring of the hardened sshd</div>
+    </div>
   </div>
 
   <div class="note">
@@ -170,6 +194,16 @@ $(links_for '*vuln*')
   <h2>Docker daemon (docker-bench)</h2>
   <ul>
 $(links_for '*docker-bench*')
+  </ul>
+
+  <h2>Lynis</h2>
+  <ul>
+$(links_for '*lynis*')
+  </ul>
+
+  <h2>SSH algorithms (ssh-audit)</h2>
+  <ul>
+$(links_for '*ssh-audit*')
   </ul>
 
   <h2>Runner diagnostics</h2>

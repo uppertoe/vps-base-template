@@ -1,0 +1,96 @@
+#!/bin/bash
+# vps-log-digest — weekly security/ops summary via ntfy.
+#
+# The exported logs are write-only evidence; nobody reads them day-to-day, and
+# auditors (ISM log-review expectations) ask who reviews the logs. This IS the
+# review: one weekly message with the counts and deltas a human should glance
+# at — SSH abuse, bans, sudo activity, listening-socket changes, container and
+# disk state, patch-SLA status, and web auth denials. The digest also prints to
+# stdout, so the systemd journal keeps a dated record of each review.
+set -u
+
+CONF="${VPS_NOTIFY_CONF:-/etc/vps-scaffold/notify.env}"
+# shellcheck disable=SC1090
+[ -r "$CONF" ] && . "$CONF"
+
+STATE_DIR="${VPS_NOTIFY_STATE_DIR:-/var/lib/vps-notify}"
+mkdir -p "$STATE_DIR"
+SINCE="${LOG_DIGEST_SINCE:-7 days ago}"
+
+msg=""
+add() { msg="${msg}${1}
+"; }
+
+# --- SSH abuse and bans -------------------------------------------------------
+ssh_fail="$(journalctl -u ssh --since "$SINCE" --no-pager 2>/dev/null \
+  | grep -cE 'Invalid user|Failed publickey|Connection closed by (invalid|authenticating)')" || ssh_fail=0
+bans="$(journalctl -u fail2ban --since "$SINCE" --no-pager 2>/dev/null | grep -c ' Ban ')" || bans=0
+add "SSH: ${ssh_fail} failed/invalid attempts, ${bans} fail2ban bans"
+
+# --- sudo sessions -------------------------------------------------------------
+sudo_n="$(journalctl _COMM=sudo --since "$SINCE" --no-pager 2>/dev/null | grep -c 'session opened')" || sudo_n=0
+add "sudo: ${sudo_n} sessions opened"
+
+# --- listening-socket delta (new/removed since last digest) --------------------
+snap="$STATE_DIR/listen.snapshot"
+cur="$(ss -tulnH 2>/dev/null | awk '{print $1, $5}' | sort -u)"
+if [ -f "$snap" ] && [ -n "$cur" ]; then
+  new="$(comm -13 "$snap" <(printf '%s\n' "$cur") | tr '\n' '; ')"
+  gone="$(comm -23 "$snap" <(printf '%s\n' "$cur") | tr '\n' '; ')"
+  [ -n "${new//[; ]/}" ] && add "Listening NEW: ${new}"
+  [ -n "${gone//[; ]/}" ] && add "Listening REMOVED: ${gone}"
+fi
+[ -n "$cur" ] && printf '%s\n' "$cur" > "$snap"
+
+# --- containers ----------------------------------------------------------------
+if command -v docker >/dev/null 2>&1; then
+  total="$(docker ps -q 2>/dev/null | wc -l | tr -d ' ')"
+  unhealthy="$(docker ps --filter health=unhealthy -q 2>/dev/null | wc -l | tr -d ' ')"
+  add "Containers: ${total} running, ${unhealthy} unhealthy"
+fi
+
+# --- disk ----------------------------------------------------------------------
+add "Disk /: $(df -h / 2>/dev/null | awk 'NR==2 {print $5" used, "$4" free"}')"
+
+# --- patching ------------------------------------------------------------------
+[ -f /run/reboot-required ] && add "Reboot required: YES (pending patch-window reboot)"
+sla="$(journalctl --since "$SINCE" --no-pager -g 'PATCH-SLA' 2>/dev/null | tail -1 | sed 's/^.*PATCH-SLA/PATCH-SLA/')"
+[ -n "$sla" ] && add "$sla"
+
+# --- web: request volume + auth denials from the Caddy access log --------------
+if command -v docker >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
+  vol="$(docker volume ls -q 2>/dev/null | grep -m1 '_caddy_logs$')" || vol=""
+  if [ -n "$vol" ]; then
+    logf="$(docker volume inspect -f '{{.Mountpoint}}' "$vol" 2>/dev/null)/access.log"
+    if [ -r "$logf" ]; then
+      web="$(python3 - "$logf" <<'PY'
+import json, sys, time
+cutoff = time.time() - 7 * 86400
+total = denied = 0
+ips = {}
+for line in open(sys.argv[1], errors="replace"):
+    try:
+        e = json.loads(line)
+    except ValueError:
+        continue
+    if e.get("ts", 0) < cutoff:
+        continue
+    total += 1
+    if e.get("status") in (401, 403, 429):
+        denied += 1
+        ip = (e.get("request") or {}).get("remote_ip", "?")
+        ips[ip] = ips.get(ip, 0) + 1
+top = ", ".join(f"{k} ({v})" for k, v in sorted(ips.items(), key=lambda x: -x[1])[:3])
+print(f"{total} requests, {denied} denied (401/403/429)" + (f"; top sources: {top}" if top else ""))
+PY
+)"
+      [ -n "$web" ] && add "Web: ${web}"
+    fi
+  fi
+fi
+
+# Journal keeps the dated review record even when ntfy is unconfigured.
+printf 'Weekly security digest (%s):\n%s' "$(hostname)" "$msg"
+vps-notify "Weekly security digest" "$msg" default clipboard
+
+exit 0

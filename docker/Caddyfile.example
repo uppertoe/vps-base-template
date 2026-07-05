@@ -2,4 +2,6 @@
 #
 # App routing snippets from apps/*/*.caddy are rendered into the committed
 # bundle .generated/caddy/apps.caddy by scaffold/docker/render-caddy-routes.sh.
-# Default site compression (`encode zstd gzip`) is injected automatically.
+# Injected into every site automatically: compression, JSON access logs with
+# authenticated-user attribution, and baseline security headers (HSTS etc.;
+# apps can override — the renderer uses set-if-absent).

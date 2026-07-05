@@ -118,6 +118,7 @@
     - vps-disk-watch
     - vps-container-watch
     - vps-boot-check
+    - vps-log-digest
 
 - name: Create watcher state directory
   ansible.builtin.file:
@@ -141,6 +142,8 @@
     - vps-boot-check.service
     - vps-notify-selftest.service
     - vps-notify-selftest.timer
+    - vps-log-digest.service
+    - vps-log-digest.timer
   notify: Reload systemd
 
 - name: Install vps-container-watch.timer
@@ -165,6 +168,8 @@
       want: "{{ notify_container_watch_enabled | bool }}"
     - unit: vps-notify-selftest.timer
       want: "{{ notify_selftest_enabled | bool }}"
+    - unit: vps-log-digest.timer
+      want: "{{ notify_log_digest_enabled | bool }}"
   when: ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
   tags:
     - molecule-notest

@@ -53,6 +53,12 @@ notify_boot_check_deadline_secs: 600
 # Monthly synthetic alert: end-to-end proof the ntfy→phone chain still works.
 notify_selftest_enabled: true
 
+# Weekly security digest: the automated log review (ISM expects logs to be
+# REVIEWED, not just retained). SSH abuse, bans, sudo activity, listening-
+# socket deltas, container/disk state, patch SLA, web auth denials — one ntfy
+# message, plus a dated journal record as review evidence.
+notify_log_digest_enabled: true
+
 # Units whose failure should trigger a push (OnFailure=). Only units that exist
 # on the host get a drop-in; the rest are skipped. dailyaidecheck failing is the
 # AIDE "file integrity changed / scan errored" signal.

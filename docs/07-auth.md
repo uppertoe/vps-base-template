@@ -193,3 +193,23 @@ in its CI.
 - Stateless sessions can't be revoked before expiry — keep `SESSION_TTL`
   moderate (default 12h).
 - Pin the image to a version tag in production rather than `:latest`.
+
+## Email authenticity (SPF/DKIM/DMARC)
+
+The OTP email IS the login credential's delivery channel, which makes the
+sending domain part of the auth system's attack surface: without sender
+authentication, a phisher can convincingly spoof "your login code" emails from
+your domain. On the domain that `EMAIL_FROM` uses, publish:
+
+- **SPF** — authorize only your actual sender (the SMTP relay in `EMAIL_HOST`):
+  `v=spf1 include:<relay-spf> -all`
+- **DKIM** — enable signing at the relay and publish its selector key.
+- **DMARC** — start with `p=quarantine; rua=mailto:...`, move to `p=reject`
+  once the reports are clean.
+
+This also materially improves OTP deliverability — a login email that lands in
+spam is an availability incident. Verify after DNS changes with any DMARC
+checker; re-check when changing SMTP providers (a stale SPF include silently
+breaks both security and delivery). Watch for auth-denial spikes in the weekly
+security digest — a burst of 401/429s against the auth host is the signature
+of someone probing the login wall.

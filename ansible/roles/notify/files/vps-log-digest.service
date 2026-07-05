@@ -1,0 +1,13 @@
+# vps-log-digest.service — one weekly security/ops digest.
+#
+# Triggered by vps-log-digest.timer. Installed by the notify role. The digest
+# prints to stdout so the journal carries a dated record of each automated
+# log review (the evidence auditors ask for), in addition to the ntfy push.
+
+[Unit]
+Description=Weekly security digest (automated log review, via ntfy)
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/vps-log-digest

@@ -74,6 +74,18 @@ if [[ -d "$repo_root/apps" ]]; then
           print "        }" >> target
           print "        format json" >> target
           print "    }" >> target
+          # Access-log user attribution: forward_auth injects Remote-User on
+          # protected routes; recording it gives a per-user access trail that
+          # ships to the tamper-evident log bucket. Empty on public routes.
+          print "    log_append user {http.request.header.Remote-User}" >> target
+          # Security-header baseline for every site. ?-prefix sets a header
+          # only when the app did not set its own, so apps can override.
+          print "    header {" >> target
+          print "        ?Strict-Transport-Security \"max-age=31536000; includeSubDomains\"" >> target
+          print "        ?X-Content-Type-Options nosniff" >> target
+          print "        ?Referrer-Policy strict-origin-when-cross-origin" >> target
+          print "        ?X-Frame-Options DENY" >> target
+          print "    }" >> target
         }
 
         depth += opens - closes

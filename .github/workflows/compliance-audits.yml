@@ -31,7 +31,7 @@ jobs:
       - name: Install Ansible dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install ansible-core
+          python -m pip install ansible-core==2.19.11
           python -m pip install -r requirements.txt
           ansible-galaxy collection install -r ansible/requirements.yml
 
@@ -74,10 +74,10 @@ jobs:
       # deploys. Findings still surface in the artifact and the step summary.
       - name: Trivy image scan (caddy)
         run: |
-          docker run --rm -v "$PWD/reports/container-security:/out" aquasec/trivy:latest image \
+          docker run --rm -v "$PWD/reports/container-security:/out" aquasec/trivy:latest@sha256:cffe3f5161a47a6823fbd23d985795b3ed72a4c806da4c4df16266c02accdd6f image \
             --severity HIGH,CRITICAL --no-progress --format table \
             --output /out/trivy-caddy.txt "${{ steps.img.outputs.ref }}" || true
-          docker run --rm -v "$PWD/reports/container-security:/out" aquasec/trivy:latest image \
+          docker run --rm -v "$PWD/reports/container-security:/out" aquasec/trivy:latest@sha256:cffe3f5161a47a6823fbd23d985795b3ed72a4c806da4c4df16266c02accdd6f image \
             --severity HIGH,CRITICAL --no-progress --format json \
             --output /out/trivy-caddy.json "${{ steps.img.outputs.ref }}" || true
           echo '### Trivy (caddy) HIGH/CRITICAL' >> "$GITHUB_STEP_SUMMARY"
@@ -85,7 +85,7 @@ jobs:
 
       - name: Dockle image best-practice lint (caddy)
         run: |
-          docker run --rm -v "$PWD/reports/container-security:/out" goodwithtech/dockle:latest \
+          docker run --rm -v "$PWD/reports/container-security:/out" goodwithtech/dockle:latest@sha256:eade932f793742de0aa8755406c7677cd7696f8675b6180926f7eeffa7abe6b9 \
             --format json --output /out/dockle-caddy.json "${{ steps.img.outputs.ref }}" || true
 
       # Static compose misconfig lint. Fails the build on HIGH findings. The four
@@ -96,7 +96,7 @@ jobs:
       - name: KICS compose scan
         run: |
           docker run --rm -v "$PWD/docker:/path" -v "$PWD/reports/container-security:/out" \
-            checkmarx/kics:latest scan -p /path --type DockerCompose \
+            checkmarx/kics:latest@sha256:3e5a268eb8adda2e5a483c9359ddfc4cd520ab856a7076dc0b1d8784a37e2602 scan -p /path --type DockerCompose \
             --exclude-queries 8c978947-0ff6-485c-b0c2-0bfca6026466,bc2908f3-f73c-40a9-8793-c1b7d5544f79,451d79dc-0588-476a-ad03-3c7f0320abb3,ce76b7d0-9e77-464d-b86f-c5c48e03e22d \
             --report-formats json --output-name kics-compose -o /out --fail-on high
 

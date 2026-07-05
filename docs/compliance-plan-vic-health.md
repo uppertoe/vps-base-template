@@ -259,7 +259,7 @@ generic templates in the scaffold (`docs/templates/`).
 - **B6 · Tier separation assertion** *(ISM-1269/1270/1271)* — extend
   `check-compose-hardening.py` to assert: every app's DB container sits on a per-app
   network, publishes no ports, and is reachable only from its own app service; flag any
-  container sharing the caddy network unnecessarily. Turns an ISM control into a CI
+  unrelated app containers sharing a proxy network unnecessarily. Turns an ISM control into a CI
   gate. Evidence: audit-compose report.
 - **B7 · External dead-man's switch** *(VPDSS Std 7; roadmap P1-5)* — `notify`-role
   timer curling Healthchecks.io/UptimeRobot (`deadman_switch_url`, opt-in). Evidence:

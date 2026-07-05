@@ -20,8 +20,10 @@ vuln_scan_schedule: "*-*-* 05:41:00"
 # Severities to record in reports. Alerts only fire for fixable CRITICALs.
 vuln_scan_severity: "HIGH,CRITICAL"
 
-# Trivy runs as a container so nothing is installed on the host.
-vuln_scan_trivy_image: "aquasec/trivy:0.59.1"
+# Trivy runs as a container so nothing is installed on the host. It mounts the
+# Docker socket, so pin the scanner image by digest like any other privileged
+# helper image.
+vuln_scan_trivy_image: "aquasec/trivy:0.59.1@sha256:029e990b328d149bf0a9ffe355919041e1f86192db2df47e217f8a36dd42ceac"
 
 # Vulnerability DB cache (shared with audit-vuln.yml) and report retention.
 vuln_scan_cache_dir: /var/cache/trivy

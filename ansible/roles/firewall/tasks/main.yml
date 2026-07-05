@@ -121,7 +121,16 @@
       iptables -F VPS-SCAFFOLD-DOCKER-USER
       iptables -A VPS-SCAFFOLD-DOCKER-USER -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN
       {% for iface in docker_firewall_bridge_interfaces %}
-      iptables -A VPS-SCAFFOLD-DOCKER-USER -i {{ iface }} -j RETURN
+      iptables -A VPS-SCAFFOLD-DOCKER-USER -i {{ iface }} -o {{ iface }} -j RETURN
+      {% endfor %}
+      {% for iface in docker_firewall_bridge_interfaces %}
+      {% for port in docker_firewall_allowed_outbound_tcp_ports %}
+      iptables -A VPS-SCAFFOLD-DOCKER-USER -i {{ iface }} -p tcp --dport {{ port }} -j RETURN
+      {% endfor %}
+      {% for port in docker_firewall_allowed_outbound_udp_ports %}
+      iptables -A VPS-SCAFFOLD-DOCKER-USER -i {{ iface }} -p udp --dport {{ port }} -j RETURN
+      {% endfor %}
+      iptables -A VPS-SCAFFOLD-DOCKER-USER -i {{ iface }} -j DROP
       {% endfor %}
       {% for port in firewall_allowed_tcp_ports %}
       iptables -A VPS-SCAFFOLD-DOCKER-USER -p tcp -m conntrack --ctorigdstport {{ port }} -j RETURN
@@ -137,7 +146,16 @@
         ip6tables -F VPS-SCAFFOLD-DOCKER-USER
         ip6tables -A VPS-SCAFFOLD-DOCKER-USER -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN
       {% for iface in docker_firewall_bridge_interfaces %}
-        ip6tables -A VPS-SCAFFOLD-DOCKER-USER -i {{ iface }} -j RETURN
+        ip6tables -A VPS-SCAFFOLD-DOCKER-USER -i {{ iface }} -o {{ iface }} -j RETURN
+      {% endfor %}
+      {% for iface in docker_firewall_bridge_interfaces %}
+      {% for port in docker_firewall_allowed_outbound_tcp_ports %}
+        ip6tables -A VPS-SCAFFOLD-DOCKER-USER -i {{ iface }} -p tcp --dport {{ port }} -j RETURN
+      {% endfor %}
+      {% for port in docker_firewall_allowed_outbound_udp_ports %}
+        ip6tables -A VPS-SCAFFOLD-DOCKER-USER -i {{ iface }} -p udp --dport {{ port }} -j RETURN
+      {% endfor %}
+        ip6tables -A VPS-SCAFFOLD-DOCKER-USER -i {{ iface }} -j DROP
       {% endfor %}
       {% for port in firewall_allowed_tcp_ports %}
         ip6tables -A VPS-SCAFFOLD-DOCKER-USER -p tcp -m conntrack --ctorigdstport {{ port }} -j RETURN

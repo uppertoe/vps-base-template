@@ -65,13 +65,12 @@ Add `import protected` to the app's Caddy snippet:
 ```caddyfile
 # apps/dashboard/dashboard.caddy
 dashboard.{$DOMAIN} {
-    import protected
-    reverse_proxy dashboard:3000
+    import protected dashboard:3000
 }
 ```
 
 The `(protected)` snippet is defined in `apps/auth/auth.caddy`; because Caddy
-concatenates every `apps/*/*.caddy` into one Caddyfile, any app can import it.
+renders every `apps/*/*.caddy` into one generated route bundle, any app can import it.
 Protected apps read identity from the `Remote-User` / `Remote-Email` /
 `Remote-Groups` request headers and do their own per-feature authorization.
 
@@ -80,13 +79,15 @@ Protected apps read identity from the `Remote-User` / `Remote-Email` /
 > always defined, so Caddy starts fine — but protected routes return `502` until
 > you [enable auth](#enabling-it).
 
-> **Trust model.** Apps trust these headers because only Caddy can reach them —
-> apps publish no host ports, and `forward_auth`'s `copy_headers` clears any
+> **Trust model.** Apps trust these headers because only Caddy should share their
+> per-app proxy network — apps publish no host ports, and `forward_auth`'s
+> `copy_headers` clears any
 > client-supplied `Remote-User` / `Remote-Email` / `Remote-Groups` and replaces
 > them with the auth service's values, removing them entirely when the service
 > doesn't set one. So a client **cannot** smuggle a forged `Remote-Groups: admin`
 > past a non-admin (or unauthenticated) response. Never expose a protected app
-> directly, and only trust these three header names.
+> directly, never put unrelated apps on the same proxy network, and only trust
+> these three header names.
 
 ## Protecting a path
 
@@ -99,8 +100,7 @@ say an `/admin` area while the rest stays public — wrap the protected routes i
 blog.{$DOMAIN} {
     # Authenticated: /admin and everything under it
     handle /admin/* {
-        import protected
-        reverse_proxy blog:3000
+        import protected blog:3000
     }
     # Public: everything else
     handle {
@@ -123,8 +123,7 @@ app.{$DOMAIN} {
         reverse_proxy app:3000
     }
     handle {                     # everything else requires login
-        import protected
-        reverse_proxy app:3000
+        import protected app:3000
     }
 }
 ```
@@ -174,7 +173,7 @@ EOF
 docker compose up -d --build
 docker compose exec caddy caddy trust    # trust the local CA once
 
-# Add a dummy protected app (apps/demo/demo.caddy with `import protected`),
+# Add a dummy protected app (apps/demo/demo.caddy with `import protected demo:3000`),
 # hit it in a browser, request a code, read it from:
 docker compose logs -f auth              # [email:log] ... text="... 123456 ..."
 # enter the code, and confirm you land on the demo app.

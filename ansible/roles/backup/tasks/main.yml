@@ -46,12 +46,28 @@
     backup_restic_installed.rc != 0 or
     backup_restic_version not in backup_restic_installed.stdout
   block:
+    - name: Resolve restic release architecture and checksum
+      ansible.builtin.set_fact:
+        backup_restic_arch: "{{ ansible_facts['architecture'] | replace('x86_64', 'amd64') | replace('aarch64', 'arm64') }}"
+        backup_restic_checksum: >-
+          {{
+            backup_restic_checksums
+            .get(backup_restic_version, {})
+            .get(ansible_facts['architecture'] | replace('x86_64', 'amd64') | replace('aarch64', 'arm64'), '')
+          }}
+
+    - name: Fail when no restic checksum is pinned for this platform
+      ansible.builtin.fail:
+        msg: "No pinned restic checksum for version {{ backup_restic_version }} arch {{ backup_restic_arch }}"
+      when: backup_restic_checksum | length == 0
+
     - name: Download restic binary
       ansible.builtin.get_url:
         url: >-
-          https://github.com/restic/restic/releases/download/v{{ backup_restic_version }}/restic_{{ backup_restic_version }}_linux_{{ ansible_facts['architecture'] | replace('x86_64', 'amd64') | replace('aarch64', 'arm64') }}.bz2
+          https://github.com/restic/restic/releases/download/v{{ backup_restic_version }}/restic_{{ backup_restic_version }}_linux_{{ backup_restic_arch }}.bz2
         dest: /tmp/restic.bz2
         mode: "0644"
+        checksum: "{{ backup_restic_checksum }}"
 
     - name: Decompress restic
       ansible.builtin.shell: bunzip2 -c /tmp/restic.bz2 > /usr/local/bin/restic.tmp

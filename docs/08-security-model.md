@@ -82,7 +82,18 @@ tailoring file in lock-step.
 > `baseline-hardening`; AIDE is installed, initialised, and its packaged
 > `dailyaidecheck.timer` enabled.
 
-### Public web server & Docker (documented, not deselected)
+### Scanner `error` results (adjudicated, kept selected)
+
+Rules the OpenSCAP probes cannot *evaluate* in this environment — they report
+`error`, not `fail`. Kept selected so a future content fix starts scoring them
+automatically; adjudicated here so an `error` count in the report is a known
+quantity, not an open question. Verified live on the staging host 2026-07-05
+(9 errors, all accounted for):
+
+| SSG rule(s) | Why the probe errors | The control itself |
+|-------------|----------------------|--------------------|
+| `check_ufw_active`, `set_ufw_default_rule`, `set_ufw_loopback_traffic`, `ufw_rules_for_open_ports`, `set_nftables_loopback_traffic`, `set_nftables_table` | The SSG firewall OVAL probes error against a UFW-over-nftables stack rather than evaluating it (same content-architecture mismatch as the deselected standalone-nftables rows above). | **Met and evidenced**: UFW active, default deny in/out, loopback and per-port rules — captured as `firewall.txt` (`ufw status verbose` + `iptables -S`) in every evidence bundle. |
+| `file_permissions_unauthorized_world_writable`, `file_permissions_ungroupowned`, `no_files_unowned_by_user` | Whole-filesystem OVAL sweeps that abort in scan context (traversal of container overlay mounts and virtual filesystems). | **Met by construction and spot-checked**: nightly AIDE sweep covers the real filesystem; `find / -xdev` spot-checks in the CI rule-level reviews found no unowned/world-writable files outside documented tmpfs paths. |
 
 | Finding | Why accepted |
 |---------|--------------|

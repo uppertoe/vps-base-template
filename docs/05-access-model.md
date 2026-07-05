@@ -292,6 +292,31 @@ enough — it becomes control-matrix row 23 evidence):
 - dormant access: anything unused for ~45 days gets removed, not kept "just
   in case" (the Essential Eight ML2 dormancy rule, applied at our scale)
 
+## The Repo-to-Root Trust Boundary
+
+Be explicit about what restricted mode does NOT change: **anyone who can merge
+to the server repo's default branch can execute code as root on the VPS.**
+
+The chain: a merged commit lands in `/opt/deploy` on the next deploy; the
+root-owned `vps-deploy` wrapper runs every executable `apps/*/deploy.sh` hook,
+and hooks legitimately need Docker access (which is root-equivalent). With
+`deploy_auto_update: true` and Renovate automerge, this happens with **no human
+in the loop**.
+
+Restricted mode confines the interactive SSH `deploy` user; it deliberately
+does not confine the repo. That means GitHub account security, branch
+protection, and review requirements ARE part of the host's root boundary.
+Treat them with the same seriousness as SSH keys:
+
+- **Branch protection** on `main`: require PRs and passing CI; no force-push.
+- **CODEOWNERS** on the executable surface (`apps/*/deploy.sh`, compose files,
+  workflows, the `scaffold` submodule pointer) so those paths always require
+  an owner's review — the instance template ships one.
+- **Renovate cooldown** (`minimumReleaseAge`): automerged digest bumps must
+  age upstream before they can reach the box, so a poisoned release is caught
+  by the ecosystem before your deploy timer ships it.
+- **2FA + hardware keys** on any GitHub account with merge rights.
+
 ## What This Does Not Solve
 
 This model improves access control, but it does not by itself solve:

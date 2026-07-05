@@ -1,0 +1,19 @@
+# vps-boot-check.service — post-boot stack health report (via ntfy).
+#
+# Runs once per boot. Pairs with unattended-upgrades Automatic-Reboot so a
+# patch-window reboot confirms itself ("Rebooted OK") or pages ("Boot check
+# FAILED"). Installed by the notify role.
+
+[Unit]
+Description=Post-boot container stack health report
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/vps-boot-check
+# The script polls up to BOOT_CHECK_DEADLINE_SECS (default 600) + reporting.
+TimeoutStartSec=900
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,14 @@
+# vps-container-watch.timer — container health sweep schedule.
+# Installed by the notify role.
+
+[Unit]
+Description=Container health watch (every {{ notify_container_watch_interval_min }} min)
+Requires=vps-container-watch.service
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec={{ notify_container_watch_interval_min }}min
+Unit=vps-container-watch.service
+
+[Install]
+WantedBy=timers.target

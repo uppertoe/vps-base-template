@@ -1,0 +1,62 @@
+#!/bin/bash
+# vps-disk-watch — alert via ntfy when filesystem usage crosses thresholds.
+#
+# The classic silent killer of unattended hosts is a slowly filling disk
+# (docker images from digest bumps, logs, restic cache). This watches every
+# real filesystem and pushes through vps-notify on LEVEL TRANSITIONS only:
+# ok→warn (high priority), →crit (max priority), and an all-clear when a
+# mount drops back to ok — so a full disk alerts once, not every run.
+#
+# Thresholds come from /etc/vps-scaffold/notify.env:
+#   DISK_WATCH_WARN (default 80), DISK_WATCH_CRIT (default 90)
+set -u
+
+CONF="${VPS_NOTIFY_CONF:-/etc/vps-scaffold/notify.env}"
+# shellcheck disable=SC1090
+[ -r "$CONF" ] && . "$CONF"
+
+WARN="${DISK_WATCH_WARN:-80}"
+CRIT="${DISK_WATCH_CRIT:-90}"
+STATE_DIR="${VPS_NOTIFY_STATE_DIR:-/var/lib/vps-notify}"
+mkdir -p "$STATE_DIR"
+
+# Note: --output is incompatible with -P; GNU df only (this targets Ubuntu).
+df -x tmpfs -x devtmpfs -x overlay -x squashfs -x efivarfs --output=target,pcent 2>/dev/null \
+  | tail -n +2 | while read -r mount pcent; do
+  use="${pcent%\%}"
+  case "$use" in *[!0-9]*|"") continue ;; esac
+
+  level=ok
+  [ "$use" -ge "$WARN" ] && level=warn
+  [ "$use" -ge "$CRIT" ] && level=crit
+
+  state_file="$STATE_DIR/disk$(printf '%s' "$mount" | tr '/' '_').level"
+  prev="$(cat "$state_file" 2>/dev/null || echo ok)"
+  [ "$level" = "$prev" ] && continue
+  echo "$level" > "$state_file"
+
+  detail="$(df -h "$mount" | tail -1)"
+  case "$level" in
+    crit)
+      vps-notify "Disk ${use}% full: ${mount}" \
+        "${detail}
+Filesystem is above ${CRIT}%. Likely growth: docker images/volumes (docker system df), journald, restic cache. docker-prune runs on a timer but may not be enough." \
+        max rotating_light
+      ;;
+    warn)
+      vps-notify "Disk ${use}% used: ${mount}" \
+        "${detail}
+Filesystem crossed ${WARN}%. Worth a look before it becomes urgent (docker system df; journalctl --disk-usage)." \
+        high warning
+      ;;
+    ok)
+      # Only announce recovery from a previously alerted state.
+      vps-notify "Disk usage recovered: ${mount}" \
+        "${detail}
+Back below ${WARN}%." \
+        low white_check_mark
+      ;;
+  esac
+done
+
+exit 0

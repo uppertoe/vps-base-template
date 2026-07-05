@@ -17,9 +17,41 @@ notify_default_priority: high
 #   ~3x notify_deadman_interval_min. Gatus must alert via a channel that does
 #   not depend on this VPS (not the on-box ntfy).
 # Healthchecks / Uptime Kuma push URLs: set the URL only (plain GET).
+#
+# The heartbeat is REQUIRED for a set-and-forget host: every other alert in the
+# scaffold originates on the box, so "the box is down" is invisible without it.
+# Provisioning fails when the URL is empty unless the gap is explicitly
+# accepted with notify_deadman_accept_none: true.
 notify_deadman_url: ""
 notify_deadman_token: ""
 notify_deadman_interval_min: 5
+notify_deadman_accept_none: false
+
+# On-box watchers — the "who watches the watcher" layer. All alert through
+# vps-notify (ntfy) and no-op when notify_ntfy_url is unset.
+#
+# Disk usage: alerts on threshold transitions (once per crossing, with an
+# all-clear), hourly sweep. The slow killer of unattended hosts.
+notify_disk_watch_enabled: true
+notify_disk_watch_warn_pct: 80
+notify_disk_watch_crit_pct: 90
+
+# Container health: unhealthy / restart-looping containers between deploys
+# (deploy's --wait only proves health at deploy time). Grace before the first
+# alert; cooldown before repeating it.
+notify_container_watch_enabled: true
+notify_container_watch_interval_min: 5
+notify_container_watch_grace_secs: 600
+notify_container_watch_cooldown_secs: 21600
+
+# Post-boot report: after any (re)boot — including unattended-upgrades'
+# Automatic-Reboot window — confirm the stack came back healthy ("Rebooted
+# OK") or page ("Boot check FAILED").
+notify_boot_check_enabled: true
+notify_boot_check_deadline_secs: 600
+
+# Monthly synthetic alert: end-to-end proof the ntfy→phone chain still works.
+notify_selftest_enabled: true
 
 # Units whose failure should trigger a push (OnFailure=). Only units that exist
 # on the host get a drop-in; the rest are skipped. dailyaidecheck failing is the

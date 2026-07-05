@@ -213,13 +213,29 @@
   register: firewall_ipv4_conf_dirs
   when: ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
 
-- name: Re-apply martian and rp_filter sysctls on live IPv4 interfaces
-  ansible.posix.sysctl:
-    name: "net.ipv4.conf.{{ item.0 }}.{{ item.1.key }}"
-    value: "{{ item.1.value }}"
-    state: present
-    reload: true
-    sysctl_file: /etc/sysctl.d/99-vps-scaffold.conf
+# Ephemeral interfaces (veth*, docker's br-*) must never be PERSISTED in
+# sysctl.d: stale entries make every later reload fail once the interface is
+# gone (observed live — a deploy recreated the compose networks mid-play and
+# the whole role run died on the reload). Strip anything a previous run
+# persisted, then apply the live-interface sweep runtime-only below;
+# conf.default already covers interfaces created afterwards.
+- name: Remove persisted sysctls for ephemeral interfaces
+  ansible.builtin.replace:
+    path: /etc/sysctl.d/99-vps-scaffold.conf
+    regexp: '^net\.ipv4\.conf\.(veth[^.=]*|br-[^.=]*)\.[^=]+=.*\n'
+    replace: ''
+  when: ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
+- name: Re-apply martian and rp_filter sysctls on live IPv4 interfaces (runtime only)
+  ansible.builtin.command:
+    cmd: "sysctl -w net.ipv4.conf.{{ item.0 }}.{{ item.1.key }}={{ item.1.value }}"
+  register: firewall_sysctl_apply
+  changed_when: false
+  # An interface enumerated a moment ago may already be gone (veths churn
+  # with container lifecycle) — that is fine, not a failure.
+  failed_when: >-
+    firewall_sysctl_apply.rc != 0 and
+    'No such file or directory' not in (firewall_sysctl_apply.stderr | default(''))
   vars:
     firewall_live_ipv4_interfaces: >-
       {{

@@ -80,13 +80,21 @@ exposed to that user population).
 
 ## 4. Notify — Victorian health obligations
 
-Get legal/governance advice early; this section is a map, not advice.
+Get legal/governance advice early; this section is a map, not advice. The
+**per-instance runbook** built from
+[templates/incident-response-runbook.md](templates/incident-response-runbook.md)
+carries the live contact table — keep it filled in and current; during an
+incident use that, not this.
 
 - **Engaged by a health service** (the usual posture for this platform): the
   health service's own incident pathway comes first — their CISO/privacy
-  officer, per your agreement. They own onward reporting (Department of
-  Health cyber incident reporting, OVIC where applicable). Your deliverable
-  is the incident log + timeline from §1–3, fast.
+  officer, per your agreement — and the Department of Health expects
+  significant cyber incidents reported to the **eHealth Incident Management
+  Team within the hour** (1300 598 686 /
+  Digital.Health.Incident.Notification@health.vic.gov.au). One hour means the
+  §1 incident log and the health-service call happen in parallel, not in
+  sequence. They own onward reporting (OVIC where applicable). Your
+  deliverable is the incident log + timeline from §1–3, fast.
 - **Health Records Act**: exposure of identifiable health information can
   ground complaints to the **Health Complaints Commissioner** — the health
   service decides notification posture; give them accurate scope (whose

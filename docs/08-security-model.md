@@ -204,6 +204,26 @@ stack and fails if a non-excepted container is missing any of:
 The daemon also sets `no-new-privileges: true` globally as a backstop, but each
 container declares it explicitly so the audit is unambiguous.
 
+Two network assertions ride along with the §5 checks:
+
+- **Per-app proxy isolation** — every Caddy-reachable network must contain
+  exactly one app container (the renderer generates one `<app>_proxy` network
+  per app; the audit fails if two apps ever share one). This is what makes the
+  `Remote-*` identity headers unforgeable from a compromised neighbour app.
+- **Database tier separation** (ISM-1269/1270/1271) — database containers
+  publish no host ports and sit off all Caddy-reachable networks.
+
+## Container egress policy
+
+Host firewall policy is default-deny outbound with a port allowlist, and
+**containers are held to the same allowlist**: the Docker-aware `DOCKER-USER`
+chain permits intra-network traffic (Caddy ↔ app), then container-originated
+traffic only to the allowlisted outbound ports (22, 53, 80, 443, 587, NTP by
+default — `docker_firewall_allowed_outbound_*_ports`), and drops the rest. A
+compromised container cannot make arbitrary outbound connections; exfiltration
+and C2 are constrained to the same short port list as the host. Widening the
+list for a specific app is an inventory-level, reviewable change.
+
 ## Unattended updates (change-management position)
 
 Two sanctioned unattended-change channels exist, both modelled on the

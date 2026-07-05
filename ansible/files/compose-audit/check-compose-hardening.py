@@ -31,14 +31,33 @@ CONTROLS = [
     ("5.26 healthcheck", "healthcheck"),
 ]
 
+INIT_CONTROLS = [
+    ("5.4 init: not privileged", "privileged"),
+    ("5.3 init: cap_drop ALL", "cap_drop_all"),
+    ("5.25 init: no-new-privileges", "no_new_privileges"),
+    ("5.12 init: read-only rootfs", "read_only"),
+    ("5.10 init: memory limit", "mem_limit"),
+    ("5.28 init: pids limit", "pids_limit"),
+    ("scaffold init: no network", "network_none"),
+]
+
 # Data-tier separation (ISM-1269/1270/1271): a database container must not be
 # reachable except from its own app — no published host ports, and never on
-# the shared reverse-proxy network where every app (and Caddy) could reach it.
+# a reverse-proxy network where Caddy can reach it.
 DB_IMAGE_MARKERS = ("postgres", "mysql", "mariadb", "mongo", "redis", "valkey")
-SHARED_PROXY_NETWORK = "caddy"
 DB_CONTROLS = [
     ("ISM-1271 db: no published ports", "db_no_published_ports"),
-    ("ISM-1270 db: off the shared proxy network", "db_off_proxy_network"),
+    ("ISM-1270 db: off reverse-proxy networks", "db_off_proxy_network"),
+]
+
+# App isolation: each Caddy-reachable (proxy) network must contain exactly one
+# app container. Two apps on one proxy network can reach each other's backends
+# directly and forge the Remote-* identity headers, bypassing forward_auth.
+# The scaffold generates exclusive per-app networks (render-caddy-routes.sh);
+# this asserts nothing reintroduced a shared one. Document deliberate pairs in
+# the exceptions file.
+PROXY_CONTROLS = [
+    ("scaffold app: sole app on its proxy networks", "proxy_network_exclusive"),
 ]
 
 
@@ -48,14 +67,14 @@ def is_db_container(c):
     return any(m in base for m in DB_IMAGE_MARKERS)
 
 
-def evaluate_db(c):
+def evaluate_db(c, proxy_networks):
     host = c.get("HostConfig") or {}
     bindings = host.get("PortBindings") or {}
     published = any(v for v in bindings.values())
-    networks = ((c.get("NetworkSettings") or {}).get("Networks") or {}).keys()
+    networks = set(((c.get("NetworkSettings") or {}).get("Networks") or {}).keys())
     return {
         "db_no_published_ports": not published,
-        "db_off_proxy_network": SHARED_PROXY_NETWORK not in networks,
+        "db_off_proxy_network": not (networks & proxy_networks),
     }
 
 
@@ -97,13 +116,29 @@ def evaluate(c):
         "pids_limit": (host.get("PidsLimit") or 0) > 0,
         "non_root": not is_root(user),
         "healthcheck": len([t for t in hc_test if t not in ("", "NONE")]) > 0,
+        "network_none": host.get("NetworkMode") == "none",
     }
+
+
+def is_init_container(c):
+    labels = ((c.get("Config") or {}).get("Labels") or {})
+    return labels.get("vps-scaffold.audit") == "init-volume-owner"
+
+
+def compose_service(c):
+    labels = ((c.get("Config") or {}).get("Labels") or {})
+    return labels.get("com.docker.compose.service")
+
+
+def container_networks(c):
+    return set(((c.get("NetworkSettings") or {}).get("Networks") or {}).keys())
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--json")
     ap.add_argument("--md")
+    ap.add_argument("--compose-project", help="Only audit containers from this Compose project")
     ap.add_argument(
         "--exceptions",
         help="JSON: {container_name: [control_key, ...]} to accept as documented exceptions",
@@ -115,19 +150,43 @@ def main():
         with open(args.exceptions) as fh:
             exceptions = json.load(fh)
 
-    names = [n for n in docker(["ps", "--format", "{{.Names}}"]).splitlines() if n]
+    ps_args = ["ps", "-a", "--format", "{{.Names}}"]
+    if args.compose_project:
+        ps_args[2:2] = ["--filter", f"label=com.docker.compose.project={args.compose_project}"]
+    names = [n for n in docker(ps_args).splitlines() if n]
     report = {"containers": {}, "summary": {"pass": 0, "warn": 0, "excepted": 0}}
     failed = False
 
     if not names:
         print("[INFO] no running containers to audit")
 
+    inspected = {name: json.loads(docker(["inspect", name]))[0] for name in names}
+    proxy_networks = set()
+    for c in inspected.values():
+        if compose_service(c) == "caddy":
+            proxy_networks.update(container_networks(c))
+
+    # Count app containers (everything but Caddy itself and one-shot init
+    # containers) per network, to assert proxy networks are per-app exclusive.
+    network_app_count = {}
+    for c in inspected.values():
+        if compose_service(c) == "caddy" or is_init_container(c):
+            continue
+        for net in container_networks(c):
+            network_app_count[net] = network_app_count.get(net, 0) + 1
+
     for name in names:
-        c = json.loads(docker(["inspect", name]))[0]
+        c = inspected[name]
         results = evaluate(c)
-        controls = list(CONTROLS)
+        controls = list(INIT_CONTROLS if is_init_container(c) else CONTROLS)
+        if not is_init_container(c) and compose_service(c) != "caddy":
+            results["proxy_network_exclusive"] = not any(
+                network_app_count.get(net, 0) > 1
+                for net in container_networks(c) & proxy_networks
+            )
+            controls += PROXY_CONTROLS
         if is_db_container(c):
-            results.update(evaluate_db(c))
+            results.update(evaluate_db(c, proxy_networks))
             controls += DB_CONTROLS
         excepted = set(exceptions.get(name, []))
         report["containers"][name] = {}
@@ -156,7 +215,10 @@ def main():
         with open(args.md, "w") as fh:
             fh.write("# Container runtime (CIS Docker §5) audit\n\n")
             fh.write(f"{s['pass']} pass, {s['warn']} warn, {s['excepted']} excepted\n\n")
-            cols = [k for _, k in CONTROLS + DB_CONTROLS]
+            cols = []
+            for _, k in CONTROLS + INIT_CONTROLS + PROXY_CONTROLS + DB_CONTROLS:
+                if k not in cols:
+                    cols.append(k)
             fh.write("| container | " + " | ".join(cols) + " |\n")
             fh.write("|" + "---|" * (len(cols) + 1) + "\n")
             for name, res in report["containers"].items():

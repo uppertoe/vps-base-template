@@ -1,0 +1,14 @@
+# vps-disk-watch.timer — hourly disk-usage sweep. Installed by the notify role.
+
+[Unit]
+Description=Hourly disk usage watch
+Requires=vps-disk-watch.service
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=1h
+RandomizedDelaySec=5min
+Unit=vps-disk-watch.service
+
+[Install]
+WantedBy=timers.target

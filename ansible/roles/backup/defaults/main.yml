@@ -20,6 +20,10 @@ backup_verify_schedule: "Sun *-*-* 03:17:00"
 # Restic version to install from the official GitHub releases.
 # Check https://github.com/restic/restic/releases for the latest.
 backup_restic_version: "0.17.3"
+backup_restic_checksums:
+  "0.17.3":
+    amd64: "sha256:5097faeda6aa13167aae6e36efdba636637f8741fed89bbf015678334632d4d3"
+    arm64: "sha256:db27b803534d301cef30577468cf61cb2e242165b8cd6d8cd6efd7001be2e557"
 
 # Restore drill: periodically restore the latest snapshot of every service
 # into a throwaway target and record achieved RPO/RTO to /var/lib/backup-drill.

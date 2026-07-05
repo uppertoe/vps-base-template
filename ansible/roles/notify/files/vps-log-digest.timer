@@ -1,0 +1,13 @@
+# vps-log-digest.timer — weekly digest schedule. Installed by the notify role.
+
+[Unit]
+Description=Weekly security digest
+Requires=vps-log-digest.service
+
+[Timer]
+OnCalendar=Mon *-*-* 08:05:00
+Persistent=true
+Unit=vps-log-digest.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,60 @@
+#!/bin/bash
+# vps-boot-check — after a (re)boot, wait for the container stack to come up
+# healthy and report the outcome via ntfy either way.
+#
+# Pairs with unattended-upgrades' Automatic-Reboot: a patch-window reboot that
+# doesn't come back healthy must be loud, and a quiet "rebooted, all services
+# healthy" confirms the window worked without needing to check by hand.
+#
+# Success criteria: no container is restarting or unhealthy, and every
+# container with an always/unless-stopped restart policy is running.
+#
+# Tunable from /etc/vps-scaffold/notify.env:
+#   BOOT_CHECK_DEADLINE_SECS (default 600)
+set -u
+
+CONF="${VPS_NOTIFY_CONF:-/etc/vps-scaffold/notify.env}"
+# shellcheck disable=SC1090
+[ -r "$CONF" ] && . "$CONF"
+
+command -v docker >/dev/null 2>&1 || exit 0
+
+DEADLINE="${BOOT_CHECK_DEADLINE_SECS:-600}"
+start="$(date +%s)"
+
+problems() {
+  {
+    docker ps --filter health=unhealthy --format '{{.Names}}: unhealthy'
+    docker ps -a --filter status=restarting --format '{{.Names}}: restart-looping'
+    # Supposed-to-run containers that aren't running.
+    docker ps -a --format '{{.Names}}' | while read -r name; do
+      running="$(docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null)"
+      policy="$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' "$name" 2>/dev/null)"
+      case "$policy" in
+        always|unless-stopped)
+          [ "$running" = "true" ] || echo "${name}: not running (policy ${policy})"
+          ;;
+      esac
+    done
+  } 2>/dev/null | sort -u
+}
+
+while :; do
+  bad="$(problems)"
+  [ -z "$bad" ] && break
+  if [ $(( $(date +%s) - start )) -ge "$DEADLINE" ]; then
+    vps-notify "Boot check FAILED" \
+      "Host rebooted but the stack is not healthy after $((DEADLINE / 60)) min:
+${bad}
+Kernel: $(uname -r). Investigate: docker ps -a; journalctl -b -p err" \
+      max rotating_light
+    exit 1
+  fi
+  sleep 15
+done
+
+vps-notify "Rebooted OK" \
+  "Host rebooted and all services are healthy ($(docker ps -q | wc -l | tr -d ' ') containers running). Kernel: $(uname -r). Uptime check took $(( $(date +%s) - start ))s." \
+  low white_check_mark
+
+exit 0

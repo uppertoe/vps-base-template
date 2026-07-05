@@ -1,0 +1,72 @@
+#!/bin/bash
+# vps-container-watch — alert via ntfy when a container is unhealthy or
+# restart-looping AFTER deploy time.
+#
+# The deploy helper gates on `--wait` (healthy at deploy), but nothing consumed
+# container health afterwards: `restart: unless-stopped` loops silently and a
+# service that goes unhealthy at 3am stayed invisible until the next deploy.
+#
+# Behaviour:
+#   - A container must be bad for two consecutive runs (>= grace period)
+#     before alerting — transient restarts and slow healthchecks don't page.
+#   - Per-container cooldown so a flapping container doesn't spam.
+#   - A recovery notice when a previously-alerted container comes good.
+#
+# Tunables from /etc/vps-scaffold/notify.env:
+#   CONTAINER_WATCH_GRACE_SECS    (default 600)
+#   CONTAINER_WATCH_COOLDOWN_SECS (default 21600)
+set -u
+
+CONF="${VPS_NOTIFY_CONF:-/etc/vps-scaffold/notify.env}"
+# shellcheck disable=SC1090
+[ -r "$CONF" ] && . "$CONF"
+
+command -v docker >/dev/null 2>&1 || exit 0
+
+GRACE="${CONTAINER_WATCH_GRACE_SECS:-600}"
+COOLDOWN="${CONTAINER_WATCH_COOLDOWN_SECS:-21600}"
+STATE_DIR="${VPS_NOTIFY_STATE_DIR:-/var/lib/vps-notify}"
+mkdir -p "$STATE_DIR/containers"
+now="$(date +%s)"
+
+# Bad = unhealthy (healthcheck failing) or restarting (crash-loop backoff).
+bad="$( { docker ps --filter health=unhealthy --format '{{.Names}} unhealthy';
+          docker ps -a --filter status=restarting --format '{{.Names}} restarting'; } 2>/dev/null | sort -u)"
+
+# Recovery pass: containers we alerted on that are no longer bad.
+for state_file in "$STATE_DIR"/containers/*.state; do
+  [ -e "$state_file" ] || continue
+  name="$(basename "$state_file" .state)"
+  if ! printf '%s\n' "$bad" | grep -q "^${name} "; then
+    # shellcheck disable=SC1090
+    . "$state_file"   # sets FIRST_SEEN, LAST_ALERT
+    rm -f "$state_file"
+    if [ "${LAST_ALERT:-0}" -gt 0 ]; then
+      vps-notify "Container recovered: ${name}" \
+        "$(docker ps --filter "name=^${name}$" --format '{{.Names}}: {{.Status}}' 2>/dev/null)" \
+        low white_check_mark
+    fi
+  fi
+done
+
+[ -z "$bad" ] && exit 0
+
+printf '%s\n' "$bad" | while read -r name reason; do
+  [ -n "$name" ] || continue
+  state_file="$STATE_DIR/containers/${name}.state"
+  FIRST_SEEN=0 LAST_ALERT=0
+  # shellcheck disable=SC1090
+  [ -r "$state_file" ] && . "$state_file"
+  [ "$FIRST_SEEN" -eq 0 ] && FIRST_SEEN="$now"
+
+  if [ $((now - FIRST_SEEN)) -ge "$GRACE" ] && [ $((now - LAST_ALERT)) -ge "$COOLDOWN" ]; then
+    LAST_ALERT="$now"
+    vps-notify "Container ${reason}: ${name}" \
+      "$(docker ps -a --filter "name=^${name}$" --format '{{.Names}}: {{.Status}} (image {{.Image}})' 2>/dev/null)
+Bad for over $(( (now - FIRST_SEEN) / 60 )) min. Logs: docker logs --tail 100 ${name}" \
+      max rotating_light
+  fi
+  printf 'FIRST_SEEN=%s\nLAST_ALERT=%s\n' "$FIRST_SEEN" "$LAST_ALERT" > "$state_file"
+done
+
+exit 0

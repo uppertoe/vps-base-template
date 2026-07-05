@@ -1,0 +1,10 @@
+# vps-disk-watch.service — one disk-usage threshold sweep.
+#
+# Triggered by vps-disk-watch.timer. Installed by the notify role.
+
+[Unit]
+Description=Disk usage watch (alerts via ntfy on threshold transitions)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/vps-disk-watch

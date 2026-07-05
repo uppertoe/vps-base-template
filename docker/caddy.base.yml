@@ -6,9 +6,18 @@
 #   include:
 #     - scaffold/docker/caddy.base.yml
 #
-# Caddy discovers routing automatically by appending all *.caddy files
-# from apps/*/ at container startup. Adding an app requires no changes to
-# this file or the Caddyfile — just drop a .caddy file in the app directory.
+# Caddy reads a generated, non-secret bundle from .generated/caddy — committed
+# to the server repo like a lockfile and kept in sync by CI. After adding or
+# changing apps, re-render and commit:
+#
+#   bash scaffold/docker/render-caddy-routes.sh
+#
+# The bundle carries the app routes (apps.caddy, mounted below) and the per-app
+# proxy-network wiring (networks.yml, included from docker-compose.yml): Caddy
+# joins every app's private network; apps never share one.
+#
+# The public Caddy container intentionally does NOT mount the deploy repo; app
+# .env and backup secrets must stay outside the reverse proxy's filesystem.
 #
 # Environment variables (from server .env):
 #   DOMAIN      → primary domain, available as {$DOMAIN} in caddy snippets
@@ -42,6 +51,7 @@ services:
       - caddy_logs:/var/log/caddy
     labels:
       - "com.centurylinklabs.watchtower.enable=false"
+      - "vps-scaffold.audit=init-volume-owner"
 
   caddy:
     # Pinned by digest (multi-arch index). Renovate bumps the digest; the :2-alpine
@@ -68,18 +78,14 @@ services:
       - "443:443"
       - "443:443/udp"   # HTTP/3 (QUIC)
     volumes:
-      # Mount repo root so the glob can reach apps/*/*.caddy
-      - ../..:/srv/repo:ro
-      # Caddyfile mounted explicitly for clarity
       - ../../Caddyfile:/etc/caddy/Caddyfile:ro
+      - ../../.generated/caddy/apps.caddy:/etc/caddy/apps.caddy:ro
       - ./run-caddy.sh:/usr/local/bin/run-caddy.sh:ro
       - caddy_data:/data          # TLS certs — persisted across restarts
       - caddy_config:/config      # Autosave + runtime config cache
       - caddy_logs:/var/log/caddy
     tmpfs:
       - /tmp
-    networks:
-      - caddy
     environment:
       - DOMAIN=${DOMAIN}
       # Let's Encrypt contact (optional but recommended; enables expiry notices).
@@ -98,10 +104,6 @@ services:
       start_period: 10s
     labels:
       - "com.centurylinklabs.watchtower.enable=false"
-
-networks:
-  caddy:
-    name: caddy  # fixed name so app containers can join it
 
 volumes:
   caddy_data:

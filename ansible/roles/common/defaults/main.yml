@@ -5,6 +5,14 @@
 common_patch_check_enabled: true
 common_patch_check_schedule: "*-*-* 06:15:00"
 
+# Unattended-upgrades installs patches, but kernel/libc fixes only take effect
+# after a reboot — without a reboot policy the box runs an ever-staler kernel
+# while the patch evidence says "up to date". Reboot in a quiet window when a
+# patch requires it (/run/reboot-required); the notify role's vps-boot-check
+# reports the outcome via ntfy either way ("Rebooted OK" / "Boot check FAILED").
+common_automatic_reboot_enabled: true
+common_automatic_reboot_time: "04:30"
+
 # Safety-net defaults so the role works standalone; the scaffold's
 # group_vars/all.yml is the canonical place these are set.
 host_swap_encrypted: true

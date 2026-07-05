@@ -31,7 +31,10 @@ server-myserver/
 │       ├── docker-compose.yml   ← pulls image from Docker Hub
 │       ├── .env.example         ← committed: lists required vars (no values)
 │       └── myapp.caddy          ← Caddy routing snippet
-├── Caddyfile                    ← import /srv/repo/apps/*/*.caddy
+├── Caddyfile                    ← base Caddy config
+├── .generated/caddy/            ← rendered bundle (committed, CI-checked)
+│   ├── apps.caddy               ← all app routes, mounted into Caddy
+│   └── networks.yml             ← per-app proxy-network wiring
 ├── Caddyfile.local              ← local dev (self-signed certs)
 ├── docker-compose.yml           ← includes scaffold base + each app
 ├── docker-compose.override.yml.example
@@ -43,12 +46,19 @@ server-myserver/
 
 ## Adding an app
 
-Each app gets a folder in `apps/`. There are no conventions beyond the three
-files — compose, env, and caddy snippet. Services, volumes, and environment
-variables are specific to each app and written by hand.
+Each app gets a folder in `apps/`. There are two conventions: the three files —
+compose, env, and caddy snippet — and the web-facing service being named after
+the app folder (`apps/myapp/` → service `myapp`). Services, volumes, and
+environment variables are otherwise specific to each app and written by hand.
 
-**`apps/myapp/docker-compose.yml`** — pull image, join caddy network, and apply
-the CIS Docker §5 runtime hardening block (see below):
+Networking is generated, not hand-written: the scaffold gives every app its own
+private proxy network (`myapp_proxy`), attaches Caddy to all of them, and each
+app only to its own. Apps can never reach each other's backends or forge the
+`Remote-*` auth headers. Don't add proxy networks to app compose files; private
+backend networks (app ↔ its own db) are yours to define as usual.
+
+**`apps/myapp/docker-compose.yml`** — pull image and apply the CIS Docker §5
+runtime hardening block (see below):
 ```yaml
 services:
   myapp:
@@ -70,14 +80,6 @@ services:
       timeout: 5s
       retries: 3
     # ----------------------------------------
-    networks:
-      - caddy
-
-# Must be byte-identical to the stanza in scaffold/docker/caddy.base.yml:
-# Compose v5 include-merge rejects conflicting definitions of the same network.
-networks:
-  caddy:
-    name: caddy  # fixed name so app containers can join it
 ```
 
 ### Container hardening (CIS Docker §5)
@@ -118,11 +120,22 @@ Then add one line to the root `docker-compose.yml`:
 ```yaml
 include:
   - scaffold/docker/caddy.base.yml
+  - .generated/caddy/networks.yml
   - apps/myapp/docker-compose.yml   ← add this
 ```
 
-Caddy picks up `myapp.caddy` automatically via the glob — no changes to
-`Caddyfile` needed.
+and re-render the committed bundle:
+```bash
+bash scaffold/docker/render-caddy-routes.sh
+git add .generated
+```
+
+The renderer regenerates `.generated/caddy/apps.caddy` (every app's routes —
+Caddy mounts this file instead of the deploy repo, keeping `.env` and backup
+secrets off the reverse proxy) and `.generated/caddy/networks.yml` (the per-app
+proxy networks). Both are committed like lockfiles; CI fails if they drift from
+the sources, and `audit-compose.yml` fails at runtime if two apps ever share a
+proxy network.
 
 ## Gitignore conventions
 

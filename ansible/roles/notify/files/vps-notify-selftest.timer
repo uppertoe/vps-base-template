@@ -1,0 +1,14 @@
+# vps-notify-selftest.timer — monthly alert-channel test schedule.
+# Installed by the notify role.
+
+[Unit]
+Description=Monthly alert-channel self-test
+Requires=vps-notify-selftest.service
+
+[Timer]
+OnCalendar=*-*-01 09:17:00
+Persistent=true
+Unit=vps-notify-selftest.service
+
+[Install]
+WantedBy=timers.target

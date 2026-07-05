@@ -153,22 +153,22 @@ CIS with something else. What the Victorian stack adds is:
 | Key-only SSH, no root, protected keys (ISM-0484/0485/1449) | Enforced; root locked; single `deploy` user | ✅ |
 | MFA for privileged users (ISM-1173; E8 ML2) | SSH key-only; auth tier email-OTP single factor; admin TOTP **off by default** | ⚠️ gap — WS-B4 |
 | Admin privilege lifecycle (E8 ML2: 12-month revalidation, 45-day dormancy) | Single high-trust `deploy` account, no review cadence | ⚠️ document + WS-A6 |
-| Patch SLAs 48h/2wk + daily scanning (ISM; E8 ML1) | unattended-upgrades on; `audit-vuln.yml` exists (uncommitted) but ad hoc | ⚠️ gap — WS-B2 |
-| Logs searchable 12 months, off-host, tamper-protected (ISM-1988/1815) | journald 300 MB/1 month, local only; real-time audit→ntfy alerts | ❌ gap — WS-B3 |
-| Encryption at rest (HPP 4 "reasonable steps"; VPDSS E11.140) | ❌ plain ext4 root/swap/volumes | ❌ gap — WS-B1 |
+| Patch SLAs 48h/2wk + daily scanning (ISM; E8 ML1) | unattended-upgrades + patch-window reboots + daily vuln-scan timer + PATCH-SLA journal | ✅ (WS-B2 shipped) |
+| Logs searchable 12 months, off-host, tamper-protected (ISM-1988/1815) | log-export → write-only Object-Locked S3 ≥12 months; weekly digest = automated review | ✅ (WS-B3 shipped) |
+| Encryption at rest (HPP 4 "reasonable steps"; VPDSS E11.140) | swap encrypted (random key/boot); root + data volumes still plain | ⚠️ WS-B1.2–3 (next provision) |
 | Encryption in transit | Caddy auto-HTTPS/ACME; TLS everywhere externally | ✅ |
-| Web/DB separation (ISM-1269/1270/1271) | Per-app compose; needs verified network isolation assertion | ⚠️ verify — WS-B6 |
-| Backups secure, restore-tested (ISM-1810–1814; E8) | restic encrypted to S3, hourly, weekly `restic check`; **no restore evidence** | ⚠️ gap — WS-B5 |
-| Backup credentials can't delete history (ISM-1814) | Standard S3 creds on box | ⚠️ WS-B5 (object-lock/append-only) |
+| Web/DB separation (ISM-1269/1270/1271) | Generated per-app proxy networks; compose-audit exclusivity + DB gates | ✅ (WS-B6 shipped) |
+| Backups secure, restore-tested (ISM-1810–1814; E8) | restic + weekly check + restore-drill timer (RPO/RTO recorded) | ✅ (WS-B5 shipped) |
+| Backup credentials can't delete history (ISM-1814) | S3 Object Lock + prefix-scoped IAM | ✅ |
 | Data retention 7-year/age-25 + deletion logs (HPP 4.2–4.4) | Not addressed (app-level, but platform must not undermine it) | ⚠️ WS-A4 |
 | Hosting jurisdiction + HPP 9 ground | Undocumented; provider-dependent | ❌ decision — WS-C1 |
-| Incident response to DH 1-hour clock | ntfy real-time alerts exist; no runbook, no DH pathway | ❌ gap — WS-A5 |
-| Asset register + BIL (VPDSS Std 2; VAGO server inventory) | None | ❌ gap — WS-A2 |
-| System Security Plan (VPDSS E11.010) | docs/08 is 80% of one, not assembled as an SSP | ⚠️ WS-A1 |
+| Incident response to DH 1-hour clock | docs/11 generic runbook + per-instance template w/ DH contacts; worked example in server-instance-template | ⚠️ per-instance contacts + annual test |
+| Asset register + BIL (VPDSS Std 2; VAGO server inventory) | Worked example: server-instance-template `docs/compliance-pack/` | ⚠️ re-fill per real instance |
+| System Security Plan (VPDSS E11.010) | Worked example: server-instance-template `docs/compliance-pack/` | ⚠️ re-fill per real instance |
 | Third-party/supplier posture (DH §24; VPDSS Std 8) | CI evidence exists; no questionnaire-ready pack | ⚠️ WS-A7 |
 | EDR coverage (DH/HSV sector expectation) | auditd + AIDE + audit→ntfy (not an EDR product) | ⚠️ decision — WS-C2 |
-| Availability/host-down alerting (VPDSS Std 7) | On-box ntfy blind to host-down (documented) | ⚠️ WS-B7 |
-| Evidence on demand (audit efficiency) | 5 audit playbooks run individually; CI weekly on scaffold | ⚠️ WS-B8 |
+| Availability/host-down alerting (VPDSS Std 7) | External dead-man's switch, required by provisioning | ✅ (WS-B7 shipped) |
+| Evidence on demand (audit efficiency) | `audit-all.yml` one-command bundle + CI evidence page | ✅ (WS-B8 shipped) |
 
 ---
 
@@ -259,7 +259,7 @@ generic templates in the scaffold (`docs/templates/`).
 - **B6 · Tier separation assertion** *(ISM-1269/1270/1271)* — extend
   `check-compose-hardening.py` to assert: every app's DB container sits on a per-app
   network, publishes no ports, and is reachable only from its own app service; flag any
-  container sharing the caddy network unnecessarily. Turns an ISM control into a CI
+  unrelated app containers sharing a proxy network unnecessarily. Turns an ISM control into a CI
   gate. Evidence: audit-compose report.
 - **B7 · External dead-man's switch** *(VPDSS Std 7; roadmap P1-5)* — `notify`-role
   timer curling Healthchecks.io/UptimeRobot (`deadman_switch_url`, opt-in). Evidence:
@@ -342,6 +342,10 @@ generic templates in the scaffold (`docs/templates/`).
 | **3 · Control gaps** (2–4 weeks) | Encrypted swap (B1.1), off-host logs Tier 1 (B3), TOTP default + access-model docs (B4, A6), tier-separation gate (B6), audit-all bundle (B8) | Med | The four named-control gaps auditors will actually cite |
 | **4 · Structural** (next provision / org dependency) | Volume/FDE encryption (B1.2–3), SIEM forwarding Tier 2 (B3), EDR decision (C2), privilege split (B10), supplier pack (A7) | Med–High | Need a rebuild, an external destination, or a counterparty |
 
+> Status note (2026-07-05): Phases 1 and 3 shipped (feat/security-audit-remediation);
+> a filled worked example of the WS-A pack lives in server-instance-template
+> `docs/compliance-pack/`. Outstanding: B4 (TOTP flip), B1.2–3, C1/C2 decisions, A7.
+>
 > Keep this plan, the [roadmap](compliance-roadmap.md), and the docs/08 exceptions
 > register in lock-step as items land. Re-verify the fast-moving facts at each audit:
 > ISM release (quarterly), E8MM version, CIS/SSG versions, the DH Policy & Funding

@@ -33,7 +33,7 @@
     # Override with -e to widen/narrow the gate. We report HIGH+CRITICAL but only
     # *alert* on fixable CRITICALs (see audit_vuln_notify_severity below).
     audit_vuln_severity: "HIGH,CRITICAL"
-    audit_vuln_trivy_image: "aquasec/trivy:0.59.1"
+    audit_vuln_trivy_image: "aquasec/trivy:0.59.1@sha256:029e990b328d149bf0a9ffe355919041e1f86192db2df47e217f8a36dd42ceac"
     audit_vuln_cache_dir: /var/cache/trivy
     audit_vuln_work_dir: /tmp/audit-vuln
     local_reports_root: >-

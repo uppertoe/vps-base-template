@@ -51,13 +51,17 @@ ansible-playbook -i "$INVENTORY_FILE" ansible/bootstrap.yml \
 # evidence runs (2026-07-03: a bad amd64 postinst, then a 191kB/s GNOME snap
 # transition). Real provisions run the safe upgrade inside site-first-run
 # and fail loudly there.
+# notify_deadman_accept_none: the runner is ephemeral — an external heartbeat
+# is meaningless here; real hosts must set notify_deadman_url (notify role
+# fails without it).
 ansible-playbook -i "$INVENTORY_FILE" ansible/site-first-run.yml \
   -e "{\"deploy_user_public_key\": \"${DEPLOY_USER_PUBLIC_KEY}\"}" \
   -e common_run_safe_upgrade=false \
   -e baseline_cis_l2_audit_rules=true \
   -e deploy_restricted_mode=true \
   -e baseline_manage_apparmor_profile_modes=false \
-  -e baseline_initialize_aide_database=false
+  -e baseline_initialize_aide_database=false \
+  -e notify_deadman_accept_none=true
 
 DIAGNOSTICS_DIR="$REPO_ROOT/reports/ci-diagnostics"
 mkdir -p "$DIAGNOSTICS_DIR"

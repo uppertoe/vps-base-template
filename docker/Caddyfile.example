@@ -1,5 +1,7 @@
 # Caddyfile — copy this to your server repo root as ./Caddyfile
 #
-# App routing snippets from apps/*/*.caddy are appended automatically when
-# the Caddy container starts. Adding an app requires no changes here.
-# Default site compression (`encode zstd gzip`) is injected automatically.
+# App routing snippets from apps/*/*.caddy are rendered into the committed
+# bundle .generated/caddy/apps.caddy by scaffold/docker/render-caddy-routes.sh.
+# Injected into every site automatically: compression, JSON access logs with
+# authenticated-user attribution, and baseline security headers (HSTS etc.;
+# apps can override — the renderer uses set-if-absent).

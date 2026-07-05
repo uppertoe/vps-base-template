@@ -1,0 +1,11 @@
+# vps-container-watch.service — one unhealthy/restart-loop sweep.
+#
+# Triggered by vps-container-watch.timer. Installed by the notify role.
+
+[Unit]
+Description=Container health watch (alerts via ntfy)
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/vps-container-watch

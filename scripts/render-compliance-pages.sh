@@ -73,6 +73,15 @@ if [[ -n "$ssh_txt" && -r "$ssh_txt" ]] && grep -q '(gen)' "$ssh_txt"; then
   SSH_WARNS="$(grep -c '\[warn\]' "$ssh_txt" || true)"
 fi
 
+# OS lifetime countdown: set-and-forget hosts outlive attention spans, so the
+# EOL clock belongs on the evidence page, not in someone's memory.
+OS_EOL_DATE="2029-04-25"  # Ubuntu 24.04 LTS end of standard support
+OS_EOL_DAYS="$(python3 -c "
+from datetime import date
+print((date.fromisoformat('${OS_EOL_DATE}') - date.today()).days)")"
+OS_EOL_CLASS="ok"
+[[ "$OS_EOL_DAYS" -lt 365 ]] && OS_EOL_CLASS="warn"
+
 BENCH_SCORE="n/a"; BENCH_CHECKS="n/a"
 if [[ -n "$bench_log" && -r "$bench_log" ]]; then
   BENCH_SCORE="$(sed -e $'s/\x1b\[[0-9;]*m//g' "$bench_log" | awk -F': ' '/Score:/ {print $2}' | tail -n1)"
@@ -160,6 +169,12 @@ links_for() {
       <h3>SSH algorithms — ssh-audit</h3>
       <div class="big"><span class="warn">${SSH_FAILS} fail</span> · ${SSH_WARNS} warn</div>
       <div class="muted">key-exchange/cipher/MAC scoring of the hardened sshd</div>
+    </div>
+    <div class="tile">
+      <h3>OS lifetime — Ubuntu 24.04 LTS</h3>
+      <div class="big"><span class="${OS_EOL_CLASS}">${OS_EOL_DAYS} days</span></div>
+      <div class="muted">until end of standard support (${OS_EOL_DATE}); plan the
+        release jump when this is under a year</div>
     </div>
   </div>
 

@@ -1,4 +1,20 @@
 ---
+# Set-and-forget guardrail: every other alert originates ON this box, so a
+# dead host is invisible without an external heartbeat. Fail provisioning
+# early rather than let the gap slide in silently.
+- name: Require an external dead-man's switch (or an explicit opt-out)
+  ansible.builtin.fail:
+    msg: >-
+      notify_deadman_url is empty. The on-box ntfy cannot report the host
+      itself being down; an external heartbeat monitor (Gatus, Healthchecks,
+      Uptime Kuma — see roles/notify/defaults/main.yml) is the only alarm for
+      total host loss. Set notify_deadman_url in the inventory, or explicitly
+      accept the gap with notify_deadman_accept_none: true.
+  when:
+    - notify_deadman_url | length == 0
+    - not (notify_deadman_accept_none | default(false) | bool)
+    - not (molecule_test | default(false) | bool)
+
 - name: Create vps-scaffold config directory
   ansible.builtin.file:
     path: /etc/vps-scaffold
@@ -85,6 +101,85 @@
     - notify_deadman_url | length == 0
     - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
   failed_when: false
+  tags:
+    - molecule-notest
+
+# On-box watchers: disk thresholds, container health between deploys, the
+# post-boot stack report, and the monthly alert-channel self-test. All alert
+# through vps-notify, all no-op while notify_ntfy_url is unset.
+- name: Install watcher scripts
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "/usr/local/bin/{{ item }}"
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - vps-disk-watch
+    - vps-container-watch
+    - vps-boot-check
+    - vps-log-digest
+
+- name: Create watcher state directory
+  ansible.builtin.file:
+    path: /var/lib/vps-notify
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Install watcher systemd units
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - vps-disk-watch.service
+    - vps-disk-watch.timer
+    - vps-container-watch.service
+    - vps-boot-check.service
+    - vps-notify-selftest.service
+    - vps-notify-selftest.timer
+    - vps-log-digest.service
+    - vps-log-digest.timer
+  notify: Reload systemd
+
+- name: Install vps-container-watch.timer
+  ansible.builtin.template:
+    src: vps-container-watch.timer.j2
+    dest: /etc/systemd/system/vps-container-watch.timer
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Enable watcher timers
+  ansible.builtin.systemd:
+    name: "{{ item.unit }}"
+    enabled: "{{ item.want }}"
+    state: "{{ 'started' if item.want else 'stopped' }}"
+    daemon_reload: true
+  loop:
+    - unit: vps-disk-watch.timer
+      want: "{{ notify_disk_watch_enabled | bool }}"
+    - unit: vps-container-watch.timer
+      want: "{{ notify_container_watch_enabled | bool }}"
+    - unit: vps-notify-selftest.timer
+      want: "{{ notify_selftest_enabled | bool }}"
+    - unit: vps-log-digest.timer
+      want: "{{ notify_log_digest_enabled | bool }}"
+  when: ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+  tags:
+    - molecule-notest
+
+- name: Enable post-boot health report (runs once per boot)
+  ansible.builtin.systemd:
+    name: vps-boot-check.service
+    enabled: "{{ notify_boot_check_enabled | bool }}"
+    daemon_reload: true
+  when: ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
   tags:
     - molecule-notest
 

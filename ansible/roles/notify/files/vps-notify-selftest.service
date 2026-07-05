@@ -1,0 +1,13 @@
+# vps-notify-selftest.service — monthly end-to-end alert-channel test.
+#
+# Triggered by vps-notify-selftest.timer. "Test the smoke detector": proves the
+# whole box→ntfy→phone chain still works, independent of real incidents. The
+# dead-man's switch covers "host down"; this covers "alerts silently broken"
+# (revoked token, dead subscription, broken ntfy). Installed by the notify role.
+
+[Unit]
+Description=Monthly alert-channel self-test
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/vps-notify "Alert channel self-test" "Monthly end-to-end test of the alert chain. If you can read this, notifications work — no action needed. If you find this weeks later, fix the channel." default heartbeat

@@ -34,6 +34,28 @@
       APT::Periodic::Unattended-Upgrade "1";
     mode: "0644"
 
+# Patches that need a reboot must actually get one, or the running kernel
+# drifts ever further from the patched one on disk. WithUsers is deliberate:
+# this class of host has no interactive users to protect, and skipping the
+# reboot because an admin left a stray session is the worse failure mode.
+- name: Configure automatic reboot after kernel/libc updates
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/51auto-upgrades-reboot
+    content: |
+      // Managed by Ansible (common role). vps-boot-check (notify role)
+      // reports the post-reboot stack state via ntfy.
+      Unattended-Upgrade::Automatic-Reboot "true";
+      Unattended-Upgrade::Automatic-Reboot-Time "{{ common_automatic_reboot_time }}";
+      Unattended-Upgrade::Automatic-Reboot-WithUsers "true";
+    mode: "0644"
+  when: common_automatic_reboot_enabled | bool
+
+- name: Remove automatic-reboot config when disabled
+  ansible.builtin.file:
+    path: /etc/apt/apt.conf.d/51auto-upgrades-reboot
+    state: absent
+  when: not (common_automatic_reboot_enabled | bool)
+
 - name: Install pending-security-updates check script
   ansible.builtin.copy:
     src: pending-security-updates

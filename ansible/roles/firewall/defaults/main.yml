@@ -26,3 +26,5 @@ docker_firewall_enabled: true
 docker_firewall_bridge_interfaces:
   - docker0
   - br+
+docker_firewall_allowed_outbound_tcp_ports: "{{ firewall_allowed_outbound_tcp_ports }}"
+docker_firewall_allowed_outbound_udp_ports: "{{ firewall_allowed_outbound_udp_ports }}"

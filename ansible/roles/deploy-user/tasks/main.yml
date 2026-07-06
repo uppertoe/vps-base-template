@@ -4,6 +4,24 @@
 # and the root-owned wrapper entrypoints. See docs/05-access-model.md.
 # =============================================================================
 
+# Restricted mode's entire premise is deploy != root. If the admin key equals
+# the deploy key, one stolen key authenticates the NOPASSWD:ALL admin account —
+# passwordless root — and the wrapper-only sudo boundary is decorative. Fail
+# early rather than ship a false posture.
+- name: Refuse a shared admin/deploy key in restricted mode
+  ansible.builtin.fail:
+    msg: >-
+      deploy_admin_public_key is identical to deploy_user_public_key while
+      deploy_restricted_mode is true. A single stolen key then grants
+      passwordless root via the admin account, defeating restricted mode. Set a
+      dedicated admin key in the inventory, or accept the shared-key posture
+      explicitly with deploy_admin_key_allow_shared: true.
+  when:
+    - deploy_restricted_mode | bool
+    - (deploy_admin_public_key | trim) == (deploy_user_public_key | trim)
+    - not (deploy_admin_key_allow_shared | default(false) | bool)
+    - not (molecule_test | default(false) | bool)
+
 - name: Create deploy user
   ansible.builtin.user:
     name: "{{ deploy_user }}"

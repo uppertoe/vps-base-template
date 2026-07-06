@@ -15,6 +15,22 @@
     - not (notify_deadman_accept_none | default(false) | bool)
     - not (molecule_test | default(false) | bool)
 
+# Every on-box watcher (disk, container health, boot report, weekly digest,
+# self-test) and every OnFailure hook alerts through ntfy. With no URL they all
+# no-op silently — a hardened box with a dead alerting layer. Force the decision.
+- name: Require an ntfy endpoint (or an explicit opt-out)
+  ansible.builtin.fail:
+    msg: >-
+      notify_ntfy_url is empty. Every on-box alert (disk, container health,
+      unit failures, weekly security digest, self-test) routes through ntfy and
+      will silently no-op without it. Set notify_ntfy_url in the inventory, or
+      explicitly accept a box with no on-box alerting via
+      notify_alerts_accept_none: true.
+  when:
+    - notify_ntfy_url | length == 0
+    - not (notify_alerts_accept_none | default(false) | bool)
+    - not (molecule_test | default(false) | bool)
+
 - name: Create vps-scaffold config directory
   ansible.builtin.file:
     path: /etc/vps-scaffold

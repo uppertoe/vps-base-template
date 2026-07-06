@@ -19,6 +19,11 @@ deploy_admin_user: admin
 # Defaults to the same public key as deploy; set a DEDICATED key in the
 # inventory for a real separation of identities.
 deploy_admin_public_key: "{{ deploy_user_public_key }}"
+# Restricted mode is only real if the admin (sudo-capable) key differs from the
+# deploy key — otherwise a single stolen key is passwordless root and the
+# wrapper-only-sudo story collapses. In restricted mode, provisioning FAILS on a
+# shared key unless you accept the posture explicitly here (e.g. a staging box).
+deploy_admin_key_allow_shared: false
 # Give admin the docker group (docs/05 docker-access option 2).
 deploy_allow_direct_docker_for_admin: true
 
@@ -39,6 +44,14 @@ deploy_allowed_app_manage_commands: {}
 # the scaffold-drift timer alerts when they are waiting.
 deploy_auto_update: false
 deploy_auto_update_schedule: "*-*-* 05:15:00"
+# Supply-chain gate for the deploy path: everything on the deployed branch runs
+# as root (docker compose up + app hooks). When true, vps-deploy refuses to
+# apply a HEAD that is not a good signature from a signer the deploy user trusts
+# — so a merge that bypassed review cannot execute as root. Requires signed
+# commits + a configured allowed-signers/keyring for the deploy user; off by
+# default because it needs that setup. Strongly recommended once auto-deploy is
+# on. See docs/05-access-model.md.
+deploy_verify_signature: false
 # Weekly awareness alert when the scaffold submodule is behind upstream main.
 scaffold_drift_check: true
 scaffold_drift_schedule: "Mon *-*-* 07:05:00"

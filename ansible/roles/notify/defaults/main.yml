@@ -27,6 +27,10 @@ notify_deadman_token: ""
 notify_deadman_interval_min: 5
 notify_deadman_accept_none: false
 
+# Accept a box with NO on-box alerting (ntfy unset). Like the deadman gate,
+# provisioning fails on an empty notify_ntfy_url unless this is explicitly true.
+notify_alerts_accept_none: false
+
 # On-box watchers — the "who watches the watcher" layer. All alert through
 # vps-notify (ntfy) and no-op when notify_ntfy_url is unset.
 #

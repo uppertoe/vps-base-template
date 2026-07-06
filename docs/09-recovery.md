@@ -78,5 +78,10 @@ outage last", and the trend tells you when the runbook has rotted.
 - **Laptop loss** — the bundle is offsite and the passphrase is in the
   password manager; a new laptop bootstraps from GitHub + bundle.
 - **Compromise** — same rebuild, but rotate every credential in the bundle
-  first and restore data from a snapshot predating the incident (restic
-  snapshots are append-only against the Object-Locked bucket).
+  first and restore data from a snapshot predating the incident. Caveat: the
+  backup bucket is **versioned, not Object-Locked** (restic prune needs delete
+  rights, so the on-box key can delete/overwrite snapshots). If the box's
+  credential is suspected compromised, do not trust on-box restic history —
+  recover an overwritten/deleted snapshot from the 90-day noncurrent-version
+  window using **account-level** (not on-box) credentials, and corroborate the
+  timeline against the Object-Locked log bucket. See docs/11 §3.

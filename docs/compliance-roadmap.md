@@ -76,7 +76,7 @@ all DB volumes are plain ext4 — no LUKS. Provision-time, so unfixable in place
 **Driver:** E8 #1–2, ISM · **Current:** ⚠️ `:latest` on auth/ntfy/authelia/postgres.
 
 **Scaffold changes**
-- Set `pinDigests` in the scaffold + template `renovate.json`, and pin the
+- Set `pinDigests` in the scaffold + template `renovate.json5`, and pin the
   scaffold-owned images (`vps-scaffold-auth`, `ntfy`) to digests by default.
 - Add a **CI lint** (in `ci.yml`/`compliance-audits.yml`) that fails on an
   unpinned `:latest` for any security-critical image.

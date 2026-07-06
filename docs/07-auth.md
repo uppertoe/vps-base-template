@@ -132,9 +132,20 @@ app.{$DOMAIN} {
 
 Email codes inherit the security of the user's inbox. For the higher-trust admin
 tier TOTP is required by default (`TOTP_ENABLED=true` in the template
-`apps/auth/.env.example`). Admins are enrolled on first login (shown an
-`otpauth://` URL for their authenticator app) and challenged for a code
-thereafter. Regular users stay code-only.
+`apps/auth/.env.example`). Enrolment is **admin-provisioned, never self-service
+at login** — otherwise an attacker who only controls the inbox could bootstrap
+the second factor. An un-enrolled admin is refused at login and told to ask an
+administrator. Bootstrap the first admin from the box (prints the `otpauth://`
+URL and setup key once — treat as a secret):
+
+```bash
+cd /opt/deploy && docker compose exec -T auth /app -totp-enroll admin@example.org
+```
+
+Subsequent admins are minted from the `/admin/totp` page by an already
+signed-in admin (or the same CLI); `-totp-remove` is the lost-device
+break-glass. Enrolled admins are challenged for a code at every login.
+Regular users stay code-only.
 
 The resulting factor posture — cite it this way in a security review (and in
 the SSP template, `docs/templates/system-security-plan.md`):

@@ -17,6 +17,18 @@ cd /opt/deploy
 
 # Update the repo as the unprivileged owner, never as root.
 runuser -u {{ deploy_user }} -- git pull --recurse-submodules
+{% if deploy_verify_signature | default(false) %}
+
+# Supply-chain gate (deploy_verify_signature): everything below runs as root
+# (compose up + app hooks). Refuse to apply a HEAD that is not a good signature
+# from a signer the deploy user trusts — a merge that bypassed review cannot
+# then execute as root. Requires signed commits + a configured
+# allowed-signers/keyring for {{ deploy_user }} (docs/05-access-model.md).
+if ! runuser -u {{ deploy_user }} -- git -C /opt/deploy verify-commit HEAD; then
+  echo "vps-deploy: HEAD is not a verified signed commit — refusing to deploy." >&2
+  exit 1
+fi
+{% endif %}
 
 docker compose pull --policy always
 

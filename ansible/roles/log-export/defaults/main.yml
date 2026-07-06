@@ -21,6 +21,10 @@
 # Opt-in: stays inert until log_export_s3_uri is set.
 log_export_enabled: true
 log_export_s3_uri: ""            # e.g. s3://myorg-vps-logs/prod-host1
+# Accept a box with NO off-host log retention. When log_export_enabled is true,
+# provisioning fails on an empty log_export_s3_uri unless this is explicitly
+# true — off-host tamper-evident logs are the forensic record for an incident.
+log_export_accept_none: false
 log_export_schedule: "*-*-* 04:47:00"
 log_export_state_dir: /var/lib/log-export
 

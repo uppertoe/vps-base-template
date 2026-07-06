@@ -4,12 +4,15 @@
 # -----------------------------------------------------------------------------
 deploy_user: deploy
 
-# Path to the public key on your LOCAL machine that will be added to the
-# server's authorized_keys. By default this is derived from the same key set in
-# ansible_ssh_private_key_file, so bootstrap and day-to-day SSH use stay aligned.
-# Override per-server in inventory host_vars if needed (e.g. for a shared team
-# key).
-deploy_user_public_key: "{{ lookup('file', ((ansible_ssh_private_key_file | default('~/.ssh/id_ed25519')) ~ '.pub')) }}"
+# deploy_user_public_key / deploy_admin_public_key are DELIBERATELY not set
+# here. Their canonical definition lives in the deploy-user role defaults
+# (lowest precedence) so an inventory can override them — critically, to give
+# admin a DEDICATED key distinct from the deploy key (restricted mode's whole
+# premise). Defining deploy_user_public_key in *playbook* group_vars (as this
+# file was) outranks inventory group/host vars: it silently forced both keys to
+# the connection key, made a distinct admin key impossible to set from the
+# inventory, and tripped the shared-key guard. See
+# roles/deploy-user/defaults/main.yml.
 
 # -----------------------------------------------------------------------------
 # Server basics

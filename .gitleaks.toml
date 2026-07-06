@@ -1,0 +1,13 @@
+# gitleaks config — extends the built-in ruleset, allowlists paths that carry
+# no real secrets. Keep this list minimal; a new entry is a claim that the path
+# is safe forever.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Test fixtures and *.example templates contain no real credentials"
+paths = [
+  '''molecule/.*/fixtures/.*''',
+  '''.*\.env\.example$''',
+  '''ansible/inventory/production\.example$''',
+]

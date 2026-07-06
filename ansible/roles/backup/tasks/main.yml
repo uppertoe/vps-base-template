@@ -169,6 +169,7 @@
     owner: root
     group: root
     mode: "0600"
+  no_log: true  # carries restic repo password / S3 creds
 
 - name: Find service env files in server repo
   ansible.builtin.find:
@@ -186,6 +187,7 @@
     owner: root
     group: root
     mode: "0600"
+  no_log: true  # each service env carries a restic repo password
   loop: "{{ backup_service_files.files }}"
   loop_control:
     label: "{{ item.path | basename }}"

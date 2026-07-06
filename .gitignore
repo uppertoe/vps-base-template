@@ -1,6 +1,9 @@
 # Ansible
 *.retry
-ansible/inventory/!(production.example)   # ignore all inventories except the example
+# gitignore does NOT support bash extglob — the old !(production.example)
+# pattern silently ignored nothing, leaving real inventories committable.
+ansible/inventory/*
+!ansible/inventory/production.example
 
 # Environment files
 .env

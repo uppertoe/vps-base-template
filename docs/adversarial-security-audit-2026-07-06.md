@@ -81,5 +81,12 @@ review with a real cron-issue reminder.
 - [ ] compose audit: mount / cap_add / host-network checks
 - [ ] deploy-to-root: hooks-as-deploy, signature gate, distinct admin key,
       opt-in `fail:` gates
-- [ ] **Decision pending:** Object-Lock *architecture* (prune off-box) vs
-      accept versioned-recover posture as documented
+- [x] **Decided (2026-07-06):** accept the versioned-recovery posture; do NOT
+      Object-Lock the backup bucket. Rationale — restic's retention (`forget
+      --prune`) requires delete rights, which is fundamentally incompatible with
+      Object Lock; backups are client-side AES-256 (the provider holds only
+      ciphertext); the **log** bucket IS Object-Locked, giving an independent
+      tamper-evident timeline the box cannot rewrite; and a compromised on-box
+      key's deletions are recoverable for 90 days via account-level
+      noncurrent-version restore. The control is honestly downgraded to ⚠️ in
+      the matrix rather than overclaimed.

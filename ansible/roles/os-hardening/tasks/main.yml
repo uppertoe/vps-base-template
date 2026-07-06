@@ -21,6 +21,16 @@
     os_mnt_var_tmp_src: tmpfs
     os_mnt_var_tmp_filesystem: tmpfs
     os_mnt_var_tmp_options: "rw,nosuid,nodev,noexec,size={{ oshardening_var_tmp_tmpfs_size }}"
+    # Docker hosts ROUTE: published ports DNAT into bridge networks, so the
+    # kernel must forward. devsec's CIS default (net.ipv4.ip_forward=0) is for
+    # non-routing hosts; re-applying it on a live Docker box silently drops all
+    # inbound container traffic — every site down while containers stay
+    # "healthy" (dockerd sets the flag at startup, so first provisions and
+    # reboots mask the landmine; a site re-run springs it: 2026-07-06 prod
+    # outage). This is the exact override the devsec README prescribes for
+    # Docker hosts. IPv6 forwarding stays 0 — container networking is v4-only.
+    sysctl_overwrite:
+      net.ipv4.ip_forward: 1
   when: ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
 
 # devsec only manages mounts whose path already IS a mountpoint (plus a

@@ -43,6 +43,7 @@
     owner: root
     group: root
     mode: "0600"
+  no_log: true  # renders AWS_SECRET_ACCESS_KEY — never echo under --diff
 
 - name: Install log-export script
   ansible.builtin.copy:

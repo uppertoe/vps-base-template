@@ -50,6 +50,7 @@
     owner: root
     group: root
     mode: "0600"
+  no_log: true  # renders NTFY_TOKEN / DEADMAN_TOKEN — never echo under --diff
 
 # External dead-man's switch: the one alerting hole the on-box ntfy model has
 # is "the whole host is down". A tiny heartbeat timer pings an external monitor;

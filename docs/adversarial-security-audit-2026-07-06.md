@@ -34,7 +34,7 @@ strongest defensibility fact.
 3. The runtime compose audit (`check-compose-hardening.py`) never inspects
    volume mounts or `cap_add` — a `docker.sock`/`/` bind or re-added
    `SYS_ADMIN` scores a clean PASS. The guardrail is blind to the exact escape.
-4. `require_code_owner_reviews=false` on both repos — `renovate.json` and
+4. `require_code_owner_reviews=false` on both repos — `renovate.json5` and
    `deploy.sh` are not actually owner-protected. (Solo-repo: correct fix is
    doc-truth, not enabling the setting, which would deadlock merges.)
 5. Restricted mode nullified by default: `deploy_admin_public_key` defaults to

@@ -28,7 +28,7 @@ of the actions, once.
 **What lands automatically on the next `site-quick.yml`:** the
 `auto-deploy` and `scaffold-drift` timers (installed but auto-deploy is
 opt-in), and Renovate automerge rules for digest-class updates in both
-repos' `renovate.json`.
+repos' `renovate.json5`.
 
 **The model:** Renovate proposes digest/submodule bumps → repo CI validates →
 Renovate automerges on green → the daily `auto-deploy.timer` applies the

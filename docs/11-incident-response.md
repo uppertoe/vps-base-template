@@ -68,8 +68,14 @@ compromised machine's own story:
 - **AIDE report** — which files changed, against the last known-good baseline.
 - **The provider snapshot** from §2 — mount read-only on a clean machine if
   deeper forensics is needed.
-- **Restic snapshots** — append-only against the Object-Locked bucket; use to
-  establish when data last looked right, and as the clean-restore source.
+- **Restic snapshots** — use to establish when data last looked right, and as
+  the clean-restore source. Note the backup bucket is **versioned, not
+  Object-Locked** (restic's weekly `forget --prune` requires delete rights, so
+  the on-box IAM key can delete/overwrite objects). Treat on-box restic history
+  as *potentially tampered* during a live compromise: cross-check against the
+  Object-Locked **log** bucket (which the box cannot rewrite), and recover
+  deleted/overwritten snapshots via the 90-day noncurrent-version window using
+  **account-level** credentials, not the box's key.
 - The **access log's `user` field** (injected by the route renderer) gives
   per-authenticated-user request attribution for scoping what was viewed.
 

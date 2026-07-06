@@ -29,6 +29,9 @@ CONTROLS = [
     ("5.28 pids limit", "pids_limit"),
     ("5.x non-root user", "non_root"),
     ("5.26 healthcheck", "healthcheck"),
+    ("5.31 no docker.sock / sensitive host mounts", "no_sensitive_mounts"),
+    ("5.3 minimal cap_add (allowlist)", "cap_add_minimal"),
+    ("5.9 no host network namespace", "no_host_network"),
 ]
 
 INIT_CONTROLS = [
@@ -39,7 +42,59 @@ INIT_CONTROLS = [
     ("5.10 init: memory limit", "mem_limit"),
     ("5.28 init: pids limit", "pids_limit"),
     ("scaffold init: no network", "network_none"),
+    ("5.31 init: no sensitive host mounts", "no_sensitive_mounts"),
+    ("5.3 init: minimal cap_add", "cap_add_minimal"),
 ]
+
+# CIS 5.31 / host-fs escapes: a bind of the Docker socket (full daemon = host
+# root) or of a top-level system directory turns cap_drop/read-only into
+# theatre. Exact-root match only — a benign subpath bind like
+# /etc/localtime:ro or an app data dir under /srv is NOT flagged; wholesale
+# roots are. Read-only does not help: a ro docker.sock still drives the API,
+# a ro / still leaks every host secret.
+SENSITIVE_BIND_ROOTS = {
+    "/", "/etc", "/proc", "/sys", "/dev", "/boot", "/root", "/home",
+    "/run", "/var/run", "/var/lib/docker", "/usr", "/bin", "/sbin", "/lib",
+}
+
+# CIS 5.3: with cap_drop ALL, the only capabilities an app may add back. Init
+# volume-owners need CHOWN/DAC_OVERRIDE; Caddy needs NET_BIND_SERVICE. Anything
+# else (SYS_ADMIN, NET_ADMIN, SYS_PTRACE, DAC_READ_SEARCH, …) alongside a
+# cap_drop ALL is the classic "looks hardened, isn't" pattern.
+ALLOWED_CAP_ADD = {
+    "CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID", "NET_BIND_SERVICE",
+}
+
+
+def _is_sensitive_source(src):
+    if not src.startswith("/"):
+        return False  # named volume, not a host path
+    norm = src.rstrip("/") or "/"
+    if norm.rsplit("/", 1)[-1] == "docker.sock":
+        return True
+    return norm in SENSITIVE_BIND_ROOTS
+
+
+def sensitive_mounts(c):
+    """Host-path bind sources that must never be mounted. Named volumes and
+    benign subpath binds are ignored; only docker.sock and top-level system
+    directories are flagged."""
+    host = c.get("HostConfig") or {}
+    bad = []
+    for b in host.get("Binds") or []:
+        # "src:dst[:mode]" — src is everything before the first colon.
+        if _is_sensitive_source(b.split(":", 1)[0]):
+            bad.append(b)
+    for m in c.get("Mounts") or []:
+        if m.get("Type") == "bind" and _is_sensitive_source(m.get("Source", "")):
+            bad.append(m.get("Source", ""))
+    return bad
+
+
+def cap_add_ok(c):
+    host = c.get("HostConfig") or {}
+    added = [x.upper().replace("CAP_", "") for x in (host.get("CapAdd") or [])]
+    return all(cap in ALLOWED_CAP_ADD for cap in added)
 
 # Data-tier separation (ISM-1269/1270/1271): a database container must not be
 # reachable except from its own app — no published host ports, and never on
@@ -117,6 +172,9 @@ def evaluate(c):
         "non_root": not is_root(user),
         "healthcheck": len([t for t in hc_test if t not in ("", "NONE")]) > 0,
         "network_none": host.get("NetworkMode") == "none",
+        "no_sensitive_mounts": not sensitive_mounts(c),
+        "cap_add_minimal": cap_add_ok(c),
+        "no_host_network": host.get("NetworkMode") != "host",
     }
 
 

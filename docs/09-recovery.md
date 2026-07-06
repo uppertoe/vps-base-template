@@ -44,7 +44,8 @@ then repeat roughly **annually** and after any structural change to
 provisioning. The point is not the ceremony — it's discovering the missing
 step while it's cheap.
 
-1. Create a fresh VPS at the provider (same Ubuntu LTS). Note the IP.
+1. Create a fresh VPS at the provider (same Ubuntu LTS). Note the IP. Clear
+   the stale SSH host key locally: `ssh-keygen -R <ip>`.
 2. Decrypt the recovery bundle into a fresh clone of the server repo:
 
    ```bash
@@ -52,15 +53,40 @@ step while it's cheap.
    openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -in <bundle> | tar -xzv
    ```
 
-3. Point `ansible/hosts` at the new IP. Provision as on first run
-   (`bootstrap.yml`, then `site-first-run.yml` — see docs/03).
-4. Deploy the stack: `ssh <host> ./deploy`.
-5. Restore app data from restic into the named volumes (the backup role's
-   restore path; the restore-drill unit exercises the same mechanism).
-6. Cut DNS over to the new IP. Lower TTLs ahead of time if you want a faster
+3. Point `ansible/hosts` at the new IP. Provision as on first run — from a
+   provider root password, that is `bootstrap.yml --ask-pass` (creates the
+   users + installs your key), then `site-first-run.yml` over the key (full
+   hardening; see docs/03). **Run ansible from the repo root with the
+   scaffold's transport config**, or the slow/flaky-link resilience does not
+   apply: `ANSIBLE_CONFIG=scaffold/ansible/ansible.cfg ansible-playbook …`.
+4. **Populate `/opt/deploy` on the server** (site-first-run creates the
+   directory but does not clone the repo):
+
+   ```bash
+   ssh <host> 'git clone --recurse-submodules <server-repo> /opt/deploy'
+   # then place the not-in-git secrets from the decrypted bundle:
+   #   .env, apps/*/.env, backup/config.env, backup/services/*.env
+   # (scp to /tmp, then install -o deploy -g deploy -m 600 into /opt/deploy)
+   ```
+
+5. **Configure backups**: `ansible-playbook -i ansible/hosts ansible/backup.yml`
+   — this is a separate play, NOT part of site-first-run; it installs restic
+   and `/etc/restic/` from `backup/config.env` + `backup/services/*.env`.
+   Confirm the repo is reachable: `ssh <host> 'sudo restic … snapshots'`.
+6. Deploy the stack: `ssh <host> ./deploy`.
+7. Restore app data from restic into the named volumes where an app has a
+   database (the backup role's restore path; the restore-drill unit exercises
+   the same mechanism). TLS certs re-issue via ACME; alert history that is not
+   backed up (e.g. ntfy) starts empty — expected.
+8. Cut DNS over to the new IP. Lower TTLs ahead of time if you want a faster
    drill number.
-7. Verify: post-provision smoke test, `audit-all.yml`, and confirm the
+9. Verify: post-provision smoke test, `audit-all.yml`, and confirm the
    dead-man's switch and ntfy alerts point at the NEW host.
+
+> **Order matters.** The secrets restore (step 4) and backup config (step 5)
+> sit *between* provisioning and deploy — a fresh box has neither the repo nor
+> restic until you place them. Discovered in the 2026-07-06 drill, which is
+> exactly why the drill is mandatory.
 
 ### RTO log
 
@@ -69,7 +95,7 @@ outage last", and the trend tells you when the runbook has rotted.
 
 | Date | Operator | Scenario | Time to serving | Notes |
 |------|----------|----------|-----------------|-------|
-| —    | —        | first drill pending | — | — |
+| 2026-07-06 | repo owner | Full wipe + rebuild of the live staging box (RackNerd US) from recovery bundle + backups | **~63 min** | Dominated by site-first-run (43 min, CIS L1+L2 over a trans-Pacific link); bootstrap 11, reinstall+ssh 2.5, restore+backup+deploy 7.5. 0 failed tasks. Backup repo reachable from the rebuilt box (restic timer fired mid-drill). Surfaced two runbook gaps (steps 4–5 above) and the ansible.cfg auto-load gap — all fixed in this commit. |
 
 ## Failure modes this covers
 

@@ -1,5 +1,9 @@
 # log-export.timer — Nightly off-host log shipment.
 #
+# Persistent=true keeps the off-host log trail gap-free across reboots;
+# RandomizedDelaySec (up to 30 min) staggers the boot catch-up so it does not
+# fire in lockstep with the other Persistent timers on a post-downtime boot.
+#
 # Installed by the log-export role.
 
 [Unit]
@@ -9,6 +13,7 @@ Requires=log-export.service
 [Timer]
 OnCalendar={{ log_export_schedule }}
 Persistent=true
+RandomizedDelaySec=1800
 Unit=log-export.service
 
 [Install]

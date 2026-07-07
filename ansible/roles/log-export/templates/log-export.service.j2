@@ -15,6 +15,13 @@ Environment=EXTRA_PATHS={{ log_export_extra_paths | join(':') }}
 ExecStart=/usr/local/bin/log-export.sh
 TimeoutStartSec=30m
 
+# Resource guardrails (cgroup v2): archiving + compressing logs is CPU/disk
+# bound, so yield both to the app tier (default weight 100) under contention and
+# soft-cap memory. Keeps a boot-time catch-up from starving Caddy on the 2 GB host.
+CPUWeight=20
+IOWeight=20
+MemoryHigh=256M
+
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=log-export

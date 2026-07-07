@@ -43,16 +43,23 @@ fi
 # Pull trivy once so the per-image runs don't each block on a pull.
 docker pull -q "$TRIVY_IMAGE" >/dev/null
 
+# Resource caps on the Trivy container (this is the effective lever — the
+# systemd unit's CPUWeight/MemoryHigh do not reach a docker-run child, which
+# lives in dockerd's cgroup). On the 2 GB host, cap Trivy at 1 GiB with swap
+# disabled for the container (--memory-swap == --memory) so a scan can never
+# push the box into swap, and give it a low CPU share so it yields to the app
+# tier under contention. 1 GiB is generous for the handful of small images here.
+TRIVY_LIMITS=(--memory=1g --memory-swap=1g --cpu-shares=256)
 for img in "${images[@]}"; do
   safe="$(printf '%s' "$img" | tr '/:@' '___')"
   log "Scanning $img"
-  docker run --rm \
+  docker run --rm "${TRIVY_LIMITS[@]}" \
     -v "$CACHE_DIR:/root/.cache/trivy" \
     -v /var/run/docker.sock:/var/run/docker.sock \
     "$TRIVY_IMAGE" image --quiet --no-progress --scanners vuln \
     --severity "$SEVERITY" --format table --output /dev/stdout "$img" \
     > "$OUT_DIR/trivy-$safe.txt" 2>/dev/null || true
-  docker run --rm \
+  docker run --rm "${TRIVY_LIMITS[@]}" \
     -v "$CACHE_DIR:/root/.cache/trivy" \
     -v /var/run/docker.sock:/var/run/docker.sock \
     "$TRIVY_IMAGE" image --quiet --no-progress --scanners vuln \

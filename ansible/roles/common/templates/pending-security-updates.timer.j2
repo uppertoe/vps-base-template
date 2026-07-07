@@ -1,5 +1,10 @@
 # pending-security-updates.timer — Daily patch-SLA backstop check.
 #
+# Persistent=true keeps the daily patch-SLA evidence honest across reboots;
+# RandomizedDelaySec (up to 30 min) staggers the boot catch-up so it does not
+# fire in lockstep with the other Persistent timers on a post-downtime boot.
+# The check itself is light, so the jitter is purely for de-synchronisation.
+#
 # Installed by the common Ansible role.
 
 [Unit]
@@ -9,6 +14,7 @@ Requires=pending-security-updates.service
 [Timer]
 OnCalendar={{ common_patch_check_schedule }}
 Persistent=true
+RandomizedDelaySec=1800
 Unit=pending-security-updates.service
 
 [Install]

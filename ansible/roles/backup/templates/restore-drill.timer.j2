@@ -4,6 +4,12 @@
 # RPO/RTO evidence trail warm, rare enough that the extra restore load and
 # object-storage reads stay negligible.
 #
+# No Persistent=true on purpose: a full restore drill is the single heaviest
+# recurring job here, and a monthly run missed because the box was down during
+# its window can wait for next month — it must NOT catch up on boot, where a
+# full restore would land squarely in the post-downtime timer storm on a 2 GB
+# host. RandomizedDelaySec de-synchronises the normal run.
+#
 # Installed by the backup Ansible role.
 
 [Unit]
@@ -12,7 +18,7 @@ Requires=restore-drill.service
 
 [Timer]
 OnCalendar={{ backup_restore_drill_schedule }}
-Persistent=true
+RandomizedDelaySec=900
 Unit=restore-drill.service
 
 [Install]

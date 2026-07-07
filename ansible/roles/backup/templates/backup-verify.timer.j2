@@ -13,7 +13,10 @@
 
 [Unit]
 Description=Database backup verification — {{ backup_verify_schedule }} schedule
-Requires=backup-verify.service
+# NO Requires=<service> here: timers.target starts every timer at each boot, and
+# Requires= would start the service along with it — running the job on EVERY
+# boot (the actual boot-storm trigger). The Unit= line in [Timer] is the only
+# service link a timer needs.
 
 [Timer]
 OnCalendar={{ backup_verify_schedule }}

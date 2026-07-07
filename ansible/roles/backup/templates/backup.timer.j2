@@ -3,6 +3,9 @@
 # Default schedule: hourly (configurable via backup_schedule in group_vars).
 # Persistent=true ensures the backup runs at next boot if the system was
 # offline at the scheduled time (e.g. after a reboot or maintenance window).
+# RandomizedDelaySec smears that boot catch-up (and normal runs) by up to 5 min
+# so the backup does not detonate in lockstep with the other scaffold timers on
+# a post-downtime boot — a real thundering-herd hazard on a 2 GB host.
 #
 # Installed by the backup Ansible role.
 
@@ -13,6 +16,7 @@ Requires=backup.service
 [Timer]
 OnCalendar={{ backup_schedule }}
 Persistent=true
+RandomizedDelaySec=300
 Unit=backup.service
 
 [Install]

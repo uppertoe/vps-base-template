@@ -1,4 +1,8 @@
 # vps-log-digest.timer — weekly digest schedule. Installed by the notify role.
+#
+# No Persistent=true on purpose: the weekly digest is informational, and a run
+# missed because the box was down can wait for next Monday — it must NOT catch
+# up on boot and add to the post-downtime timer storm on a 2 GB host.
 
 [Unit]
 Description=Weekly security digest
@@ -6,7 +10,7 @@ Requires=vps-log-digest.service
 
 [Timer]
 OnCalendar=Mon *-*-* 08:05:00
-Persistent=true
+RandomizedDelaySec=900
 Unit=vps-log-digest.service
 
 [Install]

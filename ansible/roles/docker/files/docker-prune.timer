@@ -4,8 +4,11 @@ Description=Run Docker system prune weekly
 [Timer]
 # Run every Sunday at 03:00
 OnCalendar=Sun *-*-* 03:00:00
-# If the server was off at the scheduled time, run soon after next boot
-Persistent=true
+# No Persistent=true on purpose: weekly housekeeping missed because the box was
+# down can wait for next Sunday — it must NOT catch up on boot and add to the
+# post-downtime timer storm on a 2 GB host. RandomizedDelaySec (up to 15 min)
+# also keeps the normal run from colliding with the Sunday backup-verify.
+RandomizedDelaySec=900
 
 [Install]
 WantedBy=timers.target

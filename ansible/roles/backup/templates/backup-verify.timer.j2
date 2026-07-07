@@ -3,6 +3,12 @@
 # This is intentionally less frequent than the main backup timer to avoid
 # unnecessary remote storage reads on every scheduled backup.
 #
+# No Persistent=true on purpose: this is a heavy weekly integrity check, and a
+# run missed because the box was down during its window can simply wait for the
+# next week — it must NOT catch up on boot, where it would pile onto the
+# post-downtime timer storm on a 2 GB host. RandomizedDelaySec also keeps the
+# normal weekly run from overlapping the Sunday docker-prune.
+#
 # Installed by the backup Ansible role.
 
 [Unit]
@@ -11,7 +17,7 @@ Requires=backup-verify.service
 
 [Timer]
 OnCalendar={{ backup_verify_schedule }}
-Persistent=true
+RandomizedDelaySec=900
 Unit=backup-verify.service
 
 [Install]

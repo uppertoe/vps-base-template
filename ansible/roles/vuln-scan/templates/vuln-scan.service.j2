@@ -21,6 +21,14 @@ ExecStart=/usr/local/bin/vuln-scan.sh
 # First run downloads the Trivy DB; scans of a handful of images are minutes.
 TimeoutStartSec=1h
 
+# Resource guardrails (cgroup v2): these bound the wrapper script only — Trivy
+# does its heavy lifting inside a `docker run` container, which lives in
+# dockerd's cgroup, not this unit's. The real caps (--memory / --cpu-shares) are
+# applied at the docker run in vuln-scan.sh; these just keep the orchestrator
+# from competing with the app tier (default weight 100) on the 2 GB host.
+CPUWeight=20
+IOWeight=20
+
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=vuln-scan

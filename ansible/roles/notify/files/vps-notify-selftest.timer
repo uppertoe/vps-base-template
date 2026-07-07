@@ -1,5 +1,9 @@
 # vps-notify-selftest.timer — monthly alert-channel test schedule.
 # Installed by the notify role.
+#
+# No Persistent=true on purpose: a monthly channel test missed because the box
+# was down can wait for the next month — it must NOT catch up on boot and add to
+# the post-downtime timer storm on a 2 GB host.
 
 [Unit]
 Description=Monthly alert-channel self-test
@@ -7,7 +11,7 @@ Requires=vps-notify-selftest.service
 
 [Timer]
 OnCalendar=*-*-01 09:17:00
-Persistent=true
+RandomizedDelaySec=900
 Unit=vps-notify-selftest.service
 
 [Install]

@@ -4,6 +4,11 @@
 # ISM cadence; the scan output starts the 48-hour patch clock for fixable
 # critical vulnerabilities.
 #
+# Persistent=true keeps that daily CVE clock honest across reboots. This is the
+# heaviest recurring job (Trivy pulls + scans every image), so RandomizedDelaySec
+# smears its boot catch-up over 30 min — without it, a missed scan lands as a
+# full Trivy run in the middle of the post-downtime boot storm on a 2 GB host.
+#
 # Installed by the vuln-scan Ansible role.
 
 [Unit]
@@ -13,6 +18,7 @@ Requires=vuln-scan.service
 [Timer]
 OnCalendar={{ vuln_scan_schedule }}
 Persistent=true
+RandomizedDelaySec=1800
 Unit=vuln-scan.service
 
 [Install]

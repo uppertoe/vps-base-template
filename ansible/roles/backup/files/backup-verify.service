@@ -20,6 +20,14 @@ ExecStart=/opt/backup/backup.sh --verify-only
 # restic check can take much longer than a normal backup on larger repositories.
 TimeoutStartSec=2h
 
+# Resource guardrails (cgroup v2): a full restic check is CPU/disk heavy, so
+# yield both to the app tier (default weight 100) under contention and soft-cap
+# memory. On the 2 GB host the verify then throttles instead of starving Caddy
+# or driving the box into swap; MemoryHigh throttles rather than kills.
+CPUWeight=20
+IOWeight=20
+MemoryHigh=512M
+
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=backup-verify

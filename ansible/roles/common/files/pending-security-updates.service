@@ -13,6 +13,12 @@ Type=oneshot
 ExecStart=/usr/local/bin/pending-security-updates
 TimeoutStartSec=15m
 
+# Resource guardrails (cgroup v2): light apt check, but it is one of the daily
+# Persistent timers that catch up on boot — yielding CPU/disk to the app tier
+# (default weight 100) keeps it out of the way during a post-downtime boot.
+CPUWeight=20
+IOWeight=20
+
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=patch-sla

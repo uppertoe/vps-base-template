@@ -21,6 +21,15 @@ ExecStart=/opt/backup/backup.sh
 # Restic uploads are resumable; no partial state is left in the repository.
 TimeoutStartSec=30min
 
+# Resource guardrails (cgroup v2): under contention, yield CPU and disk to the
+# app tier (Caddy + containers run at the default weight of 100) and cap memory
+# pressure. On the 2 GB host a backup that overlaps live traffic then slows down
+# instead of starving the proxy or driving the box into swap. MemoryHigh is a
+# soft throttle, not a kill — this data-protection job must still complete.
+CPUWeight=20
+IOWeight=20
+MemoryHigh=512M
+
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=backup

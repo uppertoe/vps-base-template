@@ -10,8 +10,14 @@ common_patch_check_schedule: "*-*-* 06:15:00"
 # while the patch evidence says "up to date". Reboot in a quiet window when a
 # patch requires it (/run/reboot-required); the notify role's vps-boot-check
 # reports the outcome via ntfy either way ("Rebooted OK" / "Boot check FAILED").
+#
+# Automatic-Reboot-Time is read in the host's local time, and the host stays on
+# UTC (server_timezone), so this value is UTC. 17:00 UTC lands at 03:00 AEST
+# (UTC+10) / 04:00 AEDT (UTC+11) — the pre-dawn Melbourne quiet window in both
+# seasons, and clear of the 03:17/04:23 UTC backup-verify and restore-drill
+# timers. Override per instance if the service serves a different region.
 common_automatic_reboot_enabled: true
-common_automatic_reboot_time: "04:30"
+common_automatic_reboot_time: "17:00"
 
 # Safety-net defaults so the role works standalone; the scaffold's
 # group_vars/all.yml is the canonical place these are set.

@@ -94,6 +94,11 @@ services:
       - /tmp
     environment:
       - DOMAIN=${DOMAIN}
+      # Cloudflare DNS-01 token for wildcard certs (unknown-subdomain 404s).
+      # Only used when a site block says `tls { dns cloudflare ... }` and the
+      # image is the plugin build (ghcr.io/uppertoe/vps-caddy). Zone-scoped,
+      # DNS-edit-only token from the server .env; empty is fine otherwise.
+      - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:-}
       # Let's Encrypt contact (optional but recommended; enables expiry notices).
       # Without it Caddy registers a bogus contact that LE rejects. From .env.
       - ACME_EMAIL=${ACME_EMAIL:-}

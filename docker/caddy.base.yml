@@ -44,7 +44,7 @@ services:
     mem_limit: 64m
     pids_limit: 32
     network_mode: none
-    entrypoint: ["/bin/sh", "-c", "chown -R 1000:1000 /data /config /var/log/caddy"]
+    entrypoint: ["/bin/sh", "-c", "chown -R 65531:65531 /data /config /var/log/caddy"]
     volumes:
       - caddy_data:/data
       - caddy_config:/config
@@ -63,8 +63,14 @@ services:
         condition: service_completed_successfully
     read_only: true
     # CIS Docker §5 runtime hardening. The caddy image runs as root by default;
-    # run non-root and bind 80/443 via the single retained capability.
-    user: "1000:1000"
+    # run non-root and bind 80/443 via the single retained capability. The uid
+    # is DEDICATED (65531) rather than 1000: on the host, 1000 is the deploy
+    # user, so a container escape from the internet-facing proxy would land
+    # with read access to everything deploy owns (app .env secrets, the repo
+    # checkout, its SSH keys). A dedicated uid owns nothing on the host. Repo
+    # files Caddy reads are normalised world-readable by the deploy helper,
+    # so nothing depends on the uid matching anything.
+    user: "65531:65531"
     cap_drop:
       - ALL
     cap_add:

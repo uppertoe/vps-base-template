@@ -210,7 +210,9 @@
     value: /etc/ssh/allowed_signers
     owner: "{{ deploy_user }}"
     group: "{{ deploy_user }}"
-    mode: "0644"
+    # 0640, not 0644: baseline-hardening strips world bits from interactive
+    # users' dotfiles; a wider mode here would ping-pong on every run.
+    mode: "0640"
   when: deploy_verify_signature | bool
 
 - name: Ensure gnupg is present for merge-commit verification

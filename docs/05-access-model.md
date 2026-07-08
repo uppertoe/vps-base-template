@@ -257,12 +257,33 @@ To flip a live host to restricted mode **without locking yourself out**:
 3. In the inventory: set `deploy_restricted_mode=true` as a host var and
    switch `ansible_user=admin`.
 4. Re-run `site-quick.yml`. Deploy's sudoers becomes the wrapper allowlist and
-   it leaves the docker group.
-5. Verify: `bash scripts/post-provision-smoke-test.sh <host>` (mode-aware),
-   then `ssh <host> ./deploy` still deploys (via `sudo vps-deploy`).
+   it leaves the docker group. The play also propagates any registry
+   credentials from `~deploy/.docker/config.json` to root's docker config —
+   in restricted mode `compose pull` runs as root inside `vps-deploy`, and
+   without this every private-image pull fails "unauthorized". (If you
+   `docker login` to a new registry later, log in as deploy and re-run the
+   play, or copy the file to `/root/.docker/config.json` yourself.) Once the
+   root copy exists you can delete `~deploy/.docker/config.json`: deploy
+   cannot run docker anymore, so its copy of the registry token is pure
+   exposure — notably to anything that reaches uid-1000 file access.
+5. Verify: `bash scripts/post-provision-smoke-test.sh <admin-alias>` — the
+   smoke test detects the mode from the user it CONNECTS as, so pass an SSH
+   alias/host that connects as `admin`. Run against a deploy-user alias it
+   assumes the default model and hangs on the first sudo check. Then confirm
+   `ssh <host> ./deploy` still deploys (via `sudo vps-deploy`).
 6. Rollback at any point: set the flag back to false and re-run the site play
    (idempotent in both directions). Update the docs/08 register entry with the
    flip date.
+
+Two inventory footguns when the plays run on the box itself (`-c local`, the
+sane path for a slow operator link): `deploy_restricted_mode` must be a HOST
+var (a playbook group_vars default of false outranks inventory group vars),
+and both `deploy_user_public_key` / `deploy_admin_public_key` must be set to
+LITERAL key strings — their defaults are file lookups of the connection key's
+`.pub` on the controller, which is now the server, where your laptop's key
+files don't exist (and `deploy_user_public_key` manages deploy's
+authorized_keys, so a wrong fallback can swap deploy's key out from under
+you).
 
 ## Suggested Variables
 

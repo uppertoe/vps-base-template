@@ -20,6 +20,17 @@ vuln_scan_schedule: "*-*-* 05:41:00"
 # Severities to record in reports. Alerts only fire for fixable CRITICALs.
 vuln_scan_severity: "HIGH,CRITICAL"
 
+# Self-heal grace: how many days a fixable CRITICAL may sit before the urgent
+# ntfy alert fires. The hands-off update pipeline (weekly app-image rebuilds →
+# Renovate digest PRs → auto-deploy timer) normally clears findings without an
+# operator, so paging on day one is pure alert fatigue; paging after the
+# pipeline has demonstrably failed is actionable. Findings still appear in the
+# dated summary (and start their SLA clock) the day they are found — the grace
+# gates the page, not the record. Set to 0 to page immediately (strict
+# Essential Eight 48-hour posture: also move the app-repo rebuild schedules
+# from weekly to daily so the pipeline can actually meet the clock).
+vuln_scan_alert_grace_days: 8
+
 # Trivy runs as a container so nothing is installed on the host. It mounts the
 # Docker socket, so pin the scanner image by digest like any other privileged
 # helper image.

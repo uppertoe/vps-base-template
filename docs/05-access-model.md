@@ -262,7 +262,10 @@ To flip a live host to restricted mode **without locking yourself out**:
    in restricted mode `compose pull` runs as root inside `vps-deploy`, and
    without this every private-image pull fails "unauthorized". (If you
    `docker login` to a new registry later, log in as deploy and re-run the
-   play, or copy the file to `/root/.docker/config.json` yourself.)
+   play, or copy the file to `/root/.docker/config.json` yourself.) Once the
+   root copy exists you can delete `~deploy/.docker/config.json`: deploy
+   cannot run docker anymore, so its copy of the registry token is pure
+   exposure — notably to anything that reaches uid-1000 file access.
 5. Verify: `bash scripts/post-provision-smoke-test.sh <admin-alias>` — the
    smoke test detects the mode from the user it CONNECTS as, so pass an SSH
    alias/host that connects as `admin`. Run against a deploy-user alias it

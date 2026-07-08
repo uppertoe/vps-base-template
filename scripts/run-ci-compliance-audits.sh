@@ -22,7 +22,7 @@ mkdir -p "$ANSIBLE_HOME" "$XDG_CACHE_HOME" "$ANSIBLE_LOCAL_TEMP" "$REPO_ROOT/rep
 
 INVENTORY_FILE="$(mktemp "$CI_TMP_BASE/vps-scaffold-ci-inventory.XXXXXX")"
 SSH_KEY_FILE="$(mktemp "$CI_TMP_BASE/vps-scaffold-ci-key.XXXXXX")"
-trap 'rm -f "$INVENTORY_FILE" "$SSH_KEY_FILE" "$SSH_KEY_FILE.pub"' EXIT
+trap 'rm -f "$INVENTORY_FILE" "$SSH_KEY_FILE" "$SSH_KEY_FILE.pub" "$SSH_KEY_FILE-admin" "$SSH_KEY_FILE-admin.pub"' EXIT
 
 cat > "$INVENTORY_FILE" <<'EOF'
 [all]
@@ -33,6 +33,14 @@ if [[ -z "${DEPLOY_USER_PUBLIC_KEY:-}" ]]; then
   rm -f "$SSH_KEY_FILE"
   ssh-keygen -q -t ed25519 -N '' -C github-actions-ci -f "$SSH_KEY_FILE" >/dev/null
   DEPLOY_USER_PUBLIC_KEY="$(cat "$SSH_KEY_FILE.pub")"
+fi
+
+# Restricted mode refuses a shared admin/deploy key (deploy-user role
+# assertion) — CI must converge the real posture: distinct throwaway keys.
+if [[ -z "${DEPLOY_ADMIN_PUBLIC_KEY:-}" ]]; then
+  rm -f "$SSH_KEY_FILE-admin"
+  ssh-keygen -q -t ed25519 -N '' -C github-actions-ci-admin -f "$SSH_KEY_FILE-admin" >/dev/null
+  DEPLOY_ADMIN_PUBLIC_KEY="$(cat "$SSH_KEY_FILE-admin.pub")"
 fi
 
 cd "$REPO_ROOT"
@@ -56,6 +64,7 @@ ansible-playbook -i "$INVENTORY_FILE" ansible/bootstrap.yml \
 # fails without it).
 ansible-playbook -i "$INVENTORY_FILE" ansible/site-first-run.yml \
   -e "{\"deploy_user_public_key\": \"${DEPLOY_USER_PUBLIC_KEY}\"}" \
+  -e "{\"deploy_admin_public_key\": \"${DEPLOY_ADMIN_PUBLIC_KEY}\"}" \
   -e common_run_safe_upgrade=false \
   -e baseline_cis_l2_audit_rules=true \
   -e deploy_restricted_mode=true \

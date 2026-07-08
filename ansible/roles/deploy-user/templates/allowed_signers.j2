@@ -1,0 +1,6 @@
+# {{ ansible_managed }}
+# Git allowed-signers for deploy_verify_signature (SSH-signed commits).
+# Root-owned: the deploy user verifies against this file but cannot extend it.
+{% for signer in deploy_allowed_signers %}
+{{ signer }}
+{% endfor %}

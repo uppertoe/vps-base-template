@@ -338,6 +338,41 @@ Treat them with the same seriousness as SSH keys:
   by the ecosystem before your deploy timer ships it.
 - **2FA + hardware keys** on any GitHub account with merge rights.
 
+### Enforcing the boundary on the box: `deploy_verify_signature`
+
+Branch protection lives in GitHub's plan tier (unavailable on free private
+repos) and protects the repo, not the host. `deploy_verify_signature: true`
+moves enforcement onto the box itself: `vps-deploy` runs
+`git verify-commit HEAD` as the deploy user and refuses to deploy a HEAD it
+cannot verify. The role provisions two root-owned trust anchors:
+
+- `/etc/ssh/allowed_signers` from `deploy_allowed_signers` — the
+  operator's SSH signing key(s), for direct pushes to main.
+- GitHub's web-flow GPG key (`deploy_trust_github_merges`, default true) —
+  covers every commit GitHub's own merge machinery creates: web-UI merges and
+  API merges, which is what Renovate automerge produces.
+
+Net effect: PR merges and Renovate automerges deploy; a raw unsigned push
+(stolen laptop token, compromised bot pushing directly) is refused and the
+failed deploy pages via ntfy. An attacker with full account control can still
+merge through a PR — this gate compensates for missing branch protection; it
+does not replace account security.
+
+Operator setup (once per machine that pushes directly to main):
+
+```sh
+ssh-keygen -t ed25519 -f ~/.ssh/git-signing -N "" -C "git-signing <email>"
+git config gpg.format ssh
+git config user.signingkey ~/.ssh/git-signing.pub
+git config commit.gpgsign true          # per-repo, in the server repo
+```
+
+Then add `"<committer-email> <key-type> <base64-key>"` to
+`deploy_allowed_signers` in the inventory and re-apply the deploy-user role.
+Cutover order matters: sign a commit on main FIRST (or merge any PR via
+GitHub), then enable the gate — enabling it while HEAD is unsigned refuses
+every deploy until a verifiable commit lands.
+
 ## What This Does Not Solve
 
 This model improves access control, but it does not by itself solve:

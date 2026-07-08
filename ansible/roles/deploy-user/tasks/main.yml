@@ -120,6 +120,41 @@
     group: root
     mode: "0750"
 
+# In restricted mode docker (and so `compose pull`) runs as root inside
+# vps-deploy, but private-registry credentials were logged in as the deploy
+# user (bootstrap flow) and live in ~deploy/.docker/config.json — root's pull
+# gets "unauthorized" and every deploy of a private image fails. Propagate the
+# credentials to root's docker config. Found flipping a live host with private
+# GHCR images.
+- name: Check for deploy-user registry credentials
+  ansible.builtin.stat:
+    path: "/home/{{ deploy_user }}/.docker/config.json"
+  register: deploy_docker_config
+  when: deploy_restricted_mode | bool
+
+- name: Ensure root docker config directory exists
+  ansible.builtin.file:
+    path: /root/.docker
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  when:
+    - deploy_restricted_mode | bool
+    - deploy_docker_config.stat.exists
+
+- name: Propagate registry credentials to root in restricted mode
+  ansible.builtin.copy:
+    src: "/home/{{ deploy_user }}/.docker/config.json"
+    remote_src: true
+    dest: /root/.docker/config.json
+    owner: root
+    group: root
+    mode: "0600"
+  when:
+    - deploy_restricted_mode | bool
+    - deploy_docker_config.stat.exists
+
 - name: Install root-owned app-manage and app-logs wrappers
   ansible.builtin.copy:
     src: "{{ item }}"

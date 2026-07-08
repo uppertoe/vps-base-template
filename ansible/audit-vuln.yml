@@ -72,8 +72,13 @@
           rm -f "$WORK"/trivy-*.txt "$WORK"/trivy-*.json
           : > "$WORK/summary.txt"
 
-          # Distinct images backing the running containers (skip the trivy image itself).
-          mapfile -t images < <(docker ps --format '{{ '{{' }}.Image{{ '}}' }}' | sort -u | grep -v -F "$TRIVY" || true)
+          # Distinct images backing the running containers as "<id> <ref>" pairs,
+          # scanned BY IMAGE ID: on a digest-pinned host the local :latest tags
+          # go stale (pull-by-digest never moves them), so tag refs scan images
+          # that are not what is running. The ref is kept for report names only.
+          mapfile -t images < <(docker ps -q \
+            | xargs -r docker inspect --format '{{ '{{' }}.Image{{ '}}' }} {{ '{{' }}.Config.Image{{ '}}' }}' \
+            | grep -v -F "$TRIVY" | sort -u | awk '!seen[$1]++')
           if [[ {% raw %}${#images[@]}{% endraw %} -eq 0 ]]; then
             echo "No running containers found — nothing to scan." | tee -a "$WORK/summary.txt"
             exit 0
@@ -82,9 +87,11 @@
           # Pull trivy once so the per-image runs don't each block on a pull.
           docker pull -q "$TRIVY" >/dev/null
 
-          for img in "${images[@]}"; do
-            safe="$(printf '%s' "$img" | tr '/:@' '___')"
-            echo "=== Scanning $img ===" | tee -a "$WORK/summary.txt"
+          for pair in "${images[@]}"; do
+            img="${pair%% *}"
+            ref="${pair#* }"
+            safe="$(printf '%s' "${ref%%@*}" | tr '/:@' '___')"
+            echo "=== Scanning ${ref%%@*} ($img) ===" | tee -a "$WORK/summary.txt"
             docker run --rm \
               -v "$CACHE:/root/.cache/trivy" \
               -v /var/run/docker.sock:/var/run/docker.sock \

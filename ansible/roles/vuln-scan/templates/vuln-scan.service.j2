@@ -16,6 +16,7 @@ Environment=SEVERITY={{ vuln_scan_severity }}
 Environment=CACHE_DIR={{ vuln_scan_cache_dir }}
 Environment=STATE_DIR={{ vuln_scan_state_dir }}
 Environment=RETENTION_DAYS={{ vuln_scan_report_retention_days }}
+Environment=GRACE_DAYS={{ vuln_scan_alert_grace_days }}
 ExecStart=/usr/local/bin/vuln-scan.sh
 
 # First run downloads the Trivy DB; scans of a handful of images are minutes.

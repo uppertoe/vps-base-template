@@ -20,6 +20,19 @@ find . \
   \( -path './.env' -o -path './apps/*/.env' -o -path './backup/config.env' -o -path './backup/services/*.env' \) \
   -type f ! -perm 600 -exec chmod 600 {} +
 
+# The inverse pass: containers run as dedicated non-root uids and bind-mount
+# repo files (compose configs, Caddy snippets, app config like sites.yaml).
+# Files (re)created by git pull under the deploy user's hardened umask lack
+# the world-readable bit, so they are unreadable inside any container whose
+# uid is not the deploy user's — readability must not depend on that
+# coincidence. Normalise the container-consumed tree to world-readable,
+# conditionally for the same ctime/AIDE reason as above. Secrets are exactly
+# the .env set locked to 600 above and are excluded here.
+find ./apps ./scaffold ./.generated ./Caddyfile \
+  \( -name '.env' -o -name '.env.*' \) -prune \
+  -o -type f ! -perm -0004 -exec chmod o+r {} + \
+  -o -type d ! -perm -0005 -exec chmod o+rx {} +
+
 for hook in ./apps/*/deploy.sh; do
   if [[ -x "$hook" ]]; then
     echo "Running app deploy hook: ${hook#./}"

@@ -15,6 +15,11 @@
     # posture (wrapper-only sudo, no docker group for deploy, admin account).
     # Production default remains false until proven on the real VPS (docs/05).
     deploy_restricted_mode: true
+    # Exercise the signed-deploy trust store (allowed-signers file, web-flow
+    # key fetch + import) with a throwaway key.
+    deploy_verify_signature: true
+    deploy_allowed_signers:
+      - "molecule@example.invalid ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPMtNWyG0zp9l3S105PF90MMk2BlIHeKeIHYsCO3RGPb"
   pre_tasks:
     - name: Mark this as a Molecule test run (disables kernel-level hardening)
       ansible.builtin.set_fact:

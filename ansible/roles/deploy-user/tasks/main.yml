@@ -182,6 +182,61 @@
     group: "{{ deploy_user }}"
     mode: "0755"
 
+# --- Signed-deploy trust store (deploy_verify_signature) ------------------
+# vps-deploy refuses to apply a HEAD the deploy user cannot verify. Two kinds
+# of signature must verify: the operator's SSH-signed commits (allowed-signers
+# file) and GitHub's web-flow GPG key (web/API merge commits, incl. Renovate
+# automerge). Both trust anchors are root-owned; the deploy user consumes but
+# cannot extend them.
+
+- name: Install allowed-signers file for signed deploys
+  ansible.builtin.template:
+    src: allowed_signers.j2
+    dest: /etc/vps-scaffold/allowed_signers
+    owner: root
+    group: root
+    mode: "0644"
+  when: deploy_verify_signature | bool
+
+- name: Point the deploy user's git at the allowed-signers file
+  community.general.ini_file:
+    path: "/home/{{ deploy_user }}/.gitconfig"
+    section: 'gpg "ssh"'
+    option: allowedSignersFile
+    value: /etc/vps-scaffold/allowed_signers
+    owner: "{{ deploy_user }}"
+    group: "{{ deploy_user }}"
+    mode: "0644"
+  when: deploy_verify_signature | bool
+
+- name: Ensure gnupg is present for merge-commit verification
+  ansible.builtin.apt:
+    name: gnupg
+    state: present
+  when:
+    - deploy_verify_signature | bool
+    - deploy_trust_github_merges | bool
+
+- name: Fetch GitHub web-flow signing key
+  ansible.builtin.get_url:
+    url: https://github.com/web-flow.gpg
+    dest: /etc/vps-scaffold/github-web-flow.gpg
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - deploy_verify_signature | bool
+    - deploy_trust_github_merges | bool
+
+- name: Import GitHub web-flow key into the deploy user's keyring
+  ansible.builtin.command:
+    cmd: runuser -u {{ deploy_user }} -- gpg --import /etc/vps-scaffold/github-web-flow.gpg
+  register: webflow_import
+  changed_when: "'imported:' in webflow_import.stderr"
+  when:
+    - deploy_verify_signature | bool
+    - deploy_trust_github_merges | bool
+
 # --- Hands-off updates (see defaults for the model) ----------------------
 
 - name: Install auto-deploy and scaffold-drift scripts

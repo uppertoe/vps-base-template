@@ -52,6 +52,18 @@ deploy_auto_update_schedule: "*-*-* 05:15:00"
 # default because it needs that setup. Strongly recommended once auto-deploy is
 # on. See docs/05-access-model.md.
 deploy_verify_signature: false
+# Trust store for deploy_verify_signature — who may sign the deployed HEAD.
+# Each entry is one line of git's allowed-signers format:
+#   "<principal> <key-type> <base64-key>"   (principal = committer email)
+# The file lands root-owned on the host, so a compromised deploy user cannot
+# extend it. Generate a dedicated signing key (ssh-keygen -t ed25519) rather
+# than reusing an auth key; see docs/05-access-model.md.
+deploy_allowed_signers: []
+# Also trust commits created by GitHub's own merge machinery (web UI and API
+# merges — which is what Renovate automerge produces): GitHub signs those with
+# its web-flow GPG key, fetched from github.com/web-flow.gpg at provision
+# time. Leaves direct unsigned pushes as the only refused path.
+deploy_trust_github_merges: true
 # Weekly awareness alert when the scaffold submodule is behind upstream main.
 scaffold_drift_check: true
 scaffold_drift_schedule: "Mon *-*-* 07:05:00"

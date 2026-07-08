@@ -189,10 +189,14 @@
 # automerge). Both trust anchors are root-owned; the deploy user consumes but
 # cannot extend them.
 
+# /etc/ssh (0755 root) rather than /etc/vps-scaffold (0750 root): the deploy
+# user must READ the trust anchors at verify time but must not be able to
+# modify or replace them — a root-owned file in a root-owned world-readable
+# dir gives exactly that; the 0750 config dir would block the read.
 - name: Install allowed-signers file for signed deploys
   ansible.builtin.template:
     src: allowed_signers.j2
-    dest: /etc/vps-scaffold/allowed_signers
+    dest: /etc/ssh/allowed_signers
     owner: root
     group: root
     mode: "0644"
@@ -203,7 +207,7 @@
     path: "/home/{{ deploy_user }}/.gitconfig"
     section: 'gpg "ssh"'
     option: allowedSignersFile
-    value: /etc/vps-scaffold/allowed_signers
+    value: /etc/ssh/allowed_signers
     owner: "{{ deploy_user }}"
     group: "{{ deploy_user }}"
     mode: "0644"
@@ -228,9 +232,11 @@
     - deploy_verify_signature | bool
     - deploy_trust_github_merges | bool
 
+# Root reads the key file (the 0750 config dir blocks the deploy user) and
+# pipes it in; only the import runs as the deploy user.
 - name: Import GitHub web-flow key into the deploy user's keyring
-  ansible.builtin.command:
-    cmd: runuser -u {{ deploy_user }} -- gpg --import /etc/vps-scaffold/github-web-flow.gpg
+  ansible.builtin.shell:
+    cmd: cat /etc/vps-scaffold/github-web-flow.gpg | runuser -u {{ deploy_user }} -- gpg --import
   register: webflow_import
   changed_when: "'imported:' in webflow_import.stderr"
   when:

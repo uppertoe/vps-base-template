@@ -346,7 +346,7 @@ moves enforcement onto the box itself: `vps-deploy` runs
 `git verify-commit HEAD` as the deploy user and refuses to deploy a HEAD it
 cannot verify. The role provisions two root-owned trust anchors:
 
-- `/etc/vps-scaffold/allowed_signers` from `deploy_allowed_signers` — the
+- `/etc/ssh/allowed_signers` from `deploy_allowed_signers` — the
   operator's SSH signing key(s), for direct pushes to main.
 - GitHub's web-flow GPG key (`deploy_trust_github_merges`, default true) —
   covers every commit GitHub's own merge machinery creates: web-UI merges and

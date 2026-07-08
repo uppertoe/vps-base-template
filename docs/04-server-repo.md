@@ -162,6 +162,16 @@ There are two secret workflows in the current template:
   Edit these locally in your server repo on your laptop, then run the backup
   playbook so Ansible copies them to `/etc/restic/` on the server.
 
+The deploy helper enforces this split on every run: the `.env` set above is
+locked to mode 600, and everything else containers consume from the checkout
+(`apps/`, `scaffold/`, `.generated/`, `Caddyfile`) is normalised to
+world-readable. The second half matters because containers run as dedicated
+non-root uids: a file created under the host's hardened umask is otherwise
+unreadable inside any container whose uid differs from the deploy user's, and
+which files those are depends on who created them, not on what is in git. Put
+secrets ONLY in the `.env` set — any other file in the checkout must be
+assumed readable by every container that mounts it.
+
 ## Provisioning
 
 See [03-provisioning-a-server.md](03-provisioning-a-server.md) for the full

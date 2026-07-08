@@ -157,6 +157,21 @@
           - "'sudo /usr/local/sbin/vps-deploy' in (deploy_helper_raw.content | b64decode)"
         msg: "restricted-mode ~/deploy helper does not delegate to vps-deploy"
 
+    - name: Read vps-deploy wrapper
+      ansible.builtin.slurp:
+        src: /usr/local/sbin/vps-deploy
+      register: vps_deploy_raw
+
+    - name: Assert wrapper normalises checkout modes both ways
+      ansible.builtin.assert:
+        that:
+          # secrets locked down…
+          - "'chmod 600' in (vps_deploy_raw.content | b64decode)"
+          # …and container-consumed files world-readable (bind mounts must not
+          # depend on a container uid matching the deploy user's).
+          - "'chmod o+r' in (vps_deploy_raw.content | b64decode)"
+        msg: "vps-deploy is missing the checkout permission-normalisation passes"
+
     # -------------------------------------------------------------------------
     # SSH hardening
     # -------------------------------------------------------------------------

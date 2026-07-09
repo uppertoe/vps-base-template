@@ -15,8 +15,12 @@ umask 022
 
 cd /opt/deploy
 
-# Update the repo as the unprivileged owner, never as root.
+# Update the repo as the unprivileged owner, never as root. HEAD is captured
+# either side of the pull: a moved HEAD means the AIDE-monitored working tree
+# legitimately changed, which the tail of this script acknowledges.
+old_head="$(runuser -u {{ deploy_user }} -- git rev-parse HEAD)"
 runuser -u {{ deploy_user }} -- git pull --recurse-submodules
+new_head="$(runuser -u {{ deploy_user }} -- git rev-parse HEAD)"
 {% if deploy_verify_signature | default(false) %}
 
 # Supply-chain gate (deploy_verify_signature): everything below runs as root
@@ -61,3 +65,12 @@ for hook in ./apps/*/deploy.sh; do
 done
 
 docker compose up -d --remove-orphans --wait --force-recreate
+
+# The deploy changed /opt/deploy's working tree (AIDE-monitored): acknowledge
+# via the evidence-recording re-baseline, debounced so back-to-back deploys
+# rebaseline once. Deploys are a trusted change channel (CI-gated, signed
+# HEAD, announced via ntfy); tampering outside a deploy still alerts. Guarded:
+# not every host runs the baseline-hardening AIDE stack.
+if [[ "$old_head" != "$new_head" ]]; then
+  systemctl restart aide-rebaseline-after-deploy.timer >/dev/null 2>&1 || true
+fi

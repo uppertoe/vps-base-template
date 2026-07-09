@@ -24,5 +24,22 @@ fi
 
 /usr/local/sbin/vps-deploy
 
-/usr/local/bin/vps-notify "Auto-deploy applied" \
-  "${local_head:0:12} -> ${remote_head:0:12} (CI-gated upstream change)" || true
+# Tell the operator WHAT changed, not just that something did: commit
+# subjects carry the story (Renovate bumps name the image, scaffold bumps
+# name the template PR). Informational priority/tags — a failed deploy
+# alerts separately via the unit's OnFailure hook.
+count="$(runuser -u deploy -- git rev-list --count "${local_head}..${remote_head}")"
+# awk, not head: head exiting early SIGPIPEs git log, which pipefail turns
+# into a script-killing failure precisely when there are many commits.
+subjects="$(runuser -u deploy -- git log --reverse --format='• %s' "${local_head}..${remote_head}" | awk 'NR<=6')"
+if [ "$count" -gt 6 ]; then
+  subjects="${subjects}
+… and $((count - 6)) more"
+fi
+s=""; [ "$count" -ne 1 ] && s="s"
+
+/usr/local/bin/vps-notify "Auto-deploy: ${count} upstream change${s} applied" \
+"${subjects}
+
+${local_head:0:7} → ${remote_head:0:7} (CI-gated; full log: git -C /opt/deploy log)" \
+  default package || true

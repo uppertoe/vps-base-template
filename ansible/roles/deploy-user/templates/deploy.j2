@@ -10,7 +10,13 @@ exec sudo /usr/local/sbin/vps-deploy "$@"
 set -euo pipefail
 
 cd /opt/deploy
+
+# HEAD is captured either side of the pull: a moved HEAD means the
+# AIDE-monitored working tree legitimately changed, which the tail of this
+# script acknowledges (mirrors vps-deploy, the restricted-mode path).
+old_head="$(git rev-parse HEAD)"
 git pull --recurse-submodules
+new_head="$(git rev-parse HEAD)"
 docker compose pull --policy always
 
 # Keep server and app env files readable only by the deploy user. Only chmod
@@ -41,4 +47,13 @@ for hook in ./apps/*/deploy.sh; do
 done
 
 docker compose up -d --remove-orphans --wait --force-recreate
+
+# The deploy changed /opt/deploy's working tree (AIDE-monitored): acknowledge
+# via the evidence-recording re-baseline, debounced so back-to-back deploys
+# rebaseline once — same trusted-channel contract as vps-deploy. Default
+# mode's deploy user holds broad sudo; -n keeps a passwordless-sudo-less host
+# from hanging, and the guard tolerates hosts without the AIDE stack.
+if [[ "$old_head" != "$new_head" ]]; then
+  sudo -n systemctl restart aide-rebaseline-after-deploy.timer >/dev/null 2>&1 || true
+fi
 {% endif %}

@@ -653,11 +653,36 @@
     - baseline_enable_aide | bool
     - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
 
+# Ubuntu's hardened dailyaidecheck runs as _aide: CAP_DAC_READ_SEARCH lets it
+# READ root-owned files, but fs.protected_hardlinks blocks it HARDLINKING the
+# root-owned aide.log during rotation, killing the check before it compares
+# anything. Root-run aide (provision-time aideinit, the re-baseline service)
+# leaves root-owned files behind -- hand the mutable state to _aide. The
+# re-baseline script re-applies this after every run.
+- name: Ensure AIDE state and logs are owned by the service user
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: _aide
+    group: "{{ item.group }}"
+    recurse: true
+  loop:
+    - { path: /var/log/aide, group: adm }
+    - { path: /var/lib/aide, group: _aide }
+  loop_control:
+    label: "{{ item.path }}"
+  when:
+    - baseline_enable_aide | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
 # Acknowledge legitimate package-driven change automatically. Package upgrades
 # touch /usr/bin, /usr/lib, etc. -- the core paths AIDE protects, which must NOT
 # be excluded -- so instead re-baseline AFTER apt (the trusted, signed change
 # channel). A dpkg Post-Invoke hook resets a 20-min timer; one re-baseline fires
-# once apt settles. Non-package tampering runs no apt and still alerts.
+# once apt settles. The second trusted channel is a DEPLOY that moves
+# /opt/deploy's HEAD (CI-gated, signature-verified, ntfy-announced): vps-deploy
+# resets the deploy debounce timer below. Non-package, non-deploy tampering
+# triggers neither and still alerts.
 - name: Install AIDE re-baseline helper
   ansible.builtin.copy:
     src: aide-rebaseline
@@ -696,6 +721,18 @@
         Description=Debounced AIDE re-baseline after apt package changes
         [Timer]
         OnActiveSec=20min
+        AccuracySec=1min
+        Unit=aide-rebaseline.service
+    - name: aide-rebaseline-after-deploy.timer
+      content: |
+        # Managed by Ansible (baseline-hardening role) -- started/reset by
+        # vps-deploy when a deploy moves /opt/deploy's HEAD (the working tree
+        # is AIDE-monitored, and hands-off updates change it routinely).
+        # Fires 10 min after the last deploy settles.
+        [Unit]
+        Description=Debounced AIDE re-baseline after a deploy changed the working tree
+        [Timer]
+        OnActiveSec=10min
         AccuracySec=1min
         Unit=aide-rebaseline.service
   loop_control:

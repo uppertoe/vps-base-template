@@ -244,6 +244,13 @@
     - host_swapfile_path not in common_active_swaps.stdout_lines
 
 # --- Encrypted swap path ----------------------------------------------------
+# NOFAIL IS LOAD-BEARING: random-key swap is stateless by construction (its
+# contents are garbage after every power cycle), so it can never be required
+# to boot — but without nofail, systemd treats the crypttab entry as
+# boot-critical and a transient setup race holds the whole machine at "a
+# start job is running ... (no limit)". Seen live 2026-07-10: an unclean
+# reboot from an IO-saturated, deep-in-swap state hung boot indefinitely on
+# dev-mapper-cryptswap. Worst case with nofail is "booted without swap".
 # dm-crypt over the managed swapfile with a fresh /dev/urandom key each boot
 # (systemd loop-mounts file sources listed in crypttab and re-runs mkswap via
 # the 'swap' option). Anything paged out of RAM — session secrets, PII — is
@@ -272,7 +279,7 @@
       ansible.builtin.lineinfile:
         path: /etc/crypttab
         regexp: "^{{ host_swap_crypt_name }}\\s"
-        line: "{{ host_swap_crypt_name }} {{ host_swapfile_path }} /dev/urandom swap,cipher=aes-xts-plain64,size=512,plain"
+        line: "{{ host_swap_crypt_name }} {{ host_swapfile_path }} /dev/urandom swap,cipher=aes-xts-plain64,size=512,plain,nofail"
         create: true
         owner: root
         group: root
@@ -283,7 +290,7 @@
       ansible.builtin.lineinfile:
         path: /etc/fstab
         regexp: "^/dev/mapper/{{ host_swap_crypt_name }}\\s+none\\s+swap\\s+"
-        line: "/dev/mapper/{{ host_swap_crypt_name }} none swap sw 0 0"
+        line: "/dev/mapper/{{ host_swap_crypt_name }} none swap sw,nofail,x-systemd.device-timeout=30s 0 0"
         state: present
 
     # Live conversion: turn the plain swapfile off before dm-crypt claims it.

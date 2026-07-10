@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# deploy-trigger — subscribe to a ntfy topic and start auto-deploy on ping.
+#
+# The event-driven half of push-to-deploy: a server-repo GitHub workflow
+# publishes a ping to an unguessable topic on the box's own ntfy when main
+# moves; this subscriber starts auto-deploy.service, which does the real work
+# behind the usual gates (fetch, signed-HEAD verification, skip-if-unchanged,
+# ntfy announcement). The ping carries NO authority — it never says WHAT to
+# deploy, only "check now" — so a forged or replayed message can at worst
+# cause a no-op fetch, and the debounce below caps how often.
+#
+# Managed by Ansible (deploy-user role).
+# Config: /etc/vps-scaffold/deploy-trigger.env (root-owned, mode 600):
+#   DEPLOY_TRIGGER_URL    full topic URL, e.g. http://127.0.0.1:8080/<topic>
+#   DEPLOY_TRIGGER_TOKEN  ntfy token with read access to that topic
+set -u
+
+CONF=/etc/vps-scaffold/deploy-trigger.env
+# shellcheck disable=SC1090
+. "$CONF"
+
+logger -t deploy-trigger "subscribing to ${DEPLOY_TRIGGER_URL}"
+
+while true; do
+  # Stream messages as JSON lines. --max-time bounds a silently-wedged
+  # connection and forces a periodic clean reconnect; ntfy's keepalive events
+  # are filtered out by the "message" check.
+  curl -fsN --max-time 3600 \
+       -H "Authorization: Bearer ${DEPLOY_TRIGGER_TOKEN}" \
+       "${DEPLOY_TRIGGER_URL}/json" 2>/dev/null \
+  | while IFS= read -r line; do
+      printf '%s' "$line" | grep -q '"event":"message"' || continue
+      logger -t deploy-trigger "deploy ping received; starting auto-deploy"
+      systemctl start --no-block auto-deploy.service || true
+      # Debounce: a burst of pings (e.g. several quick merges) collapses into
+      # one deploy now and one after the burst — auto-deploy itself skips
+      # when the remote is unchanged.
+      sleep 15
+    done
+  # Reconnect backoff — covers ntfy restarts (e.g. during the deploy we just
+  # triggered) without hammering the socket.
+  sleep 15
+done

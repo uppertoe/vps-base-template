@@ -1,0 +1,30 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Start auto-deploy when the deploy ntfy topic is pinged
+Documentation=file:/usr/local/sbin/deploy-trigger
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/vps-scaffold/deploy-trigger.env
+
+[Service]
+ExecStart=/usr/local/sbin/deploy-trigger
+Restart=always
+RestartSec=30
+# Persistent crash-looping (bad token, ntfy gone) should page, not spin
+# silently: cap the restarts, then fail into the notify hook.
+StartLimitIntervalSec=600
+StartLimitBurst=10
+OnFailure=notify@%n.service
+# Hardening: the only privileged action is `systemctl start` of one unit.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+MemoryMax=64M
+
+[Install]
+WantedBy=multi-user.target

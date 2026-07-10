@@ -291,3 +291,59 @@
   when: ansible_facts['virtualization_type'] | default('') not in ['docker', 'container', 'lxc']
   tags:
     - molecule-notest
+
+# --- Push-to-deploy trigger (see defaults for the model) ------------------
+
+- name: Install deploy-trigger subscriber script
+  ansible.builtin.copy:
+    src: deploy-trigger
+    dest: /usr/local/sbin/deploy-trigger
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Install deploy-trigger unit
+  ansible.builtin.template:
+    src: deploy-trigger.service.j2
+    dest: /etc/systemd/system/deploy-trigger.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Render deploy-trigger config
+  ansible.builtin.template:
+    src: deploy-trigger.env.j2
+    dest: /etc/vps-scaffold/deploy-trigger.env
+    owner: root
+    group: root
+    mode: "0600"
+  register: deploy_trigger_conf
+  when: deploy_push_trigger | bool
+
+- name: Remove deploy-trigger config when disabled
+  ansible.builtin.file:
+    path: /etc/vps-scaffold/deploy-trigger.env
+    state: absent
+  when: not deploy_push_trigger | bool
+
+- name: Enable or disable the deploy-trigger subscriber
+  ansible.builtin.systemd:
+    name: deploy-trigger.service
+    enabled: "{{ deploy_push_trigger | bool }}"
+    state: "{{ 'started' if deploy_push_trigger | bool else 'stopped' }}"
+    daemon_reload: true
+  when: ansible_facts['virtualization_type'] | default('') not in ['docker', 'container', 'lxc']
+  tags:
+    - molecule-notest
+
+- name: Restart deploy-trigger on config change
+  ansible.builtin.systemd:
+    name: deploy-trigger.service
+    state: restarted
+  when:
+    - deploy_push_trigger | bool
+    - deploy_trigger_conf is changed
+    - ansible_facts['virtualization_type'] | default('') not in ['docker', 'container', 'lxc']
+  tags:
+    - molecule-notest

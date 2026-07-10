@@ -501,6 +501,23 @@
     - baseline_enable_aide | bool
     - baseline_cis_l2_audit_rules | bool
 
+# The check races the trusted-channel acknowledgment: a deploy/apt run changes
+# monitored paths, the debounced re-baseline acknowledges minutes later, and a
+# check landing in between pages for legitimate churn (hourly deploy windows
+# are jittered across the whole hour, so no schedule avoids it). Hold the
+# check while a re-baseline is armed or running; see the helper for why an
+# intruder can't abuse the wait.
+- name: Install AIDE wait-for-rebaseline ExecStartPre helper
+  ansible.builtin.copy:
+    src: aide-wait-for-rebaseline
+    dest: /usr/local/bin/aide-wait-for-rebaseline
+    owner: root
+    group: root
+    mode: "0755"
+  when:
+    - baseline_enable_aide | bool
+    - baseline_cis_l2_audit_rules | bool
+
 - name: Ensure dailyaidecheck.service drop-in directory exists
   ansible.builtin.file:
     path: /etc/systemd/system/dailyaidecheck.service.d
@@ -520,10 +537,14 @@
     mode: "0644"
     content: |
       # Managed by Ansible (baseline-hardening role)
-      # The dailyaidecheck wrapper exits 0 even when AIDE finds changes; re-assert
-      # that finding as the unit's exit status so OnFailure=notify@… (notify role)
-      # pushes an alert. See /usr/local/bin/aide-fail-on-change.
+      # ExecStartPre ('+' = run privileged, outside the unit's sandbox): hold
+      # the check while a deploy/apt re-baseline is pending so it doesn't page
+      # on churn the re-baseline is about to acknowledge.
+      # ExecStartPost: the dailyaidecheck wrapper exits 0 even when AIDE finds
+      # changes; re-assert that finding as the unit's exit status so
+      # OnFailure=notify@… (notify role) pushes an alert.
       [Service]
+      ExecStartPre=+/usr/local/bin/aide-wait-for-rebaseline
       ExecStartPost=/usr/local/bin/aide-fail-on-change
   notify: Reload systemd daemon
   when:

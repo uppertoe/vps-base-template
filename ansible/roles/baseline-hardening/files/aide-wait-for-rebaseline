@@ -1,0 +1,47 @@
+#!/bin/bash
+# aide-wait-for-rebaseline — hold the daily AIDE check while a trusted-channel
+# re-baseline is pending or running (ExecStartPre of dailyaidecheck.service).
+#
+# The check races the acknowledgment flow: a deploy or apt run changes
+# monitored paths, then the debounced aide-rebaseline timer records and
+# acknowledges the change minutes later. A check landing inside that window
+# pages for legitimate churn (seen live 2026-07-10 02:31 UTC: check failed on
+# deploy churn the 03:11 re-baseline then acknowledged). Hourly deploy windows
+# are jittered across the whole hour, so no fixed schedule avoids this.
+#
+# Waiting is safe: only root arms these timers (vps-deploy, the dpkg
+# post-invoke hook), so an intruder cannot arm them to postpone detection —
+# and we proceed regardless after 30 minutes. Fail-open: if unit state can't
+# be read, run the check rather than block it.
+set -u
+
+deadline=$(( $(date +%s) + 1800 ))
+
+state() { systemctl show -p ActiveState --value "$1" 2>/dev/null || echo unknown; }
+
+pending() {
+  # Armed OnActiveSec timers report "active" (waiting) and go inactive once
+  # elapsed; the service is "active"/"activating" while a re-baseline runs.
+  for u in aide-rebaseline-after-deploy.timer \
+           aide-rebaseline-after-apt.timer \
+           aide-rebaseline.service; do
+    case "$(state "$u")" in
+      active|activating|deactivating) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+waited=0
+while pending; do
+  if [ "$(date +%s)" -ge "$deadline" ]; then
+    logger -t aide-wait-for-rebaseline \
+      "re-baseline still pending after 30 min; running the check anyway"
+    exit 0
+  fi
+  waited=1
+  sleep 30
+done
+[ "$waited" -eq 1 ] && logger -t aide-wait-for-rebaseline \
+  "held the daily check until a pending re-baseline completed"
+exit 0

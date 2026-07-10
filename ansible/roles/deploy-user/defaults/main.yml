@@ -67,3 +67,21 @@ deploy_trust_github_merges: true
 # Weekly awareness alert when the scaffold submodule is behind upstream main.
 scaffold_drift_check: true
 scaffold_drift_schedule: "Mon *-*-* 07:05:00"
+
+# --- Push-to-deploy trigger ------------------------------------------------
+# Event-driven complement to the hourly auto-deploy timer: a server-repo
+# GitHub workflow publishes a ping to an unguessable ntfy topic when main
+# moves, and the deploy-trigger subscriber starts auto-deploy immediately
+# (~2 min push-to-live for the compose/Caddy layer instead of <=1h). The ping
+# carries NO authority: auto-deploy still fetches, verifies the signed HEAD,
+# and skips when unchanged — a forged ping is a rate-limited no-op fetch.
+# Opt-in per host; needs the bundled apps/ntfy (or any reachable ntfy) with a
+# read token for the topic. See apps/ntfy in the server-repo template for the
+# user/token bootstrap, and add the matching publish workflow + secret there.
+deploy_push_trigger: false
+# Full topic URL, e.g. "http://127.0.0.1:8080/<unguessable-topic>" when the
+# box's own ntfy serves the topic (subscription never leaves the host).
+deploy_push_trigger_url: ""
+# ntfy token with READ access to that topic (publish uses a separate token,
+# held only as a GitHub Actions secret).
+deploy_push_trigger_token: ""

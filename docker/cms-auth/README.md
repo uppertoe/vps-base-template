@@ -10,7 +10,9 @@ token to the CMS popup via `postMessage`.
 any repo they can reach — every site points its CMS config at the same
 `cms-auth.<DOMAIN>`. Source/image: `ghcr.io/uppertoe/sveltia-cms-auth` (a small
 stateless Go service; the token is only ever posted to an origin on an explicit
-allow-list, never `'*'`).
+allow-list, never `'*'`; per-client rate limiting on the public endpoints; and
+the caddy snippet `log_skip`s `/callback` so the single-use OAuth code never
+reaches the access log).
 
 It is **public** by design (GitHub redirects a browser to `/callback`), so it is
 **not** behind the login wall — protection is GitHub OAuth + the origin

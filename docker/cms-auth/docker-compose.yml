@@ -11,7 +11,7 @@ services:
   cms-auth:
     # Pin the digest from the image's registry (Renovate keeps it current):
     #   docker buildx imagetools inspect ghcr.io/uppertoe/sveltia-cms-auth:latest
-    image: ghcr.io/uppertoe/sveltia-cms-auth:latest@sha256:ab5bbb2538c157de93a43b117c1f31012d5b7cb8c48628d30368b6bab7106fe2
+    image: ghcr.io/uppertoe/sveltia-cms-auth:latest@sha256:69cff0f381e3615f56d6dd3bedca7cd4372401ac63995384a42d85b9af851ac2
     restart: unless-stopped
     env_file:
       - path: ./.env

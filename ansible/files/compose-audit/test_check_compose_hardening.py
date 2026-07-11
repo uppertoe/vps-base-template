@@ -49,6 +49,81 @@ CASES = [
 ]
 
 
+def netc(service, networks, image="app:1"):
+    """Synthetic inspected container for network-topology tests."""
+    return {
+        "HostConfig": {},
+        "Mounts": [],
+        "Config": {
+            "Image": image,
+            "Labels": {"com.docker.compose.service": service},
+        },
+        "NetworkSettings": {"Networks": {n: {} for n in networks}},
+    }
+
+
+# (name, {container_name: container}, expected {name: {key: bool}})
+NET_CASES = [
+    (
+        "healthy estate: each app on its own proxy net, planka+db on planka_internal",
+        {
+            "caddy": netc("caddy", ["planka_proxy", "auth_proxy"], "caddy:2"),
+            "planka": netc("planka", ["planka_proxy", "planka_internal"]),
+            "planka-db": netc("planka-db", ["planka_internal"], "postgres:18-alpine"),
+            "auth": netc("auth", ["auth_proxy"]),
+        },
+        {
+            "planka": {"proxy_network_exclusive": True, "internal_network_isolated": True},
+            "planka-db": {"proxy_network_exclusive": True, "internal_network_isolated": True},
+            "auth": {"proxy_network_exclusive": True, "internal_network_isolated": True},
+        },
+    ),
+    (
+        # The bug this control exists for: the invite portal put on Planka's
+        # internal network can forge Remote-* straight to the Planka app.
+        "portal shares planka_internal with the planka app -> internal isolation fails",
+        {
+            "caddy": netc("caddy", ["planka_proxy", "invite_proxy"], "caddy:2"),
+            "planka": netc("planka", ["planka_proxy", "planka_internal"]),
+            "planka-db": netc("planka-db", ["planka_internal"], "postgres:18-alpine"),
+            "invite": netc("invite", ["invite_proxy", "planka_internal"]),
+        },
+        {
+            "planka": {"internal_network_isolated": False},
+            "invite": {"internal_network_isolated": False},
+            "planka-db": {"internal_network_isolated": False},
+        },
+    ),
+    (
+        # The fix: a dedicated db-only network. Portal reaches the db; no app
+        # peer shares an internal network.
+        "portal on a dedicated invite_db with only planka-db -> passes",
+        {
+            "caddy": netc("caddy", ["planka_proxy", "invite_proxy"], "caddy:2"),
+            "planka": netc("planka", ["planka_proxy", "planka_internal"]),
+            "planka-db": netc("planka-db", ["planka_internal", "invite_db"], "postgres:18-alpine"),
+            "invite": netc("invite", ["invite_proxy", "invite_db"]),
+        },
+        {
+            "planka": {"internal_network_isolated": True},
+            "invite": {"internal_network_isolated": True},
+        },
+    ),
+    (
+        "two apps share a proxy network -> proxy exclusivity fails",
+        {
+            "caddy": netc("caddy", ["shared_proxy"], "caddy:2"),
+            "a": netc("a", ["shared_proxy"]),
+            "b": netc("b", ["shared_proxy"]),
+        },
+        {
+            "a": {"proxy_network_exclusive": False},
+            "b": {"proxy_network_exclusive": False},
+        },
+    ),
+]
+
+
 def main():
     fails = 0
     for name, container, key, want in CASES:
@@ -58,7 +133,21 @@ def main():
             print(f"[FAIL] {name}: {key}={got} (want {want})")
         else:
             print(f"[OK] {name}: {key}={got}")
-    print(f"\n{len(CASES) - fails}/{len(CASES)} passed")
+
+    total = len(CASES)
+    for name, inspected, expected in NET_CASES:
+        got = cch.network_controls(inspected)
+        for cname, keys in expected.items():
+            for key, want in keys.items():
+                total += 1
+                actual = got.get(cname, {}).get(key)
+                if actual is not want:
+                    fails += 1
+                    print(f"[FAIL] {name}: {cname}.{key}={actual} (want {want})")
+                else:
+                    print(f"[OK] {name}: {cname}.{key}={actual}")
+
+    print(f"\n{total - fails}/{total} passed")
     return 1 if fails else 0
 
 

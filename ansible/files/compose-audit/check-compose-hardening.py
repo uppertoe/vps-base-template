@@ -115,6 +115,19 @@ PROXY_CONTROLS = [
     ("scaffold app: sole app on its proxy networks", "proxy_network_exclusive"),
 ]
 
+# Internal-tier isolation: a NON-proxy (internal) network is meant to connect
+# ONE app to its own database tier and nothing else. Two apps sharing an
+# internal network can reach each other's backends directly and forge the
+# Remote-* identity headers, bypassing forward_auth — exactly the risk
+# proxy_network_exclusive guards against, but on a network Caddy is NOT on, so
+# that check never examines it (its blind spot). DB-image containers on the
+# network don't count as apps (a shared db tier is the whole point); the
+# invariant is at most one NON-db app per internal network. Document a
+# deliberate multi-app internal network in the exceptions file.
+INTERNAL_NET_CONTROLS = [
+    ("scaffold app: sole app on its internal networks", "internal_network_isolated"),
+]
+
 
 def is_db_container(c):
     image = ((c.get("Config") or {}).get("Image") or "").lower()
@@ -192,6 +205,55 @@ def container_networks(c):
     return set(((c.get("NetworkSettings") or {}).get("Networks") or {}).keys())
 
 
+def network_controls(inspected):
+    """Cross-container network-topology controls (pure — no docker calls).
+
+    Given {name: inspected_container}, returns {name: {control_key: bool}} for
+    every app container (Caddy and one-shot init containers excluded):
+
+    - proxy_network_exclusive: no Caddy-reachable (proxy) network this app is
+      on also carries another app container.
+    - internal_network_isolated: no NON-proxy (internal) network this app is on
+      carries another NON-db app container.
+
+    Both defend the same invariant (an app's peers on a shared network can
+    forge Remote-* past forward_auth) on the two network classes.
+    """
+    proxy_networks = set()
+    for c in inspected.values():
+        if compose_service(c) == "caddy":
+            proxy_networks.update(container_networks(c))
+
+    # apps_per_net counts every app container (db included) — for the proxy
+    # check, where a shared proxy network is always wrong. nondb_apps_per_net
+    # excludes db images — for the internal check, where an app sharing a
+    # network with its OWN db tier is expected and fine.
+    apps_per_net = {}
+    nondb_apps_per_net = {}
+    for c in inspected.values():
+        if compose_service(c) == "caddy" or is_init_container(c):
+            continue
+        for net in container_networks(c):
+            apps_per_net[net] = apps_per_net.get(net, 0) + 1
+            if not is_db_container(c):
+                nondb_apps_per_net[net] = nondb_apps_per_net.get(net, 0) + 1
+
+    out = {}
+    for name, c in inspected.items():
+        if compose_service(c) == "caddy" or is_init_container(c):
+            continue
+        nets = container_networks(c)
+        out[name] = {
+            "proxy_network_exclusive": not any(
+                apps_per_net.get(net, 0) > 1 for net in nets & proxy_networks
+            ),
+            "internal_network_isolated": not any(
+                nondb_apps_per_net.get(net, 0) > 1 for net in nets - proxy_networks
+            ),
+        }
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--json")
@@ -224,25 +286,16 @@ def main():
         if compose_service(c) == "caddy":
             proxy_networks.update(container_networks(c))
 
-    # Count app containers (everything but Caddy itself and one-shot init
-    # containers) per network, to assert proxy networks are per-app exclusive.
-    network_app_count = {}
-    for c in inspected.values():
-        if compose_service(c) == "caddy" or is_init_container(c):
-            continue
-        for net in container_networks(c):
-            network_app_count[net] = network_app_count.get(net, 0) + 1
+    # Cross-container network-topology controls (proxy + internal isolation).
+    net_controls = network_controls(inspected)
 
     for name in names:
         c = inspected[name]
         results = evaluate(c)
         controls = list(INIT_CONTROLS if is_init_container(c) else CONTROLS)
         if not is_init_container(c) and compose_service(c) != "caddy":
-            results["proxy_network_exclusive"] = not any(
-                network_app_count.get(net, 0) > 1
-                for net in container_networks(c) & proxy_networks
-            )
-            controls += PROXY_CONTROLS
+            results.update(net_controls[name])
+            controls += PROXY_CONTROLS + INTERNAL_NET_CONTROLS
         if is_db_container(c):
             results.update(evaluate_db(c, proxy_networks))
             controls += DB_CONTROLS
@@ -274,7 +327,7 @@ def main():
             fh.write("# Container runtime (CIS Docker §5) audit\n\n")
             fh.write(f"{s['pass']} pass, {s['warn']} warn, {s['excepted']} excepted\n\n")
             cols = []
-            for _, k in CONTROLS + INIT_CONTROLS + PROXY_CONTROLS + DB_CONTROLS:
+            for _, k in CONTROLS + INIT_CONTROLS + PROXY_CONTROLS + INTERNAL_NET_CONTROLS + DB_CONTROLS:
                 if k not in cols:
                     cols.append(k)
             fh.write("| container | " + " | ".join(cols) + " |\n")

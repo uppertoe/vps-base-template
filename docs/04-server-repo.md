@@ -202,3 +202,15 @@ scaffold-owned and domain-agnostic, so a server gets it by adding a small
 the one-line caddy route) and enabling the include. Full instructions,
 copy-paste blocks, and how to add deployment-specific links:
 [`docker/dashboard/README.md`](../docker/dashboard/README.md).
+
+## Optional: Sveltia CMS OAuth relay
+
+For Git-backed in-browser editing of Hugo (or other) sites with
+[Sveltia CMS](https://github.com/sveltia/sveltia-cms), the scaffold ships an
+opt-in templated app: a small stateless GitHub OAuth relay at `cms-auth.<DOMAIN>`
+that performs the `code`→token exchange the CMS can't do in the browser. **One
+relay serves every site** (the token is the editor's own). Copy
+`docker/cms-auth/` into `apps/cms-auth/` and follow
+[`docker/cms-auth/README.md`](../docker/cms-auth/README.md): create a GitHub
+OAuth App, pin the image, fill `.env` (`ALLOWED_ORIGINS` is the token
+allow-list), and enable the include. Image: `ghcr.io/uppertoe/sveltia-cms-auth`.

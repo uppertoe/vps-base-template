@@ -148,10 +148,38 @@ bash backup/tests/integration/run_tests.sh
 | `test_partial_failure_continues` | A bad service fails; other services still back up |
 | `test_optional_service_skips_stopped_container` | `OPTIONAL=true` skips gracefully, exits 0 |
 | `test_list_snapshots` | `--list` shows snapshots for a service |
+| `test_retention_selfheals_stale_lock` | A lock orphaned by an unclean interruption is cleared unaided |
 
 The `test_restore_rollback_on_failure` and `test_partial_failure_continues`
 tests are the most important — they validate the reliability fixes in the
 backup scripts (rollback on failure, per-service failure accumulation).
+
+
+## Testing rigour: the four escape classes
+
+Every test escape in this platform's history falls into one of four classes.
+When adding or reviewing a check, ask which of these it covers — and which it
+silently doesn't:
+
+1. **State transitions.** A check that boots a service on a fresh volume
+   proves "vN+1 starts", not "vN+1 starts on vN's data" (the postgres 18
+   escape, 2026-07-10). Upgrades are dynamic; test the transition, not just
+   the destination.
+2. **Fault injection.** Happy-path suites rot silently: the reboot drill
+   validated clean reboots while an unclean reboot hung boot on cryptswap;
+   the backup suite validated completed runs while a stale lock wedged
+   retention. Kill things mid-flight in tests (see
+   `test_retention_selfheals_stale_lock`).
+3. **Guards without proof.** A CI check everyone believes covers something it
+   doesn't is worse than no check. THE CONVENTION: **a new CI guard ships
+   with evidence it fails on the defect it guards** — re-inject the bug (in a
+   scratch clone or test fixture) and put the red run in the PR body. While
+   red-teaming, verify the object under test first (grep the version/tag you
+   think you're testing — a stale base once defeated three red-teams in a
+   row by testing the wrong postgres).
+4. **Monitor liveness.** Every check needs an answer to "who notices when
+   THIS dies?" — an OnFailure hook, a drift check, a dead-man, or an explicit
+   accepted risk. A silently-dead check is class 3 in slow motion.
 
 ---
 

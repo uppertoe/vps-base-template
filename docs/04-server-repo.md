@@ -192,6 +192,17 @@ docker compose up -d
 docker compose exec caddy caddy trust   # once per machine
 ```
 
+## Optional: admin dashboard
+
+The scaffold ships an opt-in static admin hub at `admin.<DOMAIN>` — a card grid
+linking to the estate's management surfaces (User portal, SSO), served by
+`busybox httpd` behind `import protected_admin`. The page shell is
+scaffold-owned and domain-agnostic, so a server gets it by adding a small
+`apps/dashboard/` (a §5 compose that mounts `scaffold/docker/dashboard/www` +
+the one-line caddy route) and enabling the include. Full instructions,
+copy-paste blocks, and how to add deployment-specific links:
+[`docker/dashboard/README.md`](../docker/dashboard/README.md).
+
 ## Optional: Sveltia CMS OAuth relay
 
 For Git-backed in-browser editing of Hugo (or other) sites with

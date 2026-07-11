@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<!--
+  Admin dashboard shell (scaffold-provided).
+
+  A static admin hub served by busybox httpd behind the gateway admin guard
+  (import protected_admin dashboard:8080). It derives the base domain from the
+  browser, so it works unmodified on any deployment: the page is served at
+  admin.<DOMAIN>, and each card's href is built from location.hostname at load.
+  Nothing here is hardcoded to a specific domain.
+
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │  TO ADD / CHANGE LINKS: edit the LINKS array in the <script id="cfg">  │
+  │  block just below. One object per card. That is the only edit needed.  │
+  └──────────────────────────────────────────────────────────────────────┘
+
+  To ship deployment-specific links, copy this file to your server repo at
+  apps/dashboard/www/index.html, edit LINKS, and point the compose mount at
+  ./www instead of the scaffold copy. See docker/dashboard/README.md.
+-->
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Admin</title>
+  <link rel="icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAyNCAyNCc+PHJlY3Qgd2lkdGg9JzI0JyBoZWlnaHQ9JzI0JyByeD0nNScgZmlsbD0nIzA3NTdiYScvPjxjaXJjbGUgY3g9JzEyJyBjeT0nOScgcj0nMy4zJyBmaWxsPScjZmZmJy8+PHBhdGggZD0nTTUuNSAxOWE2LjUgNi41IDAgMCAxIDEzIDBaJyBmaWxsPScjZmZmJy8+PC9zdmc+">
+
+  <!-- ===================================================================== -->
+  <!--  EDIT HERE — your admin links. One object per card.                    -->
+  <!--    sub   (required) subdomain: card links to https://<sub>.<DOMAIN>    -->
+  <!--    path  (optional) appended to the URL, e.g. "/admin/"                -->
+  <!--    name  (required) card title                                        -->
+  <!--    desc  (optional) one-line description                              -->
+  <!--    icon  (optional) one of: users, lock, board, bell, book, chart,    -->
+  <!--                     server, key, beaker, mic, layout, link (default)   -->
+  <!--    group (optional) section heading; defaults to "Administration"     -->
+  <!-- ===================================================================== -->
+  <script id="cfg">
+    var LINKS = [
+      { sub: "users", name: "User portal",   icon: "users",
+        desc: "Invite, edit access, offboard SSO users" },
+      { sub: "auth",  path: "/admin/",        name: "Single sign-on", icon: "lock",
+        desc: "Login wall admin — groups, invite codes & 2FA" },
+    ];
+  </script>
+
+  <style>
+    :root {
+      --fg:#1b1f24; --muted:#57606a; --faint:#8b949e; --line:#d8dee4;
+      --accent:#0757ba; --accent-soft:rgba(7,87,186,0.08); --bg:#ffffff;
+      --soft:#f6f8fa; --card:#ffffff; --shadow:0 1px 2px rgba(27,31,36,0.06);
+      --shadow-lift:0 6px 24px rgba(27,31,36,0.10);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --fg:#e6edf3; --muted:#9ea7b3; --faint:#6e7681; --line:#2a3038;
+        --accent:#58a6ff; --accent-soft:rgba(88,166,255,0.12); --bg:#0d1117;
+        --soft:#161b22; --card:#11161d; --shadow:0 1px 2px rgba(0,0,0,0.4);
+        --shadow-lift:0 8px 28px rgba(0,0,0,0.55);
+      }
+    }
+    :root[data-theme="light"] {
+      --fg:#1b1f24; --muted:#57606a; --faint:#8b949e; --line:#d8dee4;
+      --accent:#0757ba; --accent-soft:rgba(7,87,186,0.08); --bg:#ffffff;
+      --soft:#f6f8fa; --card:#ffffff; --shadow:0 1px 2px rgba(27,31,36,0.06);
+      --shadow-lift:0 6px 24px rgba(27,31,36,0.10);
+    }
+    :root[data-theme="dark"] {
+      --fg:#e6edf3; --muted:#9ea7b3; --faint:#6e7681; --line:#2a3038;
+      --accent:#58a6ff; --accent-soft:rgba(88,166,255,0.12); --bg:#0d1117;
+      --soft:#161b22; --card:#11161d; --shadow:0 1px 2px rgba(0,0,0,0.4);
+      --shadow-lift:0 8px 28px rgba(0,0,0,0.55);
+    }
+    * { box-sizing:border-box; }
+    html { -webkit-text-size-adjust:100%; }
+    body {
+      margin:0; color:var(--fg); background:var(--bg);
+      font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+      -webkit-font-smoothing:antialiased;
+    }
+    .wrap { max-width:52rem; margin:0 auto; padding:0 1.25rem; }
+
+    header { border-bottom:1px solid var(--line); background:color-mix(in srgb, var(--soft) 70%, transparent); position:sticky; top:0; backdrop-filter:saturate(1.4) blur(8px); z-index:5; }
+    .bar { display:flex; align-items:center; gap:0.6rem; padding:0.85rem 0; }
+    .bar .logo { width:1.7rem; height:1.7rem; flex:none; }
+    .bar .title { font-weight:700; letter-spacing:-0.01em; }
+    .bar-right { margin-left:auto; display:flex; align-items:center; gap:0.6rem; min-width:0; }
+    .host-tag { font-size:0.8rem; color:var(--muted); background:var(--soft); border:1px solid var(--line); border-radius:999px; padding:0.15rem 0.7rem; max-width:16rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .signout { display:inline-flex; align-items:center; gap:0.4rem; flex:none; font-size:0.85rem; font-weight:550; color:var(--fg); text-decoration:none; border:1px solid var(--line); background:var(--card); border-radius:8px; padding:0.35rem 0.7rem; transition:border-color .15s ease, color .15s ease, background .15s ease; }
+    .signout:hover { border-color:var(--accent); color:var(--accent); }
+    .signout:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+    .signout svg { width:1rem; height:1rem; }
+    @media (max-width:30rem) { .host-tag { display:none; } .signout span { display:none; } .signout { padding:0.4rem; } }
+
+    main { padding:2.4rem 0 4rem; }
+    .hero h1 { font-size:1.7rem; line-height:1.2; letter-spacing:-0.02em; margin:0 0 0.4rem; }
+    .hero p { color:var(--muted); margin:0; max-width:34rem; }
+    .hero p code { background:var(--soft); border:1px solid var(--line); border-radius:5px; padding:0.05em 0.4em; font-size:0.85em; color:var(--fg); }
+
+    .section-label { display:flex; align-items:center; gap:0.6rem; margin:2.2rem 0 0.9rem; }
+    .section-label span { font-size:0.72rem; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; color:var(--faint); white-space:nowrap; }
+    .section-label::after { content:""; flex:1; height:1px; background:var(--line); }
+
+    /* auto-fit (not auto-fill) so few cards stretch to fill the row instead of
+       leaving empty tracks; an 18rem min caps this 52rem container at 2 columns
+       so cards stay wide enough to show a full host without truncation. */
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(18rem,1fr)); gap:0.85rem; }
+
+    a.card {
+      position:relative; display:flex; gap:0.85rem; align-items:flex-start;
+      text-decoration:none; color:inherit; background:var(--card);
+      border:1px solid var(--line); border-radius:13px; padding:1.05rem 1.1rem;
+      box-shadow:var(--shadow);
+      transition:border-color .15s ease, transform .15s ease, box-shadow .15s ease;
+    }
+    a.card:hover { border-color:var(--accent); transform:translateY(-2px); box-shadow:var(--shadow-lift); }
+    a.card:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+
+    a.card .ico {
+      flex:none; width:2.5rem; height:2.5rem; border-radius:9px;
+      background:var(--accent-soft); color:var(--accent);
+      display:flex; align-items:center; justify-content:center;
+      transition:background .15s ease, transform .15s ease;
+    }
+    a.card:hover .ico { transform:scale(1.04); }
+    a.card .ico svg { width:1.35rem; height:1.35rem; }
+
+    a.card .body { min-width:0; flex:1; padding-right:1.1rem; }
+    a.card .name { font-weight:640; font-size:1.02rem; letter-spacing:-0.01em; }
+    a.card .desc { color:var(--muted); font-size:0.88rem; margin-top:0.05rem; }
+    /* Single line: ellipsize a long host instead of wrapping it. Full value in title. */
+    a.card .host { color:var(--faint); font-size:0.78rem; margin-top:0.4rem; font-variant-numeric:tabular-nums; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%; }
+
+    a.card .go {
+      position:absolute; top:1.05rem; right:0.95rem; width:1.05rem; height:1.05rem;
+      color:var(--faint); opacity:0; transform:translateX(-3px);
+      transition:opacity .15s ease, transform .15s ease, color .15s ease;
+    }
+    a.card:hover .go, a.card:focus-visible .go { opacity:1; transform:translateX(0); color:var(--accent); }
+
+    footer { color:var(--faint); font-size:0.8rem; padding:0 0 2.5rem; }
+    footer .lock { width:0.9em; height:0.9em; vertical-align:-0.12em; margin-right:0.35em; }
+
+    @media (prefers-reduced-motion: reduce) {
+      a.card, a.card .ico, a.card .go { transition:none; }
+      a.card:hover { transform:none; }
+    }
+  </style>
+</head>
+<body>
+<header>
+  <div class="wrap bar">
+    <svg class="logo" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+    <span class="title">Admin</span>
+    <div class="bar-right">
+      <span class="host-tag" id="host-tag" hidden></span>
+      <!-- Sign out of the gateway login wall (auth.<DOMAIN>/logout shows a
+           same-origin confirm → POST; a cross-origin POST would be CSRF-blocked). -->
+      <a class="signout" data-sub="auth" data-path="/logout" href="#">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+        <span>Sign out</span>
+      </a>
+    </div>
+  </div>
+</header>
+<main>
+  <div class="wrap">
+    <div class="hero">
+      <h1>Admin dashboard</h1>
+      <p>Management surfaces for <code id="domain">this server</code>. Everything here sits behind the admin login.</p>
+    </div>
+    <div id="sections"></div>
+  </div>
+</main>
+<footer>
+  <div class="wrap">
+    <svg class="lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>Protected by single sign-on. Sessions end when you sign out of SSO.
+  </div>
+</footer>
+<script>
+  // ---- machinery (no need to edit; add links in the LINKS array above) ----
+  (function () {
+    var ICONS = {
+      users:  '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/>',
+      lock:   '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+      board:  '<rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/>',
+      bell:   '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>',
+      book:   '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/>',
+      chart:  '<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>',
+      server: '<rect x="2" y="3" width="20" height="7" rx="2"/><rect x="2" y="14" width="20" height="7" rx="2"/><line x1="6" y1="6.5" x2="6.01" y2="6.5"/><line x1="6" y1="17.5" x2="6.01" y2="17.5"/>',
+      key:    '<circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.5 12.5 21 2m-4 0h4v4"/>',
+      beaker: '<path d="M9 3h6M10 3v6l-5 8.5A2 2 0 0 0 6.8 21h10.4a2 2 0 0 0 1.7-3.5L14 9V3"/>',
+      mic:    '<path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/>',
+      layout: '<rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/>',
+      link:   '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>'
+    };
+    var CHEVRON = '<svg class="go" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7"/><path d="M8 7h9v9"/></svg>';
+    function esc(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]; }); }
+    function svg(inner){ return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + inner + '</svg>'; }
+
+    // Render cards from LINKS, grouped by `group` (order of first appearance).
+    var links = (typeof LINKS !== 'undefined' && LINKS) || [];
+    var order = [], byGroup = {};
+    links.forEach(function (l) {
+      var g = l.group || 'Administration';
+      if (!byGroup[g]) { byGroup[g] = []; order.push(g); }
+      byGroup[g].push(l);
+    });
+    var root = document.getElementById('sections'), html = '';
+    order.forEach(function (g) {
+      html += '<div class="section-label"><span>' + esc(g) + '</span></div><div class="grid">';
+      byGroup[g].forEach(function (l) {
+        html += '<a class="card" data-sub="' + esc(l.sub) + '"' + (l.path ? ' data-path="' + esc(l.path) + '"' : '') + ' href="#">'
+          + '<span class="ico">' + svg(ICONS[l.icon] || ICONS.link) + '</span>'
+          + '<span class="body"><span class="name">' + esc(l.name) + '</span>'
+          + (l.desc ? '<div class="desc">' + esc(l.desc) + '</div>' : '')
+          + '<div class="host"></div></span>' + CHEVRON + '</a>';
+      });
+      html += '</div>';
+    });
+    root.innerHTML = html;
+
+    // The page is served at admin.<DOMAIN>; derive <DOMAIN> from the browser so
+    // nothing is hardcoded. Build every [data-sub] href (cards + sign-out) here.
+    var base = location.hostname.replace(/^admin\./, '');
+    var dom = document.getElementById('domain');
+    if (dom && base) dom.textContent = base;
+    var tag = document.getElementById('host-tag');
+    if (tag && base && base.indexOf('.') !== -1) { tag.textContent = base; tag.hidden = false; }
+    var nodes = document.querySelectorAll('[data-sub]');
+    for (var i = 0; i < nodes.length; i++) {
+      var host = nodes[i].getAttribute('data-sub') + '.' + base + (nodes[i].getAttribute('data-path') || '');
+      nodes[i].href = 'https://' + host;
+      var h = nodes[i].querySelector('.host');
+      if (h) { h.textContent = host; h.title = host; }
+    }
+  })();
+</script>
+</body>
+</html>

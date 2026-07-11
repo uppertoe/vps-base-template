@@ -266,6 +266,12 @@ run_restic_with_lock_retry() {
     fi
 
     warn "[$service_name] ${operation} hit a repository lock; retrying in ${sleep_seconds}s (attempt ${attempt}/${max_attempts})..."
+    # Clear STALE locks before retrying: restic unlock only removes locks
+    # whose owning process is verifiably gone, so it is safe against live
+    # concurrent operations — but without it, a lock orphaned by an unclean
+    # interruption mid-backup (power loss, reboot under IO pressure; seen
+    # live 2026-07-10) defeats every retry until a human intervenes.
+    restic unlock >/dev/null 2>&1 || true
     sleep "$sleep_seconds"
     sleep_seconds=$((sleep_seconds * 2))
     attempt=$((attempt + 1))

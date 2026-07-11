@@ -1,0 +1,9 @@
+# apps/cms-auth/cms-auth.caddy
+# PUBLIC OAuth relay for Sveltia CMS. GitHub redirects the browser to /callback
+# here after login, so this host must NOT sit behind the login wall. Security is
+# GitHub OAuth plus the relay's postMessage origin allow-list. One relay backs
+# every Sveltia site; each site's admin config points base_url at this host.
+# (Keep comments free of curly braces -- the render step counts braces.)
+cms-auth.{$DOMAIN} {
+	reverse_proxy cms-auth:8080
+}

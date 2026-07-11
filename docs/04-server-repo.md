@@ -191,3 +191,15 @@ cp docker-compose.override.yml.example docker-compose.override.yml
 docker compose up -d
 docker compose exec caddy caddy trust   # once per machine
 ```
+
+## Optional: Sveltia CMS OAuth relay
+
+For Git-backed in-browser editing of Hugo (or other) sites with
+[Sveltia CMS](https://github.com/sveltia/sveltia-cms), the scaffold ships an
+opt-in templated app: a small stateless GitHub OAuth relay at `cms-auth.<DOMAIN>`
+that performs the `code`→token exchange the CMS can't do in the browser. **One
+relay serves every site** (the token is the editor's own). Copy
+`docker/cms-auth/` into `apps/cms-auth/` and follow
+[`docker/cms-auth/README.md`](../docker/cms-auth/README.md): create a GitHub
+OAuth App, pin the image, fill `.env` (`ALLOWED_ORIGINS` is the token
+allow-list), and enable the include. Image: `ghcr.io/uppertoe/sveltia-cms-auth`.

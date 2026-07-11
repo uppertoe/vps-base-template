@@ -393,6 +393,42 @@ EOF
   fi
 }
 
+test_retention_selfheals_stale_lock() {
+  header "test_retention_selfheals_stale_lock"
+
+  # Plant a GENUINE stale lock: a real restic process holds its shared lock
+  # while blocked on stdin, then dies uncleanly (SIGKILL) — exactly what a
+  # reboot mid-backup leaves behind (seen live 2026-07-10, when one repo's
+  # retention then failed every hourly run until a manual unlock). The
+  # backup script's retry wrapper must clear it and complete unaided.
+  local repo="${RESTIC_REPO_DIR}/testapp" job_pid output exit_code=0 i=0
+
+  sleep 300 | RESTIC_REPOSITORY="$repo" RESTIC_PASSWORD="test-repo-password" \
+    restic backup --stdin --stdin-filename chaos >/dev/null 2>&1 &
+  job_pid=$!
+  until [[ -n "$(ls "$repo/locks" 2>/dev/null)" || "$i" -ge 100 ]]; do
+    sleep 0.2; i=$((i + 1))
+  done
+  kill -9 "$job_pid" 2>/dev/null || true
+  wait "$job_pid" 2>/dev/null || true
+  pkill -f "sleep 300" 2>/dev/null || true
+
+  if [[ -z "$(ls "$repo/locks" 2>/dev/null)" ]]; then
+    fail "test setup: no stale lock was left behind"
+    return
+  fi
+
+  output="$(BACKUP_CONFIG_DIR="$CONFIG_DIR" "$BACKUP_SCRIPT" --service testapp 2>&1)" || exit_code=$?
+
+  if [[ "$exit_code" -ne 0 ]]; then
+    fail "backup should self-heal a stale lock without intervention (exit=$exit_code)"
+  elif [[ -n "$(ls "$repo/locks" 2>/dev/null)" ]]; then
+    fail "stale lock still present after the run"
+  else
+    pass "stale lock was cleared unaided and backup+retention succeeded"
+  fi
+}
+
 test_restore_into_alternate_db() {
   header "test_restore_into_alternate_db"
   local target="testapp_restore_test"
@@ -915,6 +951,7 @@ test_retention_runs_clean
 test_verify_runs_retention_prune
 test_verify_only_does_not_create_snapshot
 test_retention_retries_on_lock_contention
+test_retention_selfheals_stale_lock
 test_restore_into_alternate_db
 test_verify_passes
 test_restore_rollback_on_failure

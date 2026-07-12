@@ -11,7 +11,10 @@
 
   ┌──────────────────────────────────────────────────────────────────────┐
   │  TO ADD / CHANGE LINKS: edit the LINKS array in the <script id="cfg">  │
-  │  block just below. One object per card. That is the only edit needed.  │
+  │  block just below. One object per card. The plain-English "How access  │
+  │  works here" explainer is static HTML further down (search "explain")  │
+  │  and is deliberately generic — reword it in a server-repo copy if a    │
+  │  deployment names specific apps (see docker/dashboard/README.md).      │
   └──────────────────────────────────────────────────────────────────────┘
 
   To ship deployment-specific links, copy this file to your server repo at
@@ -37,10 +40,15 @@
   <!-- ===================================================================== -->
   <script id="cfg">
     var LINKS = [
-      { sub: "users", name: "User portal",   icon: "users",
-        desc: "Invite, edit access, offboard SSO users" },
-      { sub: "auth",  path: "/admin/",        name: "Single sign-on", icon: "lock",
-        desc: "Login wall admin — groups, invite codes & 2FA" },
+      { sub: "auth", path: "/admin/", name: "Email login settings", icon: "lock",
+        group: "Staff access — email login",
+        desc: "Admins, invite codes and two-factor for the email sign-in" },
+      { sub: "users", name: "User accounts", icon: "users",
+        group: "Named accounts — single sign-on",
+        desc: "Create, edit and remove people's app sign-ins" },
+      { sub: "sso", name: "Sign-in & 2FA (SSO)", icon: "key",
+        group: "Named accounts — single sign-on",
+        desc: "Where people reset a password or set up their authenticator app" },
     ];
   </script>
 
@@ -96,6 +104,25 @@
     .hero h1 { font-size:1.7rem; line-height:1.2; letter-spacing:-0.02em; margin:0 0 0.4rem; }
     .hero p { color:var(--muted); margin:0; max-width:34rem; }
     .hero p code { background:var(--soft); border:1px solid var(--line); border-radius:5px; padding:0.05em 0.4em; font-size:0.85em; color:var(--fg); }
+
+    /* Plain-English "How access works" explainer. Two lanes side by side,
+       stacking on narrow screens, with a rule-of-thumb footer. Reuses the theme
+       variables so it tracks light/dark. Deliberately generic — a deployment
+       that names specific apps should reword it in a server-repo copy. */
+    .explain { margin-top:1.9rem; border:1px solid var(--line); border-radius:14px; background:var(--card); box-shadow:var(--shadow); overflow:hidden; }
+    .explain-head { font-weight:640; padding:0.95rem 1.2rem; border-bottom:1px solid var(--line); background:color-mix(in srgb, var(--soft) 60%, transparent); }
+    .explain-grid { display:grid; grid-template-columns:1fr 1fr; }
+    .lane { padding:1.15rem 1.2rem; }
+    .lane + .lane { border-left:1px solid var(--line); }
+    @media (max-width:34rem) { .explain-grid { grid-template-columns:1fr; } .lane + .lane { border-left:none; border-top:1px solid var(--line); } }
+    .lane-tag { display:inline-block; font-size:0.7rem; font-weight:600; text-transform:uppercase; letter-spacing:0.07em; color:var(--accent); background:var(--accent-soft); border-radius:999px; padding:0.18rem 0.6rem; margin-bottom:0.65rem; }
+    .lane-lead { margin:0 0 0.55rem; font-weight:560; }
+    .lane p { margin:0 0 0.6rem; color:var(--muted); font-size:0.92rem; }
+    .lane p:last-child { margin-bottom:0; }
+    .lane code { background:var(--soft); border:1px solid var(--line); border-radius:5px; padding:0.05em 0.4em; font-size:0.85em; color:var(--fg); }
+    .lane strong { color:var(--fg); font-weight:600; }
+    .explain-rule { margin:0; padding:0.9rem 1.2rem; border-top:1px solid var(--line); font-size:0.9rem; color:var(--muted); background:color-mix(in srgb, var(--soft) 40%, transparent); }
+    .explain-rule strong { color:var(--fg); }
 
     .section-label { display:flex; align-items:center; gap:0.6rem; margin:2.2rem 0 0.9rem; }
     .section-label span { font-size:0.72rem; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; color:var(--faint); white-space:nowrap; }
@@ -169,12 +196,47 @@
       <h1>Admin dashboard</h1>
       <p>Management surfaces for <code id="domain">this server</code>. Everything here sits behind the admin login.</p>
     </div>
+
+    <!-- Plain-English explainer for non-technical administrators. Two ways in:
+         the email login wall (membership by email domain) and named single
+         sign-on accounts. Deliberately generic — a deployment that names specific
+         apps (task boards, a CMS, etc.) should reword this in a server-repo copy;
+         see docker/dashboard/README.md. -->
+    <section class="explain" aria-label="How access works here">
+      <div class="explain-head">How access works here</div>
+      <div class="explain-grid">
+        <div class="lane">
+          <div class="lane-tag">Staff access</div>
+          <p class="lane-lead">For <strong>reading</strong> team information.</p>
+          <p>Anyone with an approved email address can get in: they receive a
+             one-time code in their inbox, so there is no separate account or
+             password to set up. Use this for the read-only pages the whole team
+             should see.</p>
+          <p>You manage who is an admin, invite codes, and admin two-factor under
+             <strong>Email login settings</strong>.</p>
+        </div>
+        <div class="lane">
+          <div class="lane-tag">Named accounts</div>
+          <p class="lane-lead">For apps people <strong>log into and change</strong>.</p>
+          <p>Some apps need a real account for each named person, with a password
+             and an authenticator app, rather than just an email address. These
+             are set up individually per person.</p>
+          <p>You create and remove these under <strong>User accounts</strong>;
+             people look after their own password and two-factor under
+             <strong>Sign-in &amp; 2FA</strong>.</p>
+        </div>
+      </div>
+      <p class="explain-rule"><strong>Rule of thumb:</strong> if a page just shows
+         team information, staff access (email) covers it. If a page lets someone
+         log in and change things, it needs a named account.</p>
+    </section>
+
     <div id="sections"></div>
   </div>
 </main>
 <footer>
   <div class="wrap">
-    <svg class="lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>Protected by single sign-on. Sessions end when you sign out of SSO.
+    <svg class="lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>Protected by the admin login. Sessions end when you sign out.
   </div>
 </footer>
 <script>

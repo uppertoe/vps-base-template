@@ -15,17 +15,25 @@ a pet with no vet.
    routes, this scaffold. Lives on GitHub; nothing to do.
 2. **The recovery bundle** — everything deliberately NOT in git:
    `ansible/hosts` (inventory + tokens), the server `.env`, `apps/*/.env`,
-   `backup/config.env` and `backup/services/*.env` (including the **restic
-   repository password** — without it the offsite backups are undecryptable).
-   Create and refresh it with:
+   and the backup credentials (including the **restic repository password** —
+   without it the offsite backups are undecryptable). Create and refresh it
+   with:
 
    ```bash
-   bash scripts/make-recovery-bundle.sh
+   ssh <host> 'cd /opt/deploy && sudo scripts/make-recovery-bundle.sh'
    ```
 
-   Store the encrypted bundle somewhere that survives your laptop (cloud
-   drive, second machine); store the passphrase in a password manager. Re-run
-   after any credential rotation — a stale bundle is a quiet failure.
+   **Run it on the server, with sudo** — that is the only place holding the
+   full current set. The live `apps/*/.env` may have been edited only on the
+   box, and the restic secrets live in **`/etc/restic/` (root-only), not in the
+   deploy checkout** — a laptop-made or non-sudo bundle silently omits the
+   restic password, the one irreplaceable secret. The script refuses to write a
+   bundle that captured no `RESTIC_PASSWORD` rather than hand you a confident
+   dud; `DRY_RUN=1` previews the file list first. Store the encrypted bundle
+   somewhere that survives your laptop (a password-manager attachment, a cloud
+   drive) and store the passphrase **with it** — split across two places and
+   losing either loses everything. Re-run after any credential rotation — a
+   stale bundle is a quiet failure.
 3. **Out-of-band access** — the DNS registrar login, the VPS provider login,
    and the GitHub account. These live in the password manager, not on the box.
 

@@ -137,6 +137,33 @@ proxy networks). Both are committed like lockfiles; CI fails if they drift from
 the sources, and `audit-compose.yml` fails at runtime if two apps ever share a
 proxy network.
 
+### Static-asset caching (fingerprint to cache forever)
+
+The renderer stamps every site with a static-asset cache rule, so an app gets
+long-lived caching for free — it just has to serve **fingerprinted** asset URLs.
+A fingerprinted URL changes whenever the bytes change, so the browser may cache
+it for a year and never revalidate: no round-trip, and on a gated app (behind
+`import protected*`) no repeat hit on the `forward_auth` check either — a warm
+asset never touches the network. That is the fix for the slow-navigation feel of
+a gated app whose CSS/JS/fonts are re-fetched (or 304-revalidated) on every page
+load. Prefer this over making `/static` public: the assets stay behind the login
+wall, and invalidation is exact (by content), not a time-based guess.
+
+Two fingerprint conventions are honoured — use whichever your stack emits:
+
+| Convention | Example | Emitted by |
+|---|---|---|
+| content hash in the filename | `app.9f3a1c2b.css` | Vite, webpack, esbuild, Django `ManifestStaticFilesStorage` / WhiteNoise, Rails digests |
+| a `?v=` build tag on the URL | `coffee.css?v=9f3a1c2b` | hand-rolled cache-busting (a template helper that appends a per-file hash) |
+
+Matching either, the renderer sets `Cache-Control: private, max-age=31536000,
+immutable`. `private` (not `public`) keeps gated assets out of any shared/CDN
+cache. Both rules are scoped to static file extensions, so a *document* URL that
+carries `?v=` is never frozen, and the header is set only if the app didn't set
+its own `Cache-Control` — so an app can still override. An app that serves
+**un-fingerprinted** assets matches neither rule and keeps its existing ETag
+revalidation, so this is a no-op until the app opts in by fingerprinting.
+
 ## Gitignore conventions
 
 ```gitignore

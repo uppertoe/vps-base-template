@@ -86,6 +86,28 @@ if [[ -d "$repo_root/apps" ]]; then
           print "        ?Referrer-Policy strict-origin-when-cross-origin" >> target
           print "        ?X-Frame-Options DENY" >> target
           print "    }" >> target
+          # Static-asset caching. A *fingerprinted* asset URL changes whenever
+          # its bytes change, so the browser may cache it forever and never
+          # revalidate -- no round-trip, and on a gated app no repeat hit on the
+          # forward_auth check (a warm asset never touches the network at all).
+          # Two fingerprint conventions are honoured so any app can opt in with
+          # whatever its stack already emits:
+          #   * content hash in the filename -- app.9f3a1c2b.css
+          #     (Vite / webpack / Django ManifestStaticFilesStorage, WhiteNoise)
+          #   * a ?v= build tag -- coffee.css?v=9f3a1c2b (hand-rolled busting)
+          # Both are scoped to static file extensions, so a *document* URL that
+          # happens to carry ?v= is never frozen. "private" (not "public") keeps
+          # gated assets out of any shared/CDN cache -- they stay per-browser.
+          # ?-prefix defers to an app that sets its own Cache-Control. An app
+          # that serves un-fingerprinted assets matches neither rule and keeps
+          # its existing ETag revalidation, so this is a no-op until adopted.
+          print "    @scaffold_static_hashed path_regexp \\.[0-9a-f]{8,}\\.(?:css|js|mjs|woff2?|ttf|otf|svg|png|jpe?g|webp|avif|gif|ico)$" >> target
+          print "    header @scaffold_static_hashed ?Cache-Control \"private, max-age=31536000, immutable\"" >> target
+          print "    @scaffold_static_versioned {" >> target
+          print "        query v=*" >> target
+          print "        path *.css *.js *.mjs *.woff *.woff2 *.ttf *.otf *.svg *.png *.jpg *.jpeg *.webp *.avif *.gif *.ico" >> target
+          print "    }" >> target
+          print "    header @scaffold_static_versioned ?Cache-Control \"private, max-age=31536000, immutable\"" >> target
         }
 
         depth += opens - closes

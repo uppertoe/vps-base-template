@@ -197,8 +197,10 @@ python3 scripts/aws-logs-setup.py --profile my-aws-admin --bucket myserver-logs 
 # Secret recovery (the .env files exist only on the box otherwise):
 cp backup/services/env-files.env.example backup/services/env-files.env
 $EDITOR backup/services/env-files.env
-# >>> store THIS service's RESTIC_REPOSITORY + RESTIC_PASSWORD in your
-# >>> password manager now — it is the recovery root after a total loss.
+# >>> This service's RESTIC_REPOSITORY + RESTIC_PASSWORD is the recovery root
+# >>> after a total loss. You do not have to hand-copy it: Step 13 packages it
+# >>> (and every other not-in-git secret) into one encrypted bundle. Do that
+# >>> step — it is not optional.
 
 ansible-playbook -i ansible/hosts scaffold/ansible/site-quick.yml
 ansible-playbook -i ansible/hosts ansible/backup.yml
@@ -221,8 +223,9 @@ biggest exception.
 ## Step 12 — Evidence baseline
 
 ```bash
-# Mode-aware end-to-end smoke test:
-bash scripts/post-provision-smoke-test.sh myserver --require-backup
+# Mode-aware end-to-end smoke test. --strict also fails on a missing/stale
+# recovery bundle (Step 13) or an unconfigured alerting/log-export layer:
+bash scripts/post-provision-smoke-test.sh myserver --require-backup --strict
 # Full audit bundle (OpenSCAP L1+L2, docker-bench, compose audit, Trivy,
 # Lynis, host captures with a control-tagged INDEX):
 ansible-playbook -i ansible/hosts scaffold/ansible/audit-all.yml
@@ -233,6 +236,29 @@ ssh myserver 'sudo systemctl start vuln-scan.service restore-drill.service log-e
 Copy [templates/](templates/) into the server repo's `compliance/` directory
 and fill them in — that pack plus the `reports/` bundle is what you hand a
 reviewer (see [compliance-plan-vic-health.md](compliance-plan-vic-health.md)).
+
+## Step 13 — Recovery bundle (do this last, and after any secret change)
+
+The box is not "set-and-forget" until a total loss is survivable. Everything
+NOT in git — `ansible/hosts`, the server `.env`, every `apps/*/.env`, and the
+restic **repository password** (without which the offsite backups are
+undecryptable) — lives only on this box. Package it into one encrypted archive:
+
+```bash
+# Run ON the server, with sudo — the restic secrets in /etc/restic are
+# root-only and a laptop/non-sudo bundle silently omits them. Preview first:
+ssh myserver 'cd /opt/deploy && sudo DRY_RUN=1 scripts/make-recovery-bundle.sh'
+ssh myserver 'cd /opt/deploy && sudo scripts/make-recovery-bundle.sh'   # you choose the passphrase
+scp myserver:'~/recovery-bundle-*.tar.gz.enc' .                          # pull it off the box
+```
+
+Then store the **bundle** and its **passphrase** in your password manager as
+two separate entries (split across two places — losing either loses
+everything), and keep the bundle somewhere that survives your laptop. A
+success drops a `/opt/deploy/.recovery-bundle-last` marker; the `--strict`
+smoke test (Step 12) reports the bundle **stale** whenever a captured secret is
+newer than it — so **re-run this after any credential rotation.** The full
+rebuild drill and RTO log are in [09-recovery.md](09-recovery.md).
 
 ## Upgrading an existing instance
 

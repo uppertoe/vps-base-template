@@ -35,6 +35,24 @@
     path: "/home/{{ deploy_user }}"
     mode: "0750"
 
+# deploy_user_public_key manages deploy's authorized_keys with exclusive: true,
+# so an empty value would remove every key and lock the account out. Its default
+# is a controller-side lookup of the connection key's .pub — which resolves to
+# nothing when a site play runs ON the box (-c local, the sane path over a slow
+# operator link), where the laptop's key files don't exist. Fail with an
+# actionable message instead of shipping a broken authorized_keys.
+- name: Assert deploy public key resolved
+  ansible.builtin.assert:
+    that:
+      - (deploy_user_public_key | default('') | trim) | length > 0
+    fail_msg: >-
+      deploy_user_public_key is empty. Its default reads
+      '{{ ansible_ssh_private_key_file | default("~/.ssh/id_ed25519") }}.pub' via a
+      lookup on the CONTROL node, which finds nothing when the play runs ON the
+      box (-c local). Set deploy_user_public_key to the literal deploy public key
+      in the inventory ([servers:vars]). See docs/05-access-model.md.
+    quiet: true
+
 - name: Add SSH public key to authorized_keys
   ansible.posix.authorized_key:
     user: "{{ deploy_user }}"

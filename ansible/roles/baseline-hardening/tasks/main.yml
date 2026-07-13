@@ -427,7 +427,6 @@
         owner: root
         group: root
       loop: "{{ baseline_lax_audit_rules.stdout_lines | default([]) }}"
-      when: os_auditd_enabled | bool
       when:
         - os_auditd_enabled | bool
         - baseline_cis_l2_audit_rules | bool

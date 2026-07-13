@@ -285,6 +285,25 @@ files don't exist (and `deploy_user_public_key` manages deploy's
 authorized_keys, so a wrong fallback can swap deploy's key out from under
 you).
 
+To run a site play on the box **detached** (so a dropped operator link can't
+kill it mid-hardening), start it as a transient **systemd** unit — not
+`setsid`/`nohup &`. A non-lingering login session's user slice is torn down when
+your SSH session ends, taking a backgrounded `setsid` job with it (`setsid`
+escapes the controlling terminal, not the systemd user scope), and it dies
+silently with no output. Run it in the system manager instead:
+
+```bash
+sudo systemd-run --unit=site-run \
+  --uid=deploy --gid=deploy --setenv=HOME=/home/deploy \
+  --setenv=PYTHONUNBUFFERED=1 --property=WorkingDirectory=/opt/deploy \
+  ansible-playbook -i ansible/hosts -c local -l <host> \
+  scaffold/ansible/site-first-run.yml
+```
+
+Watch it with `journalctl -u site-run -f`; the unit survives the SSH drop, and
+`systemctl show site-run -p ExecMainStatus` is the true play exit code (0 = ok).
+Re-run after a failure needs `sudo systemctl reset-failed site-run` first.
+
 ## Suggested Variables
 
 Possible future variables:

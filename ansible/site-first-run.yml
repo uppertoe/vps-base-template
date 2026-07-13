@@ -11,6 +11,13 @@
   hosts: all
   gather_facts: true
   become: true
+  # Run pending handlers even if a later task fails the play. A config task that
+  # notifies a restart handler (e.g. docker daemon.json -> Restart docker) would
+  # otherwise lose it on failure: queued handlers are dropped, and the next
+  # (now-unchanged) run won't re-notify -- so the change is written but never
+  # applied. RCA: an interrupted first run left userland-proxy:false unapplied,
+  # leaving a stale docker-proxy that broke host->container loopback publishing.
+  force_handlers: true
   vars:
     common_run_safe_upgrade: true
     baseline_initialize_aide_database: true

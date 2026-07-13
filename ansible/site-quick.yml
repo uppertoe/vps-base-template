@@ -11,6 +11,10 @@
   hosts: all
   gather_facts: true
   become: true
+  # Run pending handlers even if a later task fails the play, so a config change
+  # that notifies a restart handler is never left written-but-unapplied. See the
+  # fuller rationale in site-first-run.yml.
+  force_handlers: true
   vars:
     common_run_safe_upgrade: false
     baseline_initialize_aide_database: false

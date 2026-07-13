@@ -33,7 +33,12 @@ a pet with no vet.
    somewhere that survives your laptop (a password-manager attachment, a cloud
    drive) and store the passphrase **with it** — split across two places and
    losing either loses everything. Re-run after any credential rotation — a
-   stale bundle is a quiet failure.
+   stale bundle is a quiet failure. A successful run drops a
+   `/opt/deploy/.recovery-bundle-last` marker; `post-provision-smoke-test.sh
+   --strict` reports the bundle **missing** or **stale** (a captured secret
+   newer than the last bundle) so the gap surfaces at the next evidence pass
+   rather than during an outage. Creating the bundle is Step 13 of the
+   provisioning runbook (docs/03), not an afterthought.
 3. **Out-of-band access** — the DNS registrar login, the VPS provider login,
    and the GitHub account. These live in the password manager, not on the box.
 

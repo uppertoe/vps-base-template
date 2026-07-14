@@ -269,7 +269,7 @@ undecryptable) — lives only on this box. Package it into one encrypted archive
 # Run ON the server, with sudo — the restic secrets in /etc/restic are
 # root-only and a laptop/non-sudo bundle silently omits them. Preview first:
 ssh myserver 'cd /opt/deploy && sudo DRY_RUN=1 scripts/make-recovery-bundle.sh'
-ssh myserver 'cd /opt/deploy && sudo scripts/make-recovery-bundle.sh'   # you choose the passphrase
+ssh -t myserver 'cd /opt/deploy && sudo scripts/make-recovery-bundle.sh'  # -t: openssl needs a TTY to read your passphrase
 scp myserver:'~/recovery-bundle-*.tar.gz.enc' .                          # pull it off the box
 ```
 

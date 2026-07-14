@@ -20,7 +20,7 @@ a pet with no vet.
    with:
 
    ```bash
-   ssh <host> 'cd /opt/deploy && sudo scripts/make-recovery-bundle.sh'
+   ssh -t <host> 'cd /opt/deploy && sudo scripts/make-recovery-bundle.sh'
    ```
 
    **Run it on the server, with sudo** — that is the only place holding the

@@ -57,6 +57,22 @@ then repeat roughly **annually** and after any structural change to
 provisioning. The point is not the ceremony — it's discovering the missing
 step while it's cheap.
 
+**Fast path — `./restore.sh`:** your server repo ships `scripts/restore.sh`,
+which automates steps 1–9 below (everything except creating the VPS and cutting
+DNS). From a fresh `git clone --recurse-submodules` of the server repo:
+
+```bash
+scripts/restore.sh <recovery-bundle.enc> <new-ip>
+scripts/restore.sh --dry-run <recovery-bundle.enc> <new-ip>   # preview
+scripts/restore.sh --list <recovery-bundle.enc>               # inspect bundle
+```
+
+Two prompts — the bundle passphrase and the new box's root credential — and
+it's resumable: re-run the same command after any mid-way failure and completed
+stages skip. The annotated manual steps below are the reference, and exactly
+what `restore.sh` executes in order (the "order matters" note is why the
+orchestrator enforces it).
+
 1. Create a fresh VPS at the provider (same Ubuntu LTS). Note the IP. Clear
    the stale SSH host key locally: `ssh-keygen -R <ip>`.
 2. Decrypt the recovery bundle into a fresh clone of the server repo:

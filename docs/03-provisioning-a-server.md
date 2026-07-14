@@ -2,6 +2,27 @@
 
 A full walkthrough from creating a VPS to a hardened, Docker-ready server.
 
+## Fast path — `./provision.sh`
+
+Your server repo ships `scripts/provision.sh`, a re-runnable orchestrator that
+chains every step below — bootstrap → hardening → AWS → backups → deploy →
+alerting → recovery bundle → strict verify — into one idempotent command:
+
+```bash
+scripts/provision.sh <host>              # <host> = your inventory alias
+scripts/provision.sh --dry-run <host>    # preview: prints each stage's skip/run
+```
+
+It prompts for at most two things — the root credential (only on the first
+bootstrap, and only if the provider gave a root password) and the
+recovery-bundle passphrase — and skips both on a converged re-run. Wire the AWS
+buckets in the same pass with `--aws-backup-bucket/--aws-backup-user` and
+`--aws-logs-bucket/--aws-logs-user` (needs an AWS admin profile via
+`--aws-profile`). You still create the VPS and cut DNS over yourself.
+
+The manual step-by-step below is the reference — what `provision.sh` runs in
+order, and the fallback when a stage needs hand-holding.
+
 ## Step 1 — Create a VPS
 
 At your hosting provider (Hetzner, DigitalOcean, Vultr, etc.):
@@ -55,7 +76,7 @@ ansible_python_interpreter=/usr/bin/python3
 If you haven't already:
 
 ```bash
-ansible-galaxy collection install -r ansible/requirements.yml
+ansible-galaxy collection install -r scaffold/ansible/requirements.yml
 ```
 
 ## Step 4 — Run the bootstrap playbook (once, as root)

@@ -138,6 +138,7 @@ sudo /usr/local/sbin/vps-deploy
 - run approved app deploy hooks
 - `docker compose pull`
 - `docker compose up -d --remove-orphans --wait`
+- `docker image prune -af` (reclaim superseded images once the new containers are healthy)
 
 ### App maintenance entrypoint
 

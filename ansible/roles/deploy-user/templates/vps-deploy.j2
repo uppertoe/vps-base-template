@@ -66,6 +66,15 @@ done
 
 docker compose up -d --remove-orphans --wait --force-recreate
 
+# Every digest bump strands the superseded image (untagged, unreferenced), and
+# nothing else on the host reclaims them — left alone they fill the disk at
+# roughly the pace Renovate merges. Prune only after --wait has confirmed the
+# new containers healthy; anything removed is pinned in git and re-pullable
+# from the registry, so rollback is a re-pull, not a loss. Images (not
+# volumes) only, and non-fatal: the deploy itself has already succeeded, and
+# a failed prune costs disk, not availability.
+docker image prune -af || true
+
 # The deploy changed /opt/deploy's working tree (AIDE-monitored): acknowledge
 # via the evidence-recording re-baseline, debounced so back-to-back deploys
 # rebaseline once. Deploys are a trusted change channel (CI-gated, signed

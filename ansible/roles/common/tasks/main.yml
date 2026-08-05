@@ -154,6 +154,40 @@
       EARLYOOM_ARGS="-m {{ host_earlyoom_min_free_mem_percent }} -s {{ host_earlyoom_min_free_swap_percent }}"
   when: host_earlyoom_enabled | bool
 
+# The CIS remediation mounts /proc with hidepid=2, which hides every other
+# process from earlyoom's DynamicUser — under real memory pressure it logs
+# "Could not find a process to kill" and the box thrashes into a wedge
+# instead of shedding load (seen live on prod-rch-vps, 2026-08-05).
+# CAP_SYS_PTRACE exempts a process from hidepid (proc(5)); granting it
+# alongside the caps the stock unit already carries is far narrower than
+# running earlyoom as root, and harmless on hosts without hidepid.
+- name: Ensure earlyoom drop-in directory exists
+  ansible.builtin.file:
+    path: /etc/systemd/system/earlyoom.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: host_earlyoom_enabled | bool
+
+- name: Let earlyoom see processes under hidepid
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/earlyoom.service.d/10-hidepid.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Installed by the common role (vps-base-template). Managed by Ansible.
+      # hidepid on /proc blinds earlyoom's DynamicUser to other processes;
+      # CAP_SYS_PTRACE exempts it (proc(5)) so it can still pick a victim.
+      [Service]
+      AmbientCapabilities=
+      AmbientCapabilities=CAP_KILL CAP_IPC_LOCK CAP_SYS_PTRACE
+  notify:
+    - Reload systemd
+    - Restart earlyoom
+  when: host_earlyoom_enabled | bool
+
 - name: Enable and start earlyoom on real hosts
   ansible.builtin.systemd:
     name: earlyoom
@@ -286,12 +320,35 @@
         mode: "0644"
       register: common_crypttab
 
-    - name: Ensure encrypted swap is persistent in fstab
+    # Boot-time activation is a dedicated unit, NOT an fstab entry. The
+    # fstab-generated .swap unit waits for dev-mapper-<name>.device to reach
+    # 'plugged', but udev never marks a random-key plain dm-crypt mapping
+    # over a loop-mounted file ready — the device job times out and the box
+    # boots with zero swap, silently, every boot (prod-rch-vps ran a month
+    # swapless this way and thrashed into an unreachable OOM wedge,
+    # 2026-08-05). swapon against the mapper works fine; only systemd's
+    # device unit is stuck. The fstab entry is actively removed so existing
+    # installs also lose the 30s boot stall its device timeout caused.
+    - name: Remove legacy fstab entry for encrypted swap
       ansible.builtin.lineinfile:
         path: /etc/fstab
         regexp: "^/dev/mapper/{{ host_swap_crypt_name }}\\s+none\\s+swap\\s+"
-        line: "/dev/mapper/{{ host_swap_crypt_name }} none swap sw,nofail,x-systemd.device-timeout=30s 0 0"
-        state: present
+        state: absent
+
+    - name: Install encrypted swap activation unit
+      ansible.builtin.template:
+        src: vps-cryptswap-swapon.service.j2
+        dest: /etc/systemd/system/vps-cryptswap-swapon.service
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Reload systemd
+
+    - name: Enable encrypted swap activation at boot
+      ansible.builtin.systemd:
+        name: vps-cryptswap-swapon.service
+        enabled: true
+        daemon_reload: true
 
     # Live conversion: turn the plain swapfile off before dm-crypt claims it.
     # swapoff needs the swapped-out pages to fit back into RAM; if it fails,
@@ -323,33 +380,12 @@
       when: >-
         common_plain_swapoff is skipped or common_plain_swapoff.rc == 0
 
-    # swapon --show prints the CANONICAL device (/dev/dm-0), never the
-    # /dev/mapper symlink — compare resolved paths or every re-run tries to
-    # swapon an already-active device.
-    - name: Resolve encrypted swap device path
-      ansible.builtin.command:
-        cmd: "readlink -f /dev/mapper/{{ host_swap_crypt_name }}"
-      register: common_cryptswap_realpath
-      changed_when: false
-      failed_when: false
-
-    - name: Check active swap devices after conversion
-      ansible.builtin.command:
-        cmd: swapon --show=NAME --noheadings
-      register: common_active_swaps_after
-      changed_when: false
-
+    # The unit's ExecStart no-ops when the mapping is already swapped on, so
+    # this is safe on every re-run. Skipped when the live swapoff failed —
+    # the plain swapfile still holds {{ host_swapfile_path }}, and dm-crypt
+    # must not claim it until the next boot.
     - name: Activate encrypted swap
-      ansible.builtin.command:
-        cmd: "swapon /dev/mapper/{{ host_swap_crypt_name }}"
-      register: common_cryptswap_swapon
-      changed_when: common_cryptswap_swapon.rc == 0
-      # Belt and braces: systemd's fstab-generated .swap unit can activate the
-      # device between the check and this task — already-active is success.
-      failed_when:
-        - common_cryptswap_swapon.rc != 0
-        - "'busy' not in (common_cryptswap_swapon.stderr | default(''))"
-      when:
-        - (common_plain_swapoff is skipped or common_plain_swapoff.rc == 0)
-        - (common_cryptswap_realpath.stdout | trim) not in common_active_swaps_after.stdout_lines
-        - ("/dev/mapper/" ~ host_swap_crypt_name) not in common_active_swaps_after.stdout_lines
+      ansible.builtin.systemd:
+        name: vps-cryptswap-swapon.service
+        state: started
+      when: common_plain_swapoff is skipped or common_plain_swapoff.rc == 0

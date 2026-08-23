@@ -773,6 +773,21 @@
           - prune_timer.stat.exists
         msg: "docker-prune.timer unit not found"
 
+    - name: Read docker-prune service unit
+      ansible.builtin.slurp:
+        path: /etc/systemd/system/docker-prune.service
+      register: prune_service_content
+
+    # system prune alone never removes digest-pinned deploy images (they are
+    # never dangling), so superseded images accumulate forever — observed live
+    # 2026-08-23: 99 stale images / ~2.4 GB despite the weekly prune. The
+    # image-prune --all pass is what actually reclaims them.
+    - name: Assert the prune reclaims superseded digest-pinned images
+      ansible.builtin.assert:
+        that:
+          - "'image prune --all' in (prune_service_content.content | b64decode)"
+        msg: "docker-prune.service lacks the 'image prune --all' pass; digest-pinned deploy images accumulate forever without it"
+
     # -------------------------------------------------------------------------
     # Compliance timers (vuln-scan, patch-SLA, dead-man, log-export)
     # -------------------------------------------------------------------------

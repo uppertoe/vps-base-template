@@ -8,6 +8,15 @@ Type=oneshot
 # --filter until=24h skips images used in the last 24 hours
 # Named volumes are never removed by prune (no -v flag), so app data is safe
 ExecStart=/usr/bin/docker system prune --force --filter "until=24h"
+# system prune (no --all) removes only DANGLING images — and a deployment that
+# pins images by digest (image: repo:latest@sha256:...) never has dangling
+# images, so every superseded deploy image survived it forever. Observed on a
+# live box 2026-08-23: 99 stale app images, ~2.4 GB on a 19 GB disk, with this
+# weekly prune reporting success throughout. image prune --all removes UNUSED
+# images regardless of tag/digest; the 7-day window keeps the current image
+# (in use — untouchable regardless) plus recent rollback targets, and anything
+# older re-pulls from the registry in seconds if a rollback ever needs it.
+ExecStart=/usr/bin/docker image prune --all --force --filter "until=168h"
 
 # Resource guardrails (cgroup v2): keep the prune from competing with the app
 # tier (default weight 100) for CPU/disk on the 2 GB host. The heavy layer

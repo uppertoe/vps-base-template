@@ -109,6 +109,14 @@ fi
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$RESTIC_CACHE_DIR}"
 export HOME="${HOME:-/root}"
 
+# How long restic waits for a contended repository lock before giving up.
+# A reboot can fire the hourly backup and the (missed) weekly verify catch-up
+# jobs at the same instant — both timers are Persistent=true — and restic's
+# check/prune holds an exclusive lock, so the backup would otherwise fail
+# immediately with "repository is already locked". Passed as --retry-lock to
+# every lock-taking restic command. Overridable via config.env.
+RESTIC_RETRY_LOCK_DURATION="${RESTIC_RETRY_LOCK_DURATION:-5m}"
+
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
@@ -297,7 +305,6 @@ apply_retention() {
 
   if [[ "$prune_mode" == "true" ]]; then
     info "[$service_name] Applying retention with prune (daily=$keep_daily, weekly=$keep_weekly, monthly=$keep_monthly)..."
-    forget_args+=(--prune)
   else
     info "[$service_name] Applying retention (daily=$keep_daily, weekly=$keep_weekly, monthly=$keep_monthly)..."
   fi
@@ -307,20 +314,28 @@ apply_retention() {
   if ! RESTIC_REPOSITORY="$repo" RESTIC_PASSWORD="$password" \
       B2_ACCOUNT_ID="$_b2_id_env" B2_ACCOUNT_KEY="$_b2_key_env" \
       run_restic_with_lock_retry "$service_name" "retention" \
-      restic forget "${forget_args[@]}"; then
-    if [[ "$prune_mode" == "true" ]]; then
-      warn "[$service_name] Retention prune failed."
-    else
-      warn "[$service_name] Retention application failed."
-    fi
+      restic forget --retry-lock "$RESTIC_RETRY_LOCK_DURATION" "${forget_args[@]}"; then
+    warn "[$service_name] Retention application failed."
     return 1
   fi
 
-  if [[ "$prune_mode" == "true" ]]; then
-    info "[$service_name] Retention prune complete."
-  else
+  if [[ "$prune_mode" != "true" ]]; then
     info "[$service_name] Retention applied."
+    return 0
   fi
+
+  # Prune must run as its own command: `forget --prune` skips the prune phase
+  # whenever that forget call removes no snapshots, and the hourly backup's
+  # forget has usually already trimmed everything by the time the weekly
+  # verify runs — so unreferenced packs accumulate in the repo indefinitely.
+  if ! RESTIC_REPOSITORY="$repo" RESTIC_PASSWORD="$password" \
+      B2_ACCOUNT_ID="$_b2_id_env" B2_ACCOUNT_KEY="$_b2_key_env" \
+      run_restic_with_lock_retry "$service_name" "prune" \
+      restic prune --retry-lock "$RESTIC_RETRY_LOCK_DURATION"; then
+    warn "[$service_name] Retention prune failed."
+    return 1
+  fi
+  info "[$service_name] Retention prune complete."
 }
 
 # ---------------------------------------------------------------------------
@@ -537,6 +552,7 @@ backup_service() {
       | restic backup \
           --stdin \
           --stdin-filename "$STDIN_FILENAME" \
+          --retry-lock "$RESTIC_RETRY_LOCK_DURATION" \
           --tag "$SERVICE_NAME" \
           --tag "$TIMESTAMP"; then
       warn "[$SERVICE_NAME] Database backup failed."
@@ -572,6 +588,7 @@ backup_service() {
     if ! restic backup \
       "${_paths[@]}" \
       ${_excludes[@]+"${_excludes[@]}"} \
+      --retry-lock "$RESTIC_RETRY_LOCK_DURATION" \
       --tag "${SERVICE_NAME}-files" \
       --tag "$TIMESTAMP"; then
       warn "[$SERVICE_NAME] File backup failed."
@@ -603,7 +620,7 @@ verify_service() {
   export RESTIC_REPOSITORY RESTIC_PASSWORD
 
   info "[$SERVICE_NAME] Verifying repository integrity..."
-  if ! run restic check; then
+  if ! run restic check --retry-lock "$RESTIC_RETRY_LOCK_DURATION"; then
     warn "[$SERVICE_NAME] Repository verification failed."
     record_failure "$failure_id" "$SERVICE_NAME [verify]" "verify" "no backup attempted" \
       "restic check failed"

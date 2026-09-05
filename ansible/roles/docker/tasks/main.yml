@@ -35,6 +35,25 @@
     state: present
   tags: molecule-notest
 
+# Docker CE comes from Docker's own apt origin ("Docker"), which Ubuntu's
+# stock 50unattended-upgrades does not list, so engine/containerd security
+# fixes never auto-applied (prod-rch-vps sat on 29.5.3 with 29.8.0
+# available, 2026-09-05). apt.conf.d fragments append to the list, so this
+# leaves the distro's own allow-list untouched. daemon.json sets
+# live-restore, so a dockerd restart during the upgrade keeps containers up.
+- name: Let unattended-upgrades apply Docker CE updates
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/52unattended-upgrades-docker
+    content: |
+      // Managed by Ansible (docker role). Adds Docker's apt origin to the
+      // unattended-upgrades allow-list (see 50unattended-upgrades).
+      Unattended-Upgrade::Allowed-Origins {
+          "Docker:${distro_codename}";
+      };
+    owner: root
+    group: root
+    mode: "0644"
+
 - name: Install Docker CE and compose plugin
   ansible.builtin.apt:
     name:

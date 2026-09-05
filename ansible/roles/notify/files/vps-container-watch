@@ -29,9 +29,18 @@ STATE_DIR="${VPS_NOTIFY_STATE_DIR:-/var/lib/vps-notify}"
 mkdir -p "$STATE_DIR/containers"
 now="$(date +%s)"
 
-# Bad = unhealthy (healthcheck failing) or restarting (crash-loop backoff).
+# Bad = unhealthy (healthcheck failing), restarting (crash-loop backoff),
+# created (never started -- e.g. the engine refused it mid-upgrade; this is the
+# state Authelia sat in for 2.5 h on prod-rch-vps 2026-09-05 without an alert),
+# dead, or exited with a non-zero code. Exited (0) is left alone: one-shot init
+# containers finish that way by design. The GRACE window below keeps a deploy's
+# momentary Created state from paging.
 bad="$( { docker ps --filter health=unhealthy --format '{{.Names}} unhealthy';
-          docker ps -a --filter status=restarting --format '{{.Names}} restarting'; } 2>/dev/null | sort -u)"
+          docker ps -a --filter status=restarting --format '{{.Names}} restarting';
+          docker ps -a --filter status=created --format '{{.Names}} created';
+          docker ps -a --filter status=dead --format '{{.Names}} dead';
+          docker ps -a --filter status=exited --format '{{.Names}} {{.Status}}' \
+            | awk '$2 == "Exited" && $3 != "(0)" { print $1 " exited" }'; } 2>/dev/null | sort -u)"
 
 # Recovery pass: containers we alerted on that are no longer bad.
 for state_file in "$STATE_DIR"/containers/*.state; do

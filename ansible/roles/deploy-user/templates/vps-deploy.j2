@@ -15,6 +15,27 @@ umask 022
 
 cd /opt/deploy
 
+# Never deploy while apt is mid-flight. On prod-rch-vps (2026-09-05) an
+# auto-deploy started during a docker-ce/containerd upgrade: containerd refused
+# the freshly created Authelia container ("failed to start shim") and it sat
+# in Created for 2.5 h while everything else stayed up under live-restore.
+# Wait (up to 30 min) for unattended-upgrades to finish and the dpkg lock to
+# clear before touching the stack.
+apt_busy() {
+  systemctl is-active --quiet apt-daily-upgrade.service unattended-upgrades.service 2>/dev/null && return 0
+  command -v fuser >/dev/null 2>&1 && fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 && return 0
+  return 1
+}
+apt_wait_deadline=$(( $(date +%s) + 1800 ))
+while apt_busy; do
+  if [[ $(date +%s) -ge $apt_wait_deadline ]]; then
+    echo "vps-deploy: apt still busy after 30 min — proceeding anyway." >&2
+    break
+  fi
+  echo "vps-deploy: apt/unattended-upgrades in progress; waiting…"
+  sleep 20
+done
+
 # Update the repo as the unprivileged owner, never as root. HEAD is captured
 # either side of the pull: a moved HEAD means the AIDE-monitored working tree
 # legitimately changed, which the tail of this script acknowledges.
@@ -64,7 +85,20 @@ for hook in ./apps/*/deploy.sh; do
   fi
 done
 
-docker compose up -d --remove-orphans --wait --force-recreate
+# One retry covers a transient engine hiccup (a container that failed to start
+# right after a dockerd/containerd restart). If it still fails, say exactly
+# which containers are not Up before exiting non-zero — `docker ps` without -a
+# hides a container stuck in Created, which is how the 2026-09-05 outage went
+# unnoticed for its first hour.
+if ! docker compose up -d --remove-orphans --wait --force-recreate; then
+  echo "vps-deploy: compose up --wait failed; retrying once in 30 s…" >&2
+  sleep 30
+  if ! docker compose up -d --remove-orphans --wait; then
+    echo "vps-deploy: compose up --wait failed again. Containers not Up:" >&2
+    docker ps -a --format '  {{.Names}}: {{.Status}}' | grep -vE ': Up ' >&2 || true
+    exit 1
+  fi
+fi
 
 # Every digest bump strands the superseded image (untagged, unreferenced), and
 # nothing else on the host reclaims them — left alone they fill the disk at

@@ -95,7 +95,7 @@ if ! docker compose up -d --remove-orphans --wait --force-recreate; then
   sleep 30
   if ! docker compose up -d --remove-orphans --wait; then
     echo "vps-deploy: compose up --wait failed again. Containers not Up:" >&2
-    docker ps -a --format '  {{.Names}}: {{.Status}}' | grep -vE ': Up ' >&2 || true
+    docker ps -a --format '  {% raw %}{{.Names}}: {{.Status}}{% endraw %}' | grep -vE ': Up ' >&2 || true
     exit 1
   fi
 fi

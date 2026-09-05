@@ -347,16 +347,24 @@
         regexp: '^((?:/dev/(?!mapper/{{ host_swap_crypt_name }}\s)\S+|UUID=\S+|LABEL=\S+|PARTUUID=\S+)\s+none\s+swap\s+.*)$'
         replace: '# \1  # plain swap disabled by the common role: encrypted swap replaces it'
 
+    # `swapon --show=NAME` reports the encrypted mapping by its resolved node
+    # (/dev/dm-0), NOT /dev/mapper/<name> -- a name-prefix exclusion silently
+    # swapped off the encrypted swap on prod-rch-vps (2026-09-06). Compare
+    # resolved paths, and only ever swapoff a real partition (lsblk TYPE=part).
     - name: Deactivate plain swap partitions still active
-      ansible.builtin.command:
-        cmd: "swapoff {{ item }}"
-      loop: "{{ common_active_swaps.stdout_lines | default([]) }}"
-      when:
-        - not item.startswith('/dev/mapper/')
-        - item != host_swapfile_path
+      ansible.builtin.shell: |
+        set -u
+        mapper="$(readlink -f /dev/mapper/{{ host_swap_crypt_name }} 2>/dev/null || true)"
+        changed=0
+        for dev in $(swapon --show=NAME --noheadings); do
+          [ "$dev" = "{{ host_swapfile_path }}" ] && continue
+          [ -n "$mapper" ] && [ "$(readlink -f "$dev")" = "$mapper" ] && continue
+          [ "$(lsblk -no TYPE "$dev" 2>/dev/null | head -n1)" = "part" ] || continue
+          swapoff "$dev" && changed=1
+        done
+        echo "changed=$changed"
       register: common_plain_partition_swapoff
-      failed_when: false
-      changed_when: common_plain_partition_swapoff.rc == 0
+      changed_when: "'changed=1' in common_plain_partition_swapoff.stdout"
 
     - name: Install encrypted swap activation unit
       ansible.builtin.template:

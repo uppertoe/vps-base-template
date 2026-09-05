@@ -36,11 +36,16 @@
   ],
   "packageRules": [
     {
-      "description": "Regex-managed digest pins ride the same automerge+cooldown as compose pins",
+      // NO minimumReleaseAge on digest rules: Renovate cannot date a Docker
+      // digest ("digest update of <image> has no releaseTimestamp to age
+      // against"), and with the default timestamp-required behaviour an undated
+      // update stays pending forever — the old 3-day "cooldown" silently froze
+      // the digest group (PR #75) from July 2026. A digest bump is a rebuild of
+      // the same tag; CI remains the gate.
+      "description": "Regex-managed digest pins ride the same automerge as compose pins",
       "matchManagers": ["custom.regex"],
       "matchUpdateTypes": ["digest", "pin", "pinDigest"],
       "groupName": "docker image digests",
-      "minimumReleaseAge": "3 days",
       "automerge": true,
     },
     {
@@ -48,7 +53,6 @@
       "matchManagers": ["docker-compose", "dockerfile"],
       "matchUpdateTypes": ["digest", "pin", "pinDigest"],
       "groupName": "docker image digests",
-      "minimumReleaseAge": "3 days",
       "automerge": true,
     },
     {

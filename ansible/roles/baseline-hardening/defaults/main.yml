@@ -125,6 +125,14 @@ baseline_aide_exclude_paths:
   - /var/lib/cloud
   - /var/lib/ubuntu-advantage
   - /var/lib/update-notifier
+  # Regenerable package/firmware metadata rewritten by apt-daily (metadata
+  # refresh only, no dpkg op, so the DPkg::Post-Invoke re-baseline never
+  # fires) and by fwupd-refresh.timer: PackageKit/transactions.db,
+  # swcatalog/yaml and fwupd/metadata/lvfs tripped the daily check on both
+  # prod-rch-vps and prod-mch-vps 3-5 Sep 2026 with nothing else changed.
+  - /var/lib/PackageKit
+  - /var/lib/swcatalog
+  - /var/lib/fwupd
   - /var/lib/vuln-scan
   - /var/lib/backup-drill
   - /var/lib/log-export

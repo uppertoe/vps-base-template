@@ -74,10 +74,10 @@ jobs:
       # deploys. Findings still surface in the artifact and the step summary.
       - name: Trivy image scan (caddy)
         run: |
-          docker run --rm -v "$PWD/reports/container-security:/out" aquasec/trivy:latest@sha256:cffe3f5161a47a6823fbd23d985795b3ed72a4c806da4c4df16266c02accdd6f image \
+          docker run --rm -v "$PWD/reports/container-security:/out" aquasec/trivy:latest@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 image \
             --severity HIGH,CRITICAL --no-progress --format table \
             --output /out/trivy-caddy.txt "${{ steps.img.outputs.ref }}" || true
-          docker run --rm -v "$PWD/reports/container-security:/out" aquasec/trivy:latest@sha256:cffe3f5161a47a6823fbd23d985795b3ed72a4c806da4c4df16266c02accdd6f image \
+          docker run --rm -v "$PWD/reports/container-security:/out" aquasec/trivy:latest@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 image \
             --severity HIGH,CRITICAL --no-progress --format json \
             --output /out/trivy-caddy.json "${{ steps.img.outputs.ref }}" || true
           echo '### Trivy (caddy) HIGH/CRITICAL' >> "$GITHUB_STEP_SUMMARY"

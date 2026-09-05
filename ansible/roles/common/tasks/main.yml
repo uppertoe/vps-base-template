@@ -335,6 +335,29 @@
         regexp: "^/dev/mapper/{{ host_swap_crypt_name }}\\s+none\\s+swap\\s+"
         state: absent
 
+    # A provider image often ships a plain swap PARTITION (e.g. /dev/vda3) with
+    # its own fstab line. Left alone it stays active next to the encrypted
+    # mapping -- and at a higher priority, so the kernel prefers the
+    # UNencrypted device (seen on prod-mch-vps after the 2026-09-05 reboot).
+    # Comment the line out rather than delete it, so the operator can see what
+    # was there, and swapoff anything still active that is not the mapping.
+    - name: Disable plain swap partition entries in fstab
+      ansible.builtin.replace:
+        path: /etc/fstab
+        regexp: '^((?:/dev/(?!mapper/{{ host_swap_crypt_name }}\s)\S+|UUID=\S+|LABEL=\S+|PARTUUID=\S+)\s+none\s+swap\s+.*)$'
+        replace: '# \1  # plain swap disabled by the common role: encrypted swap replaces it'
+
+    - name: Deactivate plain swap partitions still active
+      ansible.builtin.command:
+        cmd: "swapoff {{ item }}"
+      loop: "{{ common_active_swaps.stdout_lines | default([]) }}"
+      when:
+        - not item.startswith('/dev/mapper/')
+        - item != host_swapfile_path
+      register: common_plain_partition_swapoff
+      failed_when: false
+      changed_when: common_plain_partition_swapoff.rc == 0
+
     - name: Install encrypted swap activation unit
       ansible.builtin.template:
         src: vps-cryptswap-swapon.service.j2

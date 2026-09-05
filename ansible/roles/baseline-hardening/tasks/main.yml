@@ -742,6 +742,11 @@
         [Timer]
         OnActiveSec=20min
         AccuracySec=1min
+        # A one-shot OnActiveSec= timer otherwise stays "active (elapsed)"
+        # forever after firing, and aide-wait-for-rebaseline reads "active"
+        # as "re-baseline still pending" -- so every daily check sat for
+        # the full 30-min cap. Drop the unit once it has fired.
+        RemainAfterElapse=no
         Unit=aide-rebaseline.service
     - name: aide-rebaseline-after-deploy.timer
       content: |
@@ -754,6 +759,7 @@
         [Timer]
         OnActiveSec=10min
         AccuracySec=1min
+        RemainAfterElapse=no
         Unit=aide-rebaseline.service
   loop_control:
     label: "{{ item.name }}"

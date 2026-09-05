@@ -7,3 +7,11 @@
 - name: Reload systemd
   ansible.builtin.systemd_service:
     daemon_reload: true
+
+# Guarded like the start task: in container CI the unit exists but cannot
+# run properly, so only restart on real hosts.
+- name: Restart earlyoom
+  ansible.builtin.systemd:
+    name: earlyoom
+    state: restarted
+  when: ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']

@@ -1,0 +1,27 @@
+# vps-cryptswap-swapon.service — activate the random-key encrypted swap.
+# Installed by the common role (vps-base-template). Managed by Ansible.
+#
+# Exists because the fstab route silently fails: udev never marks the plain
+# dm-crypt-over-loop-file mapping as ready, so the fstab-generated .swap
+# unit's device dependency times out (30s) and the host boots with ZERO swap
+# — every boot, with nothing in `systemctl --failed`. prod-rch-vps ran a
+# month swapless this way and thrashed into an unreachable OOM wedge
+# (2026-08-05). swapon against the mapper works fine; only systemd's device
+# unit is stuck, so order after the cryptsetup service that creates and
+# mkswaps the mapping and call swapon directly.
+
+[Unit]
+Description=Activate encrypted swap ({{ host_swap_crypt_name }})
+Requires=systemd-cryptsetup@{{ host_swap_crypt_name }}.service
+After=systemd-cryptsetup@{{ host_swap_crypt_name }}.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# swapon --show prints the canonical /dev/dm-N, never the mapper symlink —
+# resolve before comparing, or every start would retry an already-active
+# device and fail.
+ExecStart=/bin/sh -c 'dev="$(readlink -f /dev/mapper/{{ host_swap_crypt_name }})"; swapon --show=NAME --noheadings | grep -qx "$dev" || exec swapon "$dev"'
+
+[Install]
+WantedBy=multi-user.target

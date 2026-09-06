@@ -141,6 +141,8 @@ baseline_aide_exclude_paths:
   - /opt/deploy/.git
   - '/root/\.bash_history'
   - '/home/[^/]+/\.bash_history'
+  # Ansible's per-run temp dir when a site play runs on the box as admin.
+  - '/home/[^/]+/\.ansible'
 
 # Raw aide.conf rule lines (not exclusions) written verbatim into a managed block.
 # Use for per-node rule overrides that '!' exclusion can't express.

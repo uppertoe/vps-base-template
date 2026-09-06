@@ -26,8 +26,10 @@ cd /opt/deploy
 # "active" all day, which made every deploy sit out the full 30 min. Only the
 # apt-daily oneshots, a live unattended-upgrade process, or a held dpkg lock
 # mean apt is actually working.
+# backup.service dumps every database; recreating a DB container under it
+# fails the dump (roster-insights, 2026-09-06 04:08 UTC). Wait for that too.
 apt_busy() {
-  for u in apt-daily.service apt-daily-upgrade.service; do
+  for u in apt-daily.service apt-daily-upgrade.service backup.service backup-verify.service; do
     case "$(systemctl show -p ActiveState --value "$u" 2>/dev/null)" in
       active|activating|deactivating) return 0 ;;
     esac
@@ -42,7 +44,7 @@ while apt_busy; do
     echo "vps-deploy: apt still busy after 30 min — proceeding anyway." >&2
     break
   fi
-  echo "vps-deploy: apt/unattended-upgrades in progress; waiting…"
+  echo "vps-deploy: apt or backup in progress; waiting…"
   sleep 20
 done
 

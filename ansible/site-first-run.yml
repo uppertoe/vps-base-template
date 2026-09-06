@@ -52,14 +52,39 @@
   # ntfy while they differ -- host-layer changes (roles, timers, scripts) only
   # land on a play, and Renovate's automatic pointer bumps otherwise hide that.
   post_tasks:
+    # The controller-side lookup works for laptop runs. An on-box run as admin
+    # cannot read the deploy-owned .git, so fall back to a privileged read of
+    # the very checkout the play ran from (playbook_dir is inside it).
+    - name: Read the scaffold commit this play ran from (controller)
+      ansible.builtin.set_fact:
+        site_applied_commit: "{{ lookup('pipe', 'git -c safe.directory=* -C ' ~ playbook_dir ~ ' rev-parse HEAD 2>/dev/null || echo unknown') }}"
+      tags: [always]
+
+    - name: Read the scaffold commit this play ran from (target, privileged fallback)
+      ansible.builtin.command:
+        cmd: "git -c safe.directory=* -C {{ playbook_dir }} rev-parse HEAD"
+      register: site_applied_commit_target
+      changed_when: false
+      failed_when: false
+      when: site_applied_commit == 'unknown'
+      tags: [always]
+
     - name: Record the scaffold commit applied by this play
       ansible.builtin.copy:
         dest: /var/lib/vps-site-applied
-        # -c safe.directory=*: on-box runs execute as admin against a checkout
-        # owned by the deploy user, which git otherwise refuses ("dubious
-        # ownership") and the marker would read "unknown".
-        content: "{{ lookup('pipe', 'git -c safe.directory=* -C ' ~ playbook_dir ~ ' rev-parse HEAD 2>/dev/null || echo unknown') }}\n"
+        content: "{{ (site_applied_commit_target.stdout | default('') | trim) if (site_applied_commit == 'unknown' and (site_applied_commit_target.rc | default(1)) == 0) else site_applied_commit }}\n"
         owner: root
         group: root
         mode: "0644"
+      tags: [always]
+
+    # A play legitimately rewrites monitored files (/usr/local/{bin,sbin}
+    # scripts, unit files, apt fragments); without this the next nightly AIDE
+    # check pages on every play. Same debounced re-baseline a deploy uses;
+    # a no-op where the baseline-hardening stack is absent.
+    - name: Re-baseline AIDE after the play
+      ansible.builtin.systemd:
+        name: aide-rebaseline-after-deploy.timer
+        state: restarted
+      failed_when: false
       tags: [always]

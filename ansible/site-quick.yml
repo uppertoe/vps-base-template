@@ -52,7 +52,10 @@
     - name: Record the scaffold commit applied by this play
       ansible.builtin.copy:
         dest: /var/lib/vps-site-applied
-        content: "{{ lookup('pipe', 'git -C ' ~ playbook_dir ~ ' rev-parse HEAD 2>/dev/null || echo unknown') }}\n"
+        # -c safe.directory=*: on-box runs execute as admin against a checkout
+        # owned by the deploy user, which git otherwise refuses ("dubious
+        # ownership") and the marker would read "unknown".
+        content: "{{ lookup('pipe', 'git -c safe.directory=* -C ' ~ playbook_dir ~ ' rev-parse HEAD 2>/dev/null || echo unknown') }}\n"
         owner: root
         group: root
         mode: "0644"

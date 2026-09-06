@@ -8,6 +8,7 @@
 #
 #   --dry-run         Print every command that would run; make no changes.
 #   --verify          After backing up, run `restic check`, apply retention with
+#                     (reading CHECK_READ_DATA_SUBSET of the data packs when set),
 #                     prune, and list recent snapshots.
 #   --verify-only     Skip backup creation entirely and run verification mode
 #                     only (restic check + retention/prune + recent snapshots).
@@ -620,7 +621,14 @@ verify_service() {
   export RESTIC_REPOSITORY RESTIC_PASSWORD
 
   info "[$SERVICE_NAME] Verifying repository integrity..."
-  if ! run restic check --retry-lock "$RESTIC_RETRY_LOCK_DURATION"; then
+  # CHECK_READ_DATA_SUBSET (config.env, e.g. "10%") makes the check read a sample of
+  # the data packs, not just metadata, so silent blob corruption is caught before a
+  # restore needs it. Empty keeps the metadata-only check.
+  local check_args=()
+  if [[ -n "${CHECK_READ_DATA_SUBSET:-}" ]]; then
+    check_args+=("--read-data-subset=${CHECK_READ_DATA_SUBSET}")
+  fi
+  if ! run restic check --retry-lock "$RESTIC_RETRY_LOCK_DURATION" "${check_args[@]}"; then
     warn "[$SERVICE_NAME] Repository verification failed."
     record_failure "$failure_id" "$SERVICE_NAME [verify]" "verify" "no backup attempted" \
       "restic check failed"

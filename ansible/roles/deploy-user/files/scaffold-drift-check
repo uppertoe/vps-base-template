@@ -1,13 +1,25 @@
 #!/usr/bin/env bash
 # scaffold-drift-check — hands-off AWARENESS for the layer that is
-# deliberately not auto-applied: alerts when the pinned scaffold submodule
-# falls behind upstream main, so OS-layer changes (which carry UPGRADING.md
-# operator actions) cannot silently accumulate.
+# deliberately not auto-applied. A deploy only ships containers; roles,
+# timers and scripts change only when a site play runs. Two checks:
+#   1) the checked-out scaffold is ahead of the commit the last site play
+#      applied (/var/lib/vps-site-applied) -- the actionable gap now that
+#      Renovate bumps the submodule pointer on every template merge;
+#   2) the pointer itself is behind upstream main -- only meaningful on a
+#      repo where nothing bumps it automatically.
 set -euo pipefail
 
 SCAFFOLD=/opt/deploy/scaffold
 [[ -d "$SCAFFOLD" ]] || exit 0
 cd "$SCAFFOLD"
+
+checked_out="$(runuser -u deploy -- git rev-parse HEAD)"
+applied="$(cat /var/lib/vps-site-applied 2>/dev/null || echo none)"
+if [[ "$applied" != "$checked_out" ]]; then
+  /usr/local/bin/vps-notify "Host play due: scaffold ${checked_out:0:7} checked out, ${applied:0:7} applied" \
+    "Run site-quick.yml so roles, timers and scripts match the checked-out scaffold (scaffold/docs/04-server-repo.md)." \
+    default package || true
+fi
 
 runuser -u deploy -- git fetch --quiet origin main
 

@@ -610,6 +610,17 @@
           - "'docker' in docker_group_check.ansible_facts.getent_group"
         msg: "docker group was not created — docker CE install may have been skipped"
 
+    - name: Check unattended-upgrades -updates pocket fragment exists
+      ansible.builtin.stat:
+        path: /etc/apt/apt.conf.d/52unattended-upgrades-updates
+      register: uu_updates_pocket
+
+    - name: Assert unattended-upgrades covers the -updates pocket
+      ansible.builtin.assert:
+        that:
+          - uu_updates_pocket.stat.exists
+        msg: "52unattended-upgrades-updates missing — non-security fixes would pile up"
+
     - name: Check unattended-upgrades Docker origin fragment exists
       ansible.builtin.stat:
         path: /etc/apt/apt.conf.d/52unattended-upgrades-docker

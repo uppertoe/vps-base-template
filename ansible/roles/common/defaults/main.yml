@@ -16,6 +16,14 @@ common_patch_check_schedule: "*-*-* 06:15:00"
 # (UTC+10) / 04:00 AEDT (UTC+11) — the pre-dawn Melbourne quiet window in both
 # seasons, and clear of the 03:17/04:23 UTC backup-verify and restore-drill
 # timers. Override per instance if the service serves a different region.
+# Also let unattended-upgrades apply the distro's stable-release-updates pocket
+# (<codename>-updates: reviewed, phased bug-fix SRUs), not just -security.
+# Ubuntu's stock allow-list omits it, so non-security fixes silently pile up
+# until someone runs a play with the safe upgrade (40 packages on prod-rch-vps
+# by 2026-09-05). Automatic reboot + vps-boot-check + live-restore make this
+# safe enough for an unattended host; set false to stay security-only.
+common_unattended_include_updates: true
+
 common_automatic_reboot_enabled: true
 common_automatic_reboot_time: "17:00"
 

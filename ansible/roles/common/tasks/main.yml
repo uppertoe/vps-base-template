@@ -34,6 +34,26 @@
       APT::Periodic::Unattended-Upgrade "1";
     mode: "0644"
 
+- name: Let unattended-upgrades apply the stable-release-updates pocket
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/52unattended-upgrades-updates
+    content: |
+      // Managed by Ansible (common role). Adds the distro's -updates pocket to
+      // the unattended-upgrades allow-list (see 50unattended-upgrades).
+      Unattended-Upgrade::Allowed-Origins {
+          "${distro_id}:${distro_codename}-updates";
+      };
+    owner: root
+    group: root
+    mode: "0644"
+  when: common_unattended_include_updates | bool
+
+- name: Remove the -updates pocket fragment when disabled
+  ansible.builtin.file:
+    path: /etc/apt/apt.conf.d/52unattended-upgrades-updates
+    state: absent
+  when: not (common_unattended_include_updates | bool)
+
 # Patches that need a reboot must actually get one, or the running kernel
 # drifts ever further from the patched one on disk. WithUsers is deliberate:
 # this class of host has no interactive users to protect, and skipping the

@@ -21,8 +21,18 @@ cd /opt/deploy
 # in Created for 2.5 h while everything else stayed up under live-restore.
 # Wait (up to 30 min) for unattended-upgrades to finish and the dpkg lock to
 # clear before touching the stack.
+# NOTE: unattended-upgrades.service is NOT a signal -- it is a boot-time
+# RemainAfterExit unit (its job is to block shutdown mid-upgrade) and reads
+# "active" all day, which made every deploy sit out the full 30 min. Only the
+# apt-daily oneshots, a live unattended-upgrade process, or a held dpkg lock
+# mean apt is actually working.
 apt_busy() {
-  systemctl is-active --quiet apt-daily-upgrade.service unattended-upgrades.service 2>/dev/null && return 0
+  for u in apt-daily.service apt-daily-upgrade.service; do
+    case "$(systemctl show -p ActiveState --value "$u" 2>/dev/null)" in
+      active|activating|deactivating) return 0 ;;
+    esac
+  done
+  pgrep -f '^/usr/bin/python3 /usr/bin/unattended-upgrade' >/dev/null 2>&1 && return 0
   command -v fuser >/dev/null 2>&1 && fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 && return 0
   return 1
 }

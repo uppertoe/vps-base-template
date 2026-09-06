@@ -40,8 +40,10 @@ done
 # either side of the pull: a moved HEAD means the AIDE-monitored working tree
 # legitimately changed, which the tail of this script acknowledges.
 old_head="$(runuser -u {{ deploy_user }} -- git rev-parse HEAD)"
+old_scaffold="$(runuser -u {{ deploy_user }} -- git -C scaffold rev-parse HEAD 2>/dev/null || echo none)"
 runuser -u {{ deploy_user }} -- git pull --recurse-submodules
 new_head="$(runuser -u {{ deploy_user }} -- git rev-parse HEAD)"
+new_scaffold="$(runuser -u {{ deploy_user }} -- git -C scaffold rev-parse HEAD 2>/dev/null || echo none)"
 {% if deploy_verify_signature | default(false) %}
 
 # Supply-chain gate (deploy_verify_signature): everything below runs as root
@@ -116,4 +118,19 @@ docker image prune -af || true
 # not every host runs the baseline-hardening AIDE stack.
 if [[ "$old_head" != "$new_head" ]]; then
   systemctl restart aide-rebaseline-after-deploy.timer >/dev/null 2>&1 || true
+fi
+
+# A deploy only ships containers. When it moved the scaffold pointer, the
+# host layer (roles, timers, scripts) is now behind until someone runs a site
+# play -- say so once, here, and let scaffold-drift.timer keep nagging weekly.
+# /var/lib/vps-site-applied is written by the site plays' post_tasks.
+if [[ "$old_scaffold" != "$new_scaffold" ]]; then
+  applied="$(cat /var/lib/vps-site-applied 2>/dev/null || echo none)"
+  if [[ "$applied" != "$new_scaffold" ]]; then
+    /usr/local/bin/vps-notify "Host play due: scaffold moved to ${new_scaffold:0:7}" \
+"This deploy pulled scaffold ${old_scaffold:0:7} -> ${new_scaffold:0:7}; the last site play applied ${applied:0:7}.
+Roles, timers and scripts only change on a play: run site-quick.yml (scaffold/docs/04-server-repo.md).
+scaffold-drift.timer reminds weekly until they match." \
+      default package || true
+  fi
 fi

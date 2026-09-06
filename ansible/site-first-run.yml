@@ -46,3 +46,17 @@
       tags: [logging, log-export]
     - role: notify
       tags: [notify]
+
+  # Record which scaffold commit this play applied. vps-deploy and the weekly
+  # scaffold-drift check compare it with the checked-out submodule and nag via
+  # ntfy while they differ -- host-layer changes (roles, timers, scripts) only
+  # land on a play, and Renovate's automatic pointer bumps otherwise hide that.
+  post_tasks:
+    - name: Record the scaffold commit applied by this play
+      ansible.builtin.copy:
+        dest: /var/lib/vps-site-applied
+        content: "{{ lookup('pipe', 'git -C ' ~ playbook_dir ~ ' rev-parse HEAD 2>/dev/null || echo unknown') }}\n"
+        owner: root
+        group: root
+        mode: "0644"
+      tags: [always]

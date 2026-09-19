@@ -66,13 +66,28 @@ if [[ -d "$repo_root/apps" ]]; then
 
         if (depth == 0 && target == site && line ~ /\{[[:space:]]*$/ && substr(trimmed, 1, 1) != "(") {
           print "    encode zstd gzip" >> target
+          # Bearer tokens in URLs stay out of the access log. A magic link, an
+          # unsubscribe link, a guest pass: any run of 16+ URL-safe base64
+          # characters standing as a whole path segment or a query value is
+          # replaced, in the request line and in the two headers that carry the
+          # referring page (Referer, and Hx-Current-Url from htmx). Fingerprinted
+          # asset names have a dot, short parameters are short, so neither
+          # matches. The same filter is on the default logger (run-caddy.sh),
+          # which the request dumps in the error log go through.
           print "    log {" >> target
           print "        output file /var/log/caddy/access.log {" >> target
           print "            roll_size 20MiB" >> target
           print "            roll_keep 12" >> target
           print "            roll_keep_for 2160h" >> target
           print "        }" >> target
-          print "        format json" >> target
+          print "        format filter {" >> target
+          print "            wrap json" >> target
+          print "            fields {" >> target
+          print "                request>uri regexp ([/=])[A-Za-z0-9_-]{16,}([/?&]|$) ${1}REDACTED${2}" >> target
+          print "                request>headers>Referer regexp ([/=])[A-Za-z0-9_-]{16,}([/?&]|$) ${1}REDACTED${2}" >> target
+          print "                request>headers>Hx-Current-Url regexp ([/=])[A-Za-z0-9_-]{16,}([/?&]|$) ${1}REDACTED${2}" >> target
+          print "            }" >> target
+          print "        }" >> target
           print "    }" >> target
           # Access-log user attribution: forward_auth injects Remote-User on
           # protected routes; recording it gives a per-user access trail that

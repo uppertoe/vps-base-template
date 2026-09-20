@@ -16,6 +16,33 @@ generated_config="/tmp/Caddyfile"
 # 16+ character URL-safe base64 path segment or query value becomes REDACTED,
 # in the request line, the Referer and htmx's Hx-Current-Url.
 : > "$generated_config"
+
+# The mounted Caddyfile may open with a global options block of its own
+# (Caddyfile.local is exactly `{ local_certs }`, mounted over the production
+# file by docker-compose.override.yml and the CI smoke test). Caddy accepts one
+# key-less block, and ours has to be first, so a leading block is split off
+# here and its options folded into ours; whatever follows it is appended as
+# the site configuration. Brace depth is tracked so a nested block inside the
+# global one (a `log { … }`) does not end it early.
+mounted_config="/etc/caddy/Caddyfile"
+mounted_globals="/tmp/Caddyfile.globals"
+mounted_sites="/tmp/Caddyfile.sites"
+awk -v globals="$mounted_globals" -v sites="$mounted_sites" '
+  state == 0 && /^[[:space:]]*(#|$)/ { print > sites; next }
+  state == 0 && /^[[:space:]]*\{[[:space:]]*$/ { state = 1; depth = 1; next }
+  state == 0 { state = 2 }
+  state == 1 {
+    line = $0
+    depth += gsub(/\{/, "{", line) - gsub(/\}/, "}", line)
+    if (depth == 0) { state = 2; next }
+    print > globals
+    next
+  }
+  { print > sites }
+' "$mounted_config"
+[ -f "$mounted_globals" ] || : > "$mounted_globals"
+[ -f "$mounted_sites" ] || : > "$mounted_sites"
+
 {
   printf '{\n'
   if [ -n "${ACME_EMAIL:-}" ]; then
@@ -32,11 +59,11 @@ generated_config="/tmp/Caddyfile"
 			}
 		}
 	}
-}
-
 GLOBAL
+  cat "$mounted_globals"
+  printf '}\n\n'
 } >> "$generated_config"
-cat /etc/caddy/Caddyfile >> "$generated_config"
+cat "$mounted_sites" >> "$generated_config"
 if [ -f /etc/caddy/apps.caddy ]; then
   cat /etc/caddy/apps.caddy >> "$generated_config"
 fi

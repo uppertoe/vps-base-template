@@ -128,6 +128,15 @@ baseline_enable_journald_syslog_forwarding: true
 baseline_journald_system_max_use: 300M
 baseline_journald_system_keep_free: 500M
 baseline_journald_max_file_sec: 1month
+# Crash capture. A wedge or kernel panic leaves nothing on disk: the journal
+# stops mid-sentence and pstore has no backend on a BIOS KVM guest. Sending the
+# console to the serial port puts panic output somewhere the provider's console
+# viewer can show it after the fact, and a shorter journald sync interval
+# shortens the tail of log lines lost when the box stops without warning.
+baseline_enable_serial_console: true
+baseline_serial_console_port: ttyS0
+baseline_serial_console_speed: 115200
+baseline_journald_sync_interval: 30s
 baseline_auditd_max_log_file_mb: 25
 baseline_auditd_num_logs: 8
 baseline_auditd_max_log_file_action: ROTATE

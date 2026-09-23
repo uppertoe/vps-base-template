@@ -72,6 +72,20 @@
     - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
     - "'/tmp' not in (ansible_facts.mounts | map(attribute='mount') | list)"
 
+# Must run BEFORE the sysctl reload below, not just in the firewall role.
+# veth* and docker's br-* come and go with container lifecycle, and a stale
+# entry makes `sysctl --system` fail, which fails the reload, which aborts the
+# play - before it ever reaches the firewall role that strips them. A host that
+# accumulated them could therefore never be repaired by running the play, which
+# is exactly what happened to journal-watch-vps on 2026-09-23.
+- name: Remove persisted sysctls for ephemeral interfaces (before any reload)
+  ansible.builtin.replace:
+    path: /etc/sysctl.d/99-vps-scaffold.conf
+    regexp: '^net\.ipv4\.conf\.(veth[^.=]*|br-[^.=]*)\.[^=]+=.*\n'
+    replace: ''
+  failed_when: false          # the file may not exist yet on a first run
+  when: ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
 - name: Apply safe host networking sysctls
   ansible.posix.sysctl:
     name: "{{ item.key }}"

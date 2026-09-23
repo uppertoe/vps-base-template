@@ -12,3 +12,11 @@
   register: _auditd_hup
   changed_when: false
   failed_when: _auditd_hup.rc not in [0, 1]
+
+# Kernel settings live in the running kernel, not in a file the next boot will
+# read: without this, changing a PANIC_GUARD_* tunable would apply only after
+# a reboot, leaving the host on the old settings in the meantime.
+- name: Re-apply panic guard settings
+  ansible.builtin.command: /usr/local/bin/vps-panic-guard reapply
+  changed_when: true
+  when: ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']

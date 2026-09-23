@@ -189,6 +189,22 @@ baseline_host_sysctls:
   net.ipv4.conf.default.log_martians: "1"
   net.ipv4.conf.all.rp_filter: "1"
   net.ipv4.conf.default.rp_filter: "1"
+  # 10, not the distro's 60. These hosts are small, and their swap is
+  # dm-crypt: every page faulted back costs a decrypt on a single vCPU, so an
+  # app that sits idle between visitors has its working set evicted and the
+  # next visitor waits seconds for it (measured on prod-rch-vps: a first
+  # request took 3.9 s with the process mostly in swap, 18 ms once resident).
+  # At 10 the kernel reclaims page cache — of which there is plenty, and which
+  # costs a cheap re-read — before it pages out anonymous memory. It does not
+  # disable swap: a genuine shortfall still swaps rather than OOM-killing.
+  vm.swappiness: "10"
+
+# Services that ship enabled on a desktop-derived Ubuntu image and do nothing
+# on a headless KVM guest, while holding tens of MB resident each. Masked, not
+# just stopped, so a package upgrade cannot quietly re-enable them.
+baseline_mask_idle_services:
+  - ModemManager    # no modems on a VPS
+  - fwupd           # no firmware to flash in a guest
 
 # -----------------------------------------------------------------------------
 # Firewall (ufw)

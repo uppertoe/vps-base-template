@@ -138,6 +138,25 @@ cmd_stable() {
   exit 0
 }
 
+# Re-applies the current decision with freshly-read settings, without touching
+# the strike count. Config changed by a play would otherwise sit unused until
+# the next boot, quietly leaving the host under the old kernel settings.
+cmd_reapply() {
+  mkdir -p "$STATE_DIR"
+  if [ "$ENABLED" != 1 ]; then
+    apply 0
+    exit 0
+  fi
+  local strikes
+  strikes="$(read_strikes)"
+  if [ "$strikes" -ge "$MAX_REBOOTS" ] && [ "$strikes" -gt 0 ]; then
+    apply 0
+  else
+    apply 1
+  fi
+  exit 0
+}
+
 # Records that systemd took the machine down deliberately, so the next boot
 # does not count a patch-window reboot or an operator reboot as a crash.
 cmd_clean() {
@@ -148,7 +167,8 @@ cmd_clean() {
 
 case "${1:-}" in
   arm) cmd_arm ;;
+  reapply) cmd_reapply ;;
   stable) cmd_stable ;;
   clean-shutdown) cmd_clean ;;
-  *) echo "usage: $0 {arm|stable|clean-shutdown}" >&2; exit 2 ;;
+  *) echo "usage: $0 {arm|reapply|stable|clean-shutdown}" >&2; exit 2 ;;
 esac

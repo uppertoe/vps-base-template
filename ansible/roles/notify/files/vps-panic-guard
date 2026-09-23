@@ -49,7 +49,10 @@ STATE_DIR="${PANIC_GUARD_STATE_DIR:-/var/lib/vps-notify/panic-guard}"
 CLEAN_FLAG="$STATE_DIR/clean"
 STRIKE_FILE="$STATE_DIR/strikes"
 
-notify() { command -v vps-notify >/dev/null 2>&1 && vps-notify "$@" || true; }
+notify() {
+  command -v vps-notify >/dev/null 2>&1 || return 0
+  vps-notify "$@" || true
+}
 setsysctl() { sysctl -qw "$1=$2" 2>/dev/null || true; }
 
 read_strikes() {
@@ -107,9 +110,11 @@ Re-arms by itself after ${STABLE_MIN} min of uptime." \
       high rotating_light
   else
     apply 1
-    [ "$strikes" -gt 0 ] && notify "Auto-reboot armed after unclean stop" \
-      "Previous stop was unclean; automatic reboot stays armed for one more fault (${strikes}/${MAX_REBOOTS} used)." \
-      default warning
+    if [ "$strikes" -gt 0 ]; then
+      notify "Auto-reboot armed after unclean stop" \
+        "Previous stop was unclean; automatic reboot stays armed for one more fault (${strikes}/${MAX_REBOOTS} used)." \
+        default warning
+    fi
   fi
   exit 0
 }

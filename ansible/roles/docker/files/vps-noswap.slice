@@ -1,0 +1,20 @@
+# vps-noswap.slice — containers that must never be paged out.
+#
+# `memswap_limit` in compose is recorded by Docker but NOT applied by the
+# systemd cgroup driver (seen on 29.8.1): the container's scope ends up with
+# MemorySwapMax=infinity and it swaps anyway, while `docker inspect` cheerfully
+# reports MemorySwap == Memory. A slice does apply, because cgroup v2 enforces
+# the smallest limit found along the path — so everything placed beneath this
+# one has an effective swap ceiling of zero whatever its own scope says.
+#
+# Put a service here with `cgroup_parent: vps-noswap.slice` when a visitor
+# would notice it being faulted back in from this host's dm-crypt swap. Only do
+# that where measured usage sits well under mem_limit: a container that cannot
+# swap is OOM-killed rather than borrowing.
+
+[Unit]
+Description=Containers that must never swap
+Before=slices.target
+
+[Slice]
+MemorySwapMax=0

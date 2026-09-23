@@ -89,6 +89,15 @@
   # Skip inside Docker containers (Molecule) — Docker-in-Docker is fragile
   when: ansible_facts['virtualization_type'] not in ['docker', 'container']
 
+- name: Install the no-swap slice for latency-sensitive containers
+  ansible.builtin.copy:
+    src: vps-noswap.slice
+    dest: /etc/systemd/system/vps-noswap.slice
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd for slices
+
 - name: Deploy docker-prune systemd service
   ansible.builtin.copy:
     src: docker-prune.service

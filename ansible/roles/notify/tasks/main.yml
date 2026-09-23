@@ -136,6 +136,7 @@
     - vps-container-watch
     - vps-boot-check
     - vps-log-digest
+    - vps-panic-guard
 
 - name: Create watcher state directory
   ansible.builtin.file:
@@ -157,6 +158,9 @@
     - vps-disk-watch.timer
     - vps-container-watch.service
     - vps-boot-check.service
+    - vps-panic-guard.service
+    - vps-panic-guard-stable.service
+    - vps-panic-guard-stable.timer
     - vps-notify-selftest.service
     - vps-notify-selftest.timer
     - vps-log-digest.service
@@ -197,6 +201,32 @@
     enabled: "{{ notify_boot_check_enabled | bool }}"
     daemon_reload: true
   when: ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+  tags:
+    - molecule-notest
+
+- name: Enable crash-loop-guarded auto-reboot
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: "{{ notify_panic_guard_enabled | bool }}"
+    daemon_reload: true
+  loop:
+    - vps-panic-guard.service
+    - vps-panic-guard-stable.timer
+  when: ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+  tags:
+    - molecule-notest
+
+# Start the timer now so a host gets its re-arm without waiting for a reboot.
+# The arming service itself is deliberately not started here: it reads the
+# previous boot's outcome, and running it mid-play would count this live host
+# as having just crashed.
+- name: Start the stable-run re-arm timer
+  ansible.builtin.systemd:
+    name: vps-panic-guard-stable.timer
+    state: started
+  when:
+    - notify_panic_guard_enabled | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
   tags:
     - molecule-notest
 

@@ -1,0 +1,13 @@
+# vps-panic-guard-stable.timer — a host that has been up this long without
+# incident has earned its automatic reboot back. Keep OnBootSec comfortably
+# longer than a boot takes to settle, or a crash loop re-arms itself.
+
+[Unit]
+Description=Re-arm kernel auto-reboot once the host has proved stable
+
+[Timer]
+OnBootSec=30min
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

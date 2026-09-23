@@ -1,0 +1,9 @@
+# vps-panic-guard-stable.service — declare this boot good and re-arm.
+# Installed by the notify role; triggered by vps-panic-guard-stable.timer.
+
+[Unit]
+Description=Re-arm kernel auto-reboot after a stable run
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/vps-panic-guard stable

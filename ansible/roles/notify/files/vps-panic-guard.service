@@ -1,0 +1,22 @@
+# vps-panic-guard.service — arm (or deliberately withhold) automatic reboot.
+#
+# Runs early on every boot, decides from the previous stop whether the machine
+# has already spent its one automatic reboot, and applies the kernel settings
+# accordingly. ExecStop records an orderly shutdown, which is how a patch
+# reboot is told apart from a crash. Installed by the notify role.
+
+[Unit]
+Description=Arm kernel auto-reboot for one fault (crash-loop guard)
+DefaultDependencies=no
+After=local-fs.target
+Before=sysinit.target shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/vps-panic-guard arm
+ExecStop=/usr/local/bin/vps-panic-guard clean-shutdown
+
+[Install]
+WantedBy=sysinit.target

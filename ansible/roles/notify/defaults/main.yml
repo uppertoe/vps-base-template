@@ -78,3 +78,21 @@ notify_onfailure_units:
   - vuln-scan.service
   - pending-security-updates.service
   - log-export.service
+
+# Kernel auto-reboot, guarded against crash loops: one automatic reboot per
+# fault, then the box stays down and intact until it has proved stable again.
+# See /usr/local/bin/vps-panic-guard and notify.env for the tunables.
+notify_panic_guard_enabled: true
+# Seconds the kernel waits before rebooting itself. Not 1: the panic text has
+# to clear the serial console first, and that is the only record of the cause.
+notify_panic_guard_reboot_secs: 10
+# Automatic reboots allowed per fault before the box is left down for
+# inspection. 1 means a crash loop can never happen.
+notify_panic_guard_max_reboots: 1
+# Uptime that redeems a strike and re-arms the guard.
+notify_panic_guard_stable_min: 30
+notify_panic_guard_on_oops: true
+notify_panic_guard_on_softlockup: true
+# Off by default: slow storage can block a task past hung_task_timeout_secs
+# with the host otherwise fine, and a spurious reboot is worse than a stall.
+notify_panic_guard_on_hung_task: false

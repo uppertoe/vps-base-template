@@ -164,6 +164,33 @@ its own `Cache-Control` — so an app can still override. An app that serves
 **un-fingerprinted** assets matches neither rule and keeps its existing ETag
 revalidation, so this is a no-op until the app opts in by fingerprinting.
 
+## Memory on a 2 GB host
+
+These boxes are small and their swap is encrypted, so a page faulted back in
+costs a decrypt on a single vCPU. An app that sits idle between visitors gets
+its working set evicted and the next visitor waits seconds for it — measured
+on prod-rch-vps, a first request took 3.9 s with the process mostly in swap
+and 18 ms once resident. `vm.swappiness` is therefore 10 rather than the
+distro's 60, so the kernel reclaims page cache (cheap to re-read) before it
+pages out anonymous memory.
+
+For a service where that first-visitor latency actually matters, pin it out of
+swap entirely by setting `memswap_limit` equal to `mem_limit`:
+
+    mem_limit: 256m
+    memswap_limit: 256m   # equal => this container may not swap at all
+
+Do that only where measured usage sits well under the limit, because the
+container can no longer borrow swap under pressure: it gets OOM-killed
+instead. Check with `docker stats` or the cgroup's `memory.current` before
+committing to it — and note that `mem_limit` is a ceiling, not a reservation,
+so the limits across a stack routinely total more than the host has.
+
+Worth knowing when reading those numbers: a Python worker using a forked pool
+costs a full interpreter per process. `celery worker -B --concurrency=1` is
+three processes (main, forked child, beat), not one; `--pool=solo` makes it
+two, which on a 2 GB host is worth roughly 90 MB.
+
 ## Gitignore conventions
 
 ```gitignore

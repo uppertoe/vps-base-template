@@ -84,6 +84,21 @@
     - not molecule_test | default(false) | bool
     - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
 
+# Masked rather than disabled: `systemctl disable` is undone by a package
+# upgrade that re-runs its postinst, whereas a mask survives. Failures are
+# tolerated because not every image ships every unit.
+- name: Mask services that do nothing on a headless guest
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+    masked: true
+  loop: "{{ baseline_mask_idle_services }}"
+  failed_when: false
+  when:
+    - not molecule_test | default(false) | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
 - name: Enable kernel memory overcommit for Redis-style workloads
   ansible.posix.sysctl:
     name: vm.overcommit_memory

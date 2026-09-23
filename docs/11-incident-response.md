@@ -39,6 +39,26 @@ your detection layer is broken.
    **C** confirmed or likely exposure of health information → continue below
    AND start the notification clock (§4) immediately, in parallel.
 
+### When the box stopped without explaining itself
+
+A hard wedge or kernel panic writes nothing to disk: the journal simply ends
+mid-sentence, and pstore has no backend on a BIOS KVM guest. Two places still
+hold evidence, and both are read before rebooting, because a reboot loses them.
+
+- **The provider's console viewer.** The scaffold puts the kernel console on
+  the serial port (`baseline_enable_serial_console`), so a panic message
+  survives on the console even when the filesystem is unreachable. Open it in
+  the provider panel and screenshot whatever is on screen.
+- **Anything that samples independently of journald** — `atop` records every
+  ten minutes under `/var/log/atop/`, `sar` under `/var/log/sysstat/`, and the
+  Caddy access log lives in its own volume. Comparing the last entry in each
+  pins the moment the box stopped far more precisely than the journal alone,
+  and distinguishes "userspace died" from "the whole machine stopped".
+
+Remember the journal's own tail is lost up to `SyncIntervalSec` (30s by
+default here), so the last logged line is a lower bound on the failure time,
+not the failure time.
+
 ## 2. Contain
 
 Order matters: preserve evidence before destroying state, cut exposure before

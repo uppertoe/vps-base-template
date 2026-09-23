@@ -126,6 +126,35 @@ outage last", and the trend tells you when the runbook has rotted.
 |------|----------|----------|-----------------|-------|
 | 2026-07-06 | repo owner | Full wipe + rebuild of the live staging box (RackNerd US) from recovery bundle + backups | **~63 min** | Dominated by site-first-run (43 min, CIS L1+L2 over a trans-Pacific link); bootstrap 11, reinstall+ssh 2.5, restore+backup+deploy 7.5. 0 failed tasks. Backup repo reachable from the rebuilt box (restic timer fired mid-drill). Surfaced two runbook gaps (steps 4–5 above) and the ansible.cfg auto-load gap — all fixed in this commit. |
 
+## When the kernel stops rather than the disk
+
+Not every outage needs a rebuild. A panicked or lockup-wedged kernel sits
+there indefinitely by default, so a fault lasting seconds becomes an outage
+lasting as long as it takes someone to reach the provider panel — that is what
+turned a three-second failure into three and a half hours on 2026-09-22.
+
+`vps-panic-guard` gives the box exactly one chance to fix itself. While the
+host is believed healthy the kernel is set to reboot on a panic, an oops or a
+soft lockup. As soon as that reboot is actually used, the guard disarms: a
+second crash before the host has proved itself leaves the machine down and
+intact, because a box that reboots on every boot destroys the evidence of why
+on each cycle. Thirty minutes of uptime redeems the strike and re-arms it, and
+an orderly shutdown (a patch reboot, your own `reboot`) is never counted as a
+crash. Both transitions announce themselves over ntfy.
+
+So a single "Auto-reboot disarmed" alert means the host crashed, came back by
+itself, and is now deliberately unprotected — treat it as a summons, not as an
+all-clear. **Read the console in the provider panel before rebooting**: the
+serial console is the only place a panic message survives.
+
+    systemctl status vps-panic-guard           # armed this boot?
+    sysctl kernel.panic kernel.panic_on_oops   # 0 means disarmed
+    cat /var/lib/vps-notify/panic-guard/strikes
+
+Hung-task panics are off by default (`notify_panic_guard_on_hung_task`): slow
+storage can block a task past the timeout with the host otherwise fine, and a
+spurious reboot is worse than a stall.
+
 ## Failure modes this covers
 
 - **Provider/region loss** — rebuild at another provider; nothing in the

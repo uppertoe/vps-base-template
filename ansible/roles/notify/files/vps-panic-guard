@@ -1,0 +1,152 @@
+#!/bin/bash
+# vps-panic-guard — let the kernel reboot itself out of a crash, but only once.
+#
+# A panicked or lockup-wedged kernel sits there indefinitely by default
+# (kernel.panic=0), so a fault that lasts seconds becomes an outage that lasts
+# until someone reaches the provider panel. Setting kernel.panic on its own
+# fixes that but trades it for a worse failure: a box that panics on every boot
+# reboots for ever, and each cycle destroys the evidence of why.
+#
+# So: arm the automatic reboot while the host is believed healthy, and disarm
+# it as soon as it has actually been used. One crash reboots; a second crash
+# before the host has proved itself stable leaves the box down and intact for
+# inspection. Surviving PANIC_GUARD_STABLE_MIN minutes counts as proof, and
+# re-arms.
+#
+# State in /var/lib/vps-notify/panic-guard:
+#   clean    - present when the last shutdown was orderly (written at stop)
+#   strikes  - consecutive unclean stops not yet redeemed by a stable run
+#
+# Tunable from /etc/vps-scaffold/notify.env:
+#   PANIC_GUARD_ENABLED       (default 1)
+#   PANIC_GUARD_REBOOT_SECS   (default 10; seconds to wait before rebooting,
+#                              which is also how long the panic text has to
+#                              reach the serial console before the box resets)
+#   PANIC_GUARD_MAX_REBOOTS   (default 1; automatic reboots allowed per fault)
+#   PANIC_GUARD_ON_OOPS       (default 1; treat an oops as a panic)
+#   PANIC_GUARD_ON_SOFTLOCKUP (default 1; a CPU stuck in the kernel panics)
+#   PANIC_GUARD_ON_HUNG_TASK  (default 0; tasks blocked in D state panic. Off
+#                              by default: slow storage can block a task past
+#                              hung_task_timeout_secs without the host being
+#                              in any trouble, and a spurious reboot is worse
+#                              than a slow minute.)
+set -u
+
+CONF="${VPS_NOTIFY_CONF:-/etc/vps-scaffold/notify.env}"
+# shellcheck disable=SC1090
+[ -r "$CONF" ] && . "$CONF"
+
+ENABLED="${PANIC_GUARD_ENABLED:-1}"
+REBOOT_SECS="${PANIC_GUARD_REBOOT_SECS:-10}"
+MAX_REBOOTS="${PANIC_GUARD_MAX_REBOOTS:-1}"
+ON_OOPS="${PANIC_GUARD_ON_OOPS:-1}"
+ON_SOFTLOCKUP="${PANIC_GUARD_ON_SOFTLOCKUP:-1}"
+ON_HUNG_TASK="${PANIC_GUARD_ON_HUNG_TASK:-0}"
+STABLE_MIN="${PANIC_GUARD_STABLE_MIN:-30}"
+
+# Overridable so the state machine can be exercised in tests.
+STATE_DIR="${PANIC_GUARD_STATE_DIR:-/var/lib/vps-notify/panic-guard}"
+CLEAN_FLAG="$STATE_DIR/clean"
+STRIKE_FILE="$STATE_DIR/strikes"
+
+notify() {
+  command -v vps-notify >/dev/null 2>&1 || return 0
+  vps-notify "$@" || true
+}
+setsysctl() { sysctl -qw "$1=$2" 2>/dev/null || true; }
+
+read_strikes() {
+  local n
+  n="$(cat "$STRIKE_FILE" 2>/dev/null || echo 0)"
+  case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  printf '%s' "$n"
+}
+
+# arm=1 applies the reboot-on-fault settings; arm=0 makes every fault leave the
+# machine exactly where it stopped.
+apply() {
+  if [ "$1" = 1 ]; then
+    setsysctl kernel.panic "$REBOOT_SECS"
+    setsysctl kernel.panic_on_oops "$ON_OOPS"
+    setsysctl kernel.softlockup_panic "$ON_SOFTLOCKUP"
+    setsysctl kernel.hung_task_panic "$ON_HUNG_TASK"
+  else
+    setsysctl kernel.panic 0
+    setsysctl kernel.panic_on_oops 0
+    setsysctl kernel.softlockup_panic 0
+    setsysctl kernel.hung_task_panic 0
+  fi
+}
+
+cmd_arm() {
+  mkdir -p "$STATE_DIR"
+  if [ "$ENABLED" != 1 ]; then
+    apply 0
+    exit 0
+  fi
+
+  local strikes
+  strikes="$(read_strikes)"
+  if [ ! -e "$STRIKE_FILE" ] && [ ! -e "$CLEAN_FLAG" ]; then
+    # Never run before: this is the install, not a crash. Starting a freshly
+    # provisioned host disarmed would be exactly wrong.
+    strikes=0
+  elif [ -e "$CLEAN_FLAG" ]; then
+    strikes=0
+    rm -f "$CLEAN_FLAG"
+  else
+    # No orderly stop was recorded: the previous boot ended in a crash, a
+    # lockup, a hard reset from the panel, or a host-side event.
+    strikes=$((strikes + 1))
+  fi
+  printf '%s\n' "$strikes" > "$STRIKE_FILE"
+
+  if [ "$strikes" -ge "$MAX_REBOOTS" ] && [ "$strikes" -gt 0 ]; then
+    apply 0
+    notify "Auto-reboot disarmed" \
+      "This host stopped uncleanly ${strikes}x without a stable run in between, so its automatic reboot is now OFF: the next panic or lockup will leave the box down and intact for inspection rather than rebooting.
+Read the console in the provider panel before rebooting - it is the only place a panic message survives.
+Re-arms by itself after ${STABLE_MIN} min of uptime." \
+      high rotating_light
+  else
+    apply 1
+    if [ "$strikes" -gt 0 ]; then
+      notify "Auto-reboot armed after unclean stop" \
+        "Previous stop was unclean; automatic reboot stays armed for one more fault (${strikes}/${MAX_REBOOTS} used)." \
+        default warning
+    fi
+  fi
+  exit 0
+}
+
+# Called once the host has been up long enough to be believed. Clearing the
+# strike is what stops a single bad day from leaving the guard disarmed for ever.
+cmd_stable() {
+  mkdir -p "$STATE_DIR"
+  local strikes
+  strikes="$(read_strikes)"
+  [ "$ENABLED" != 1 ] && exit 0
+  printf '0\n' > "$STRIKE_FILE"
+  apply 1
+  if [ "$strikes" -gt 0 ]; then
+    notify "Auto-reboot re-armed" \
+      "Host has been up ${STABLE_MIN} min without incident after an unclean stop; automatic reboot is armed again." \
+      low white_check_mark
+  fi
+  exit 0
+}
+
+# Records that systemd took the machine down deliberately, so the next boot
+# does not count a patch-window reboot or an operator reboot as a crash.
+cmd_clean() {
+  mkdir -p "$STATE_DIR"
+  : > "$CLEAN_FLAG"
+  exit 0
+}
+
+case "${1:-}" in
+  arm) cmd_arm ;;
+  stable) cmd_stable ;;
+  clean-shutdown) cmd_clean ;;
+  *) echo "usage: $0 {arm|stable|clean-shutdown}" >&2; exit 2 ;;
+esac

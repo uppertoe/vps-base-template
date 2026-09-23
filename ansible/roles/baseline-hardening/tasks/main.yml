@@ -321,6 +321,17 @@
       MaxFileSec={{ baseline_journald_max_file_sec }}
   notify: Restart systemd-journald
 
+- name: Configure journald sync interval
+  ansible.builtin.copy:
+    dest: /etc/systemd/journald.conf.d/99-vps-scaffold-sync.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Journal]
+      SyncIntervalSec={{ baseline_journald_sync_interval }}
+  notify: Restart systemd-journald
+
 - name: Apply audit and logging services on real hosts
   block:
     - name: Ensure rsyslog is enabled and started on real hosts
@@ -827,6 +838,23 @@
   notify: Update grub
   when:
     - baseline_cis_l2_audit_rules | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
+# A panic or hard wedge writes to the console, not to disk, so without this the
+# box stops with no record of why (as on 2026-09-22). Adding the serial port as
+# a console puts that output where the provider's console viewer can show it.
+# Harmless where no serial port exists: the kernel keeps using tty1.
+- name: Configure serial console for crash capture via grub drop-in
+  ansible.builtin.copy:
+    dest: /etc/default/grub.d/99-vps-scaffold-console.cfg
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      GRUB_CMDLINE_LINUX="$GRUB_CMDLINE_LINUX console=tty1 console={{ baseline_serial_console_port }},{{ baseline_serial_console_speed }}"
+  notify: Update grub
+  when:
+    - baseline_enable_serial_console | bool
     - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
 
 - name: Ensure modprobe.d directory exists

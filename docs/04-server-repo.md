@@ -174,11 +174,23 @@ and 18 ms once resident. `vm.swappiness` is therefore 10 rather than the
 distro's 60, so the kernel reclaims page cache (cheap to re-read) before it
 pages out anonymous memory.
 
-For a service where that first-visitor latency actually matters, pin it out of
-swap entirely by setting `memswap_limit` equal to `mem_limit`:
+For a service where that first-visitor latency actually matters, place it in
+the no-swap slice the docker role installs:
 
+    cgroup_parent: vps-noswap.slice
     mem_limit: 256m
-    memswap_limit: 256m   # equal => this container may not swap at all
+
+Not `memswap_limit`. Docker records that field and the systemd cgroup driver
+does not apply it (seen on 29.8.1): the scope ends up `MemorySwapMax=infinity`
+and the container swaps anyway, while `docker inspect` reports `MemorySwap ==
+Memory` and looks correct. The slice works because cgroup v2 enforces the
+smallest limit along the path, so `memory.swap.max=0` on the parent governs
+everything beneath it.
+
+Check the enforcement, never the intent:
+
+    systemctl show docker-<full-id>.scope -p MemorySwapMax   # not docker inspect
+    cat /sys/fs/cgroup/vps.slice/vps-noswap.slice/<scope>/memory.swap.current
 
 Do that only where measured usage sits well under the limit, because the
 container can no longer borrow swap under pressure: it gets OOM-killed

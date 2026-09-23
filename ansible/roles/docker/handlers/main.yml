@@ -4,3 +4,9 @@
     name: docker
     state: restarted
   when: ansible_facts['virtualization_type'] not in ['docker', 'container']
+
+# A slice has to be known to systemd before a container can be placed in it.
+- name: Reload systemd for slices
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: ansible_facts['virtualization_type'] not in ['docker', 'container']

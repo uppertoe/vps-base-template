@@ -151,9 +151,14 @@ serial console is the only place a panic message survives.
     sysctl kernel.panic kernel.panic_on_oops   # 0 means disarmed
     cat /var/lib/vps-notify/panic-guard/strikes
 
-Hung-task panics are off by default (`notify_panic_guard_on_hung_task`): slow
-storage can block a task past the timeout with the host otherwise fine, and a
-spurious reboot is worse than a stall.
+Hung-task panics are on (`notify_panic_guard_on_hung_task`), because that is
+the failure actually seen here. On 2026-09-22 prod-rch-vps kept serving cached
+pages while every disk write blocked for three and a half hours: nothing
+panicked, nothing was logged, and the box had to be reset from the panel.
+Tasks stuck in D state past `hung_task_timeout_secs` is precisely that
+condition, and it raises a real panic — which the serial console captures and
+the guard reboots out of, once. Turn it off only if legitimate I/O on the host
+regularly blocks that long.
 
 ## Failure modes this covers
 

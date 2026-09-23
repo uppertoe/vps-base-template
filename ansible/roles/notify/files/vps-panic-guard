@@ -25,11 +25,13 @@
 #   PANIC_GUARD_MAX_REBOOTS   (default 1; automatic reboots allowed per fault)
 #   PANIC_GUARD_ON_OOPS       (default 1; treat an oops as a panic)
 #   PANIC_GUARD_ON_SOFTLOCKUP (default 1; a CPU stuck in the kernel panics)
-#   PANIC_GUARD_ON_HUNG_TASK  (default 0; tasks blocked in D state panic. Off
-#                              by default: slow storage can block a task past
-#                              hung_task_timeout_secs without the host being
-#                              in any trouble, and a spurious reboot is worse
-#                              than a slow minute.)
+#   PANIC_GUARD_ON_HUNG_TASK  (default 1; tasks blocked in D state panic. This
+#                              is the one that catches a storage hang, where
+#                              the kernel stays healthy, cached pages still
+#                              serve, and every disk write blocks for ever — a
+#                              failure that otherwise panics nothing and logs
+#                              nothing. Set 0 if legitimate I/O on the host
+#                              regularly blocks past hung_task_timeout_secs.)
 set -u
 
 CONF="${VPS_NOTIFY_CONF:-/etc/vps-scaffold/notify.env}"
@@ -41,7 +43,7 @@ REBOOT_SECS="${PANIC_GUARD_REBOOT_SECS:-10}"
 MAX_REBOOTS="${PANIC_GUARD_MAX_REBOOTS:-1}"
 ON_OOPS="${PANIC_GUARD_ON_OOPS:-1}"
 ON_SOFTLOCKUP="${PANIC_GUARD_ON_SOFTLOCKUP:-1}"
-ON_HUNG_TASK="${PANIC_GUARD_ON_HUNG_TASK:-0}"
+ON_HUNG_TASK="${PANIC_GUARD_ON_HUNG_TASK:-1}"
 STABLE_MIN="${PANIC_GUARD_STABLE_MIN:-30}"
 
 # Overridable so the state machine can be exercised in tests.

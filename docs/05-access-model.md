@@ -389,6 +389,14 @@ git config commit.gpgsign true          # per-repo, in the server repo
 
 Then add `"<committer-email> <key-type> <base64-key>"` to
 `deploy_allowed_signers` in the inventory and re-apply the deploy-user role.
+
+> **INI inventory pitfall:** write the list *without* outer quotes —
+> `deploy_allowed_signers=["<email> ssh-ed25519 AAAA…"]`. Wrapped in single
+> quotes the value parses as a *string*, which would render one character per
+> line into `/etc/ssh/allowed_signers` and refuse every operator-signed deploy
+> (Renovate automerges still verify via GitHub's web-flow key, masking the
+> break). The deploy-user role now fails the play on a string-valued var
+> instead of writing the corrupt file.
 Cutover order matters: sign a commit on main FIRST (or merge any PR via
 GitHub), then enable the gate — enabling it while HEAD is unsigned refuses
 every deploy until a verifiable commit lands.

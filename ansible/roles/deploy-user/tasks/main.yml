@@ -207,6 +207,33 @@
 # automerge). Both trust anchors are root-owned; the deploy user consumes but
 # cannot extend them.
 
+# deploy_allowed_signers must be a LIST of signer lines. INI inventories make
+# this easy to get wrong: wrapping the value in outer single quotes
+# (var='["..."]') literal_evals to a STRING, and the template's for-loop then
+# iterates it character-by-character — writing a corrupt one-char-per-line
+# trust store that refuses every operator-signed deploy. The break is silent
+# at provision time and masked in operation: GitHub-merge trust verifies via
+# a separate GPG path, so Renovate automerges keep deploying. Fail the play
+# instead (bit us on prod-mch-vps, 2026-08-18).
+- name: Refuse a malformed deploy_allowed_signers (corrupt trust-store guard)
+  ansible.builtin.assert:
+    that:
+      - deploy_allowed_signers is not string
+      - deploy_allowed_signers is not mapping
+      - deploy_allowed_signers is sequence
+      - deploy_allowed_signers | select('string') | list | length == deploy_allowed_signers | length
+      - deploy_allowed_signers | reject('match', '^\S+\s+\S+\s+\S+') | list | length == 0
+    fail_msg: >-
+      deploy_allowed_signers must be a LIST of allowed-signers lines
+      ("<principal> <key-type> <base64-key>"); got
+      {{ deploy_allowed_signers | type_debug }}: {{ deploy_allowed_signers }}.
+      In an INI inventory write it WITHOUT outer quotes —
+      deploy_allowed_signers=["<email> ssh-ed25519 AAAA..."] — a quoted value
+      parses as a string and would render a corrupt one-character-per-line
+      /etc/ssh/allowed_signers.
+    quiet: true
+  when: deploy_verify_signature | bool
+
 # /etc/ssh (0755 root) rather than /etc/vps-scaffold (0750 root): the deploy
 # user must READ the trust anchors at verify time but must not be able to
 # modify or replace them — a root-owned file in a root-owned world-readable

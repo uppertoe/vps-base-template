@@ -77,6 +77,11 @@ services:
       - NET_BIND_SERVICE   # bind privileged ports 80/443 as non-root
     security_opt:
       - no-new-privileges:true
+    # Every request on the host passes through here, including the forward_auth
+    # subrequest for a gated app, so it is the one container that must never be
+    # faulted back from swap. It runs around 60 MB against this ceiling, so the
+    # slice costs nothing worth having. Installed by the docker role.
+    cgroup_parent: vps-noswap.slice
     mem_limit: 256m
     pids_limit: 256
     ports:

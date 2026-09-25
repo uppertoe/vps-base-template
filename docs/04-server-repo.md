@@ -174,11 +174,30 @@ and 18 ms once resident. `vm.swappiness` is therefore 10 rather than the
 distro's 60, so the kernel reclaims page cache (cheap to re-read) before it
 pages out anonymous memory.
 
-For a service where that first-visitor latency actually matters, place it in
-the no-swap slice the docker role installs:
+**Anything Caddy can reach belongs in the no-swap slice.** By definition it is
+something a person waits on, and the compose audit now asserts it — a
+Caddy-reachable app container without the slice is a WARN:
 
     cgroup_parent: vps-noswap.slice
     mem_limit: 256m
+
+Caddy itself is already in it (`docker/caddy.base.yml`), since every request
+including the `forward_auth` subrequest passes through it.
+
+These hosts are 1–2 GB, so pinning *everything* is not always affordable: a
+container that cannot swap is OOM-killed rather than borrowing, and the pinned
+set has to fit in RAM alongside the hourly backup and any build. Where a host
+cannot afford it — or where nobody would notice the delay — record the
+exception with its reason instead of leaving the omission silent:
+
+    # ansible/audit-exceptions.yml
+    audit_compose_exceptions:
+      deploy-narrator-1: [web_no_swap]   # no real traffic yet; absorbs pressure
+
+Check the enforcement, never the intent (see below), and check *every host
+running the app*: the compose files are per-repo, so fixing one sibling leaves
+the other slow. That is exactly how caffeine stayed slow on one host for a
+fortnight after being fixed on the other.
 
 Not `memswap_limit`. Docker records that field and the systemd cgroup driver
 does not apply it (seen on 29.8.1): the scope ends up `MemorySwapMax=infinity`

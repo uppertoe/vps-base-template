@@ -124,6 +124,28 @@ NET_CASES = [
 ]
 
 
+# The slice is what actually keeps a user-facing app resident; being asked for it
+# and not getting it is the failure mode worth a test, since Docker's
+# memswap_limit silently does nothing under the systemd cgroup driver.
+WEB_CASES = [
+    (
+        "app under the no-swap slice passes",
+        {"HostConfig": {"CgroupParent": "vps-noswap.slice"}},
+        True,
+    ),
+    (
+        "app with no cgroup parent fails",
+        {"HostConfig": {}},
+        False,
+    ),
+    (
+        "app under some other slice fails",
+        {"HostConfig": {"CgroupParent": "system.slice"}},
+        False,
+    ),
+]
+
+
 def main():
     fails = 0
     for name, container, key, want in CASES:
@@ -135,6 +157,15 @@ def main():
             print(f"[OK] {name}: {key}={got}")
 
     total = len(CASES)
+    for name, container, want in WEB_CASES:
+        total += 1
+        got = cch.evaluate_web(container)["web_no_swap"]
+        if got is not want:
+            fails += 1
+            print(f"[FAIL] {name}: web_no_swap={got} (want {want})")
+        else:
+            print(f"[OK] {name}: web_no_swap={got}")
+
     for name, inspected, expected in NET_CASES:
         got = cch.network_controls(inspected)
         for cname, keys in expected.items():

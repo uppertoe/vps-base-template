@@ -124,6 +124,24 @@ PROXY_CONTROLS = [
 # network don't count as apps (a shared db tier is the whole point); the
 # invariant is at most one NON-db app per internal network. Document a
 # deliberate multi-app internal network in the exceptions file.
+# The slice the docker role installs with MemorySwapMax=0. A container placed
+# beneath it cannot be paged out, because cgroup v2 enforces the smallest limit
+# along the path.
+NOSWAP_SLICE = "vps-noswap.slice"
+
+# These hosts are small and their swap is dm-crypt, so a page faulted back costs
+# a decrypt on one vCPU. An app that sits idle between visitors gets evicted by
+# whatever runs in the meantime — the hourly backup, apt, a deploy — and the next
+# visitor waits seconds for it. Anything Caddy can reach is by definition
+# something a person waits on, so it belongs in the slice; where a host cannot
+# afford to pin it (they are 1-2 GB), record it in audit_compose_exceptions with
+# the reason rather than leaving the omission silent. Forgetting is the normal
+# failure here: caffeine was fixed on one host and left slow on its sibling for
+# a fortnight because nothing said so.
+WEB_CONTROLS = [
+    ("scaffold app: user-facing tier kept out of swap", "web_no_swap"),
+]
+
 INTERNAL_NET_CONTROLS = [
     ("scaffold app: sole app on its internal networks", "internal_network_isolated"),
 ]
@@ -144,6 +162,11 @@ def evaluate_db(c, proxy_networks):
         "db_no_published_ports": not published,
         "db_off_proxy_network": not (networks & proxy_networks),
     }
+
+
+def evaluate_web(c):
+    host = c.get("HostConfig") or {}
+    return {"web_no_swap": (host.get("CgroupParent") or "") == NOSWAP_SLICE}
 
 
 def docker(args):
@@ -296,6 +319,9 @@ def main():
         if not is_init_container(c) and compose_service(c) != "caddy":
             results.update(net_controls[name])
             controls += PROXY_CONTROLS + INTERNAL_NET_CONTROLS
+            if container_networks(c) & proxy_networks:
+                results.update(evaluate_web(c))
+                controls += WEB_CONTROLS
         if is_db_container(c):
             results.update(evaluate_db(c, proxy_networks))
             controls += DB_CONTROLS
@@ -327,7 +353,10 @@ def main():
             fh.write("# Container runtime (CIS Docker §5) audit\n\n")
             fh.write(f"{s['pass']} pass, {s['warn']} warn, {s['excepted']} excepted\n\n")
             cols = []
-            for _, k in CONTROLS + INIT_CONTROLS + PROXY_CONTROLS + INTERNAL_NET_CONTROLS + DB_CONTROLS:
+            for _, k in (
+                CONTROLS + INIT_CONTROLS + PROXY_CONTROLS
+                + INTERNAL_NET_CONTROLS + WEB_CONTROLS + DB_CONTROLS
+            ):
                 if k not in cols:
                     cols.append(k)
             fh.write("| container | " + " | ".join(cols) + " |\n")

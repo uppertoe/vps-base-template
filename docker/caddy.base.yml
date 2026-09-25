@@ -30,7 +30,7 @@ services:
   # first provision — the log FileWriter is a hard config-load failure. Runs as
   # root with exactly the two capabilities chown needs, then exits.
   caddy-init:
-    image: caddy:2-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
+    image: caddy:2-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
     restart: "no"
     user: "0:0"
     cap_drop:
@@ -56,7 +56,7 @@ services:
   caddy:
     # Pinned by digest (multi-arch index). Renovate bumps the digest; the :2-alpine
     # tag is kept for human readability. See scaffold/docs/08-security-model.md.
-    image: caddy:2-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
+    image: caddy:2-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
     restart: unless-stopped
     depends_on:
       caddy-init:

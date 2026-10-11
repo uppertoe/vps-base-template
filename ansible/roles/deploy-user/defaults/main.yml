@@ -41,6 +41,11 @@ deploy_allow_direct_docker_for_admin: true
 #     collectstatic: "python manage.py collectstatic --noinput"
 deploy_allowed_app_manage_commands: {}
 
+# Branch the box deploys. vps-deploy refuses a checkout on any other branch or
+# one not tracking origin/<branch>, and refuses a working tree that differs
+# from HEAD (see the wrapper for the exact rules).
+deploy_branch: main
+
 # --- Hands-off updates ---------------------------------------------------
 # The CI-gated fast path: Renovate proposes digest/submodule bumps, repo CI
 # validates, Renovate automerges, and the auto-deploy timer applies them
@@ -67,8 +72,15 @@ deploy_allowed_signers: []
 # Also trust commits created by GitHub's own merge machinery (web UI and API
 # merges — which is what Renovate automerge produces): GitHub signs those with
 # its web-flow GPG key, fetched from github.com/web-flow.gpg at provision
-# time. Leaves direct unsigned pushes as the only refused path.
+# time into a root-owned keyring. Leaves direct unsigned pushes as the only
+# refused path. Note what this trusts: ANY web-UI edit or API merge on the
+# repo by any account or app with write access. It compensates for missing
+# branch protection; it does not replace GitHub account security.
 deploy_trust_github_merges: true
+# Fingerprint the downloaded web-flow key must carry, so a tampered download
+# cannot plant a different trust anchor. GitHub's published key:
+# https://docs.github.com/en/authentication/managing-commit-signature-verification/about-commit-signature-verification
+deploy_github_webflow_fingerprint: "5DE3E0509C47EA3CF04A42D34AEE18F83AFDEB23"
 # Weekly awareness alert when the scaffold submodule is behind upstream main.
 scaffold_drift_check: true
 scaffold_drift_schedule: "Mon *-*-* 07:05:00"

@@ -78,6 +78,11 @@ notify_onfailure_units:
   - vuln-scan.service
   - pending-security-updates.service
   - log-export.service
+  # Fail-open safety units: if either fails at boot the box runs with Docker's
+  # default (unconstrained) container egress, or without swap. Neither has a
+  # user-visible symptom, so the failure itself must page.
+  - vps-scaffold-docker-firewall.service
+  - vps-cryptswap-swapon.service
 
 # Kernel auto-reboot, guarded against crash loops: one automatic reboot per
 # fault, then the box stays down and intact until it has proved stable again.

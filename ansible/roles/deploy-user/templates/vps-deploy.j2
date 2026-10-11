@@ -56,14 +56,59 @@ old_scaffold="$(runuser -u {{ deploy_user }} -- git -C scaffold rev-parse HEAD 2
 runuser -u {{ deploy_user }} -- git pull --recurse-submodules
 new_head="$(runuser -u {{ deploy_user }} -- git rev-parse HEAD)"
 new_scaffold="$(runuser -u {{ deploy_user }} -- git -C scaffold rev-parse HEAD 2>/dev/null || echo none)"
+
+# What root executes below must be exactly the commit at HEAD, on the deployed
+# branch. The deploy user owns this checkout, so an edited hook, compose file
+# or Caddy snippet that never went through git would otherwise run as root on
+# the next deploy, whatever the signature gate says about HEAD. Refuse:
+#   * any modified, staged or deleted tracked file (a dirty scaffold submodule
+#     shows here too);
+#   * a checkout that is not the deployed branch tracking origin;
+#   * an untracked app hook (the loop below would execute it) or a compose
+#     override file (compose would merge it silently).
+# Other untracked files (an operator's .bak copy of an env file, local notes)
+# are harmless and stay allowed, so a routine deploy is not blocked by them.
+branch="$(runuser -u {{ deploy_user }} -- git rev-parse --abbrev-ref HEAD)"
+upstream="$(runuser -u {{ deploy_user }} -- git rev-parse --abbrev-ref '@{u}' 2>/dev/null || echo none)"
+if [[ "$branch" != "{{ deploy_branch }}" || "$upstream" != "origin/{{ deploy_branch }}" ]]; then
+  echo "vps-deploy: checkout is on '$branch' tracking '$upstream', expected '{{ deploy_branch }}' tracking 'origin/{{ deploy_branch }}' — refusing to deploy." >&2
+  exit 1
+fi
+dirty="$(runuser -u {{ deploy_user }} -- git status --porcelain --untracked-files=no)"
+if [[ -n "$dirty" ]]; then
+  echo "vps-deploy: working tree differs from HEAD — refusing to deploy. Changes must arrive through git:" >&2
+  printf '  %s\n' "$dirty" >&2
+  exit 1
+fi
+for f in docker-compose.override.yml docker-compose.override.yaml compose.override.yml compose.override.yaml; do
+  if [[ -e "$f" ]]; then
+    echo "vps-deploy: $f is present in /opt/deploy — compose would merge it unreviewed; remove it to deploy." >&2
+    exit 1
+  fi
+done
+for hook in ./apps/*/deploy.sh; do
+  [[ -e "$hook" ]] || continue
+  if ! runuser -u {{ deploy_user }} -- git ls-files --error-unmatch "$hook" >/dev/null 2>&1; then
+    echo "vps-deploy: ${hook#./} is not tracked by git — refusing to run an unreviewed hook as root." >&2
+    exit 1
+  fi
+done
 {% if deploy_verify_signature | default(false) %}
 
 # Supply-chain gate (deploy_verify_signature): everything below runs as root
 # (compose up + app hooks). Refuse to apply a HEAD that is not a good signature
-# from a signer the deploy user trusts — a merge that bypassed review cannot
-# then execute as root. Requires signed commits + a configured
-# allowed-signers/keyring for {{ deploy_user }} (docs/05-access-model.md).
-if ! runuser -u {{ deploy_user }} -- git -C /opt/deploy verify-commit HEAD; then
+# from a trusted signer — a merge that bypassed review cannot then execute as
+# root. Verification runs AS ROOT with root-owned configuration only: the
+# allowed-signers file under /etc/ssh and the keyring under /etc/vps-scaffold.
+# The deploy user's own git config and keyring are deliberately not consulted
+# (GIT_CONFIG_NOSYSTEM, an empty global config, a fixed GNUPGHOME), so the
+# trust store really is outside the deploy account's reach. safe.directory is
+# needed because root is reading a checkout owned by another user.
+if ! env -i PATH="$PATH" HOME=/root GNUPGHOME=/etc/vps-scaffold/gnupg \
+       GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+     git -C /opt/deploy -c safe.directory=/opt/deploy \
+       -c gpg.ssh.allowedSignersFile=/etc/ssh/allowed_signers \
+       verify-commit HEAD; then
   echo "vps-deploy: HEAD is not a verified signed commit — refusing to deploy." >&2
   exit 1
 fi

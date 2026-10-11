@@ -5,16 +5,18 @@ Documentation=file:/usr/local/sbin/deploy-trigger
 After=network-online.target
 Wants=network-online.target
 ConditionPathExists=/etc/vps-scaffold/deploy-trigger.env
+# Persistent crash-looping (bad token, ntfy gone) should page, not spin
+# silently: cap the restarts, then fail into the notify hook. These three
+# are [Unit] directives; in [Service] systemd logs "Unknown key name" and
+# ignores them, which is how this unit ran unpaged until 2026-10-11.
+StartLimitIntervalSec=600
+StartLimitBurst=10
+OnFailure=notify@%n.service
 
 [Service]
 ExecStart=/usr/local/sbin/deploy-trigger
 Restart=always
 RestartSec=30
-# Persistent crash-looping (bad token, ntfy gone) should page, not spin
-# silently: cap the restarts, then fail into the notify hook.
-StartLimitIntervalSec=600
-StartLimitBurst=10
-OnFailure=notify@%n.service
 # Hardening: the only privileged action is `systemctl start` of one unit.
 NoNewPrivileges=true
 ProtectSystem=strict

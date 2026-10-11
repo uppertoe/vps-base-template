@@ -58,8 +58,36 @@ if [[ -d "$repo_root/apps" ]]; then
         closes = gsub(/\}/, "}", line)
         sub(/^[[:space:]]*/, "", trimmed)
 
+        # A brace inside a comment is still counted below and would fold one
+        # block into the next: fail the render instead of mis-wiring a route.
+        if (substr(trimmed, 1, 1) == "#" && line ~ /[{}]/) {
+          printf "ERROR: %s:%d: brace inside a comment (the renderer counts braces)\n", FILENAME, FNR > "/dev/stderr"
+          bad = 1
+        }
+
         if (depth == 0 && target == "") {
           target = (substr(trimmed, 1, 1) == "(") ? snip : site
+        }
+
+        # Every app upstream in a site block must drop the gateway session
+        # cookie (import strip_auth_cookie, or an equivalent header_up Cookie
+        # rewrite): the cookie is scoped to the whole domain and is a live
+        # estate-wide bearer credential no app needs. The guards do this
+        # already; this catches hand-written reverse_proxy lines. The auth
+        # service itself (auth:8080) is the one upstream that must see it. A
+        # deliberate exception is declared on the preceding line with
+        #   # scaffold-lint: allow-session-cookie
+        if (target == site && depth > 0 && trimmed ~ /^reverse_proxy([[:space:]]|$)/ && trimmed !~ /auth:8080/) {
+          if (prev_trimmed ~ /scaffold-lint: allow-session-cookie/) {
+            # explicit opt-out
+          } else if (line ~ /\{[[:space:]]*$/) {
+            in_proxy = 1; proxy_depth = depth; proxy_line = FNR; seen_strip = 0
+          } else {
+            printf "ERROR: %s:%d: reverse_proxy without a block; use a block with import strip_auth_cookie so the gateway session cookie never reaches the app\n", FILENAME, FNR > "/dev/stderr"
+            bad = 1
+          }
+        } else if (in_proxy && (trimmed ~ /^import strip_auth_cookie/ || trimmed ~ /^header_up Cookie/)) {
+          seen_strip = 1
         }
 
         print $0 >> target
@@ -126,7 +154,22 @@ if [[ -d "$repo_root/apps" ]]; then
         }
 
         depth += opens - closes
+        if (in_proxy && depth <= proxy_depth) {
+          if (!seen_strip) {
+            printf "ERROR: %s:%d: reverse_proxy block lacks import strip_auth_cookie (gateway session cookie would reach the app)\n", FILENAME, proxy_line > "/dev/stderr"
+            bad = 1
+          }
+          in_proxy = 0
+        }
         if (depth == 0) { target = "" }
+        prev_trimmed = trimmed
+      }
+      END {
+        if (depth != 0) {
+          printf "ERROR: %s: unbalanced braces (depth %d at end of file)\n", FILENAME, depth > "/dev/stderr"
+          bad = 1
+        }
+        if (bad) { exit 1 }
       }
     ' "$snippet"
     printf '\n' >> "$snippets"

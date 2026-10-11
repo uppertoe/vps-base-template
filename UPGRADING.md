@@ -23,6 +23,54 @@ of the actions, once.
 
 ---
 
+## 2026-10-11 — Deploy wrapper executes only the verified HEAD; off-host Caddy logs; audit rules load at boot
+
+**What lands automatically on the next `site-quick.yml`:**
+
+- `vps-deploy` refuses to deploy unless the checkout is on `deploy_branch`
+  (default `main`) tracking `origin/<branch>`, every tracked file matches HEAD
+  (a dirty `scaffold` submodule counts), no compose override file is present,
+  and every `apps/*/deploy.sh` is tracked. Other untracked files (an operator's
+  `.bak` copy of an env file) stay allowed. With `deploy_verify_signature`,
+  the signature check now runs as root against root-owned configuration only;
+  the web-flow key is fingerprint-pinned and imported into
+  `/etc/vps-scaffold/gnupg`.
+- `log-export.sh` resolves a `/var/lib/docker/volumes/<name>/_data` entry by
+  volume-name suffix when the literal path does not exist (compose prefixes
+  volume names with the project, so `caddy_logs` is `deploy_caddy_logs`) and
+  records every entry's outcome in the archive's `files/EXTRA_PATHS.txt`.
+  Until now the Caddy access logs were silently absent from the off-host
+  record on every compose-managed host.
+- `99-vps-scaffold.rules` no longer watches `/run/containerd/containerd.sock`,
+  which aborted `augenrules --load` at boot and dropped every later rule
+  (the CIS L2 set and the `-e 2` immutable flag).
+- `vps-scaffold-docker-firewall.service` and `vps-cryptswap-swapon.service`
+  page via `OnFailure`; the firewall script now fails when the `DOCKER-USER`
+  chain is missing instead of reporting success.
+- The deploy-trigger config task is `no_log`.
+- The Caddy route renderer fails on a brace inside a comment, on unbalanced
+  braces, and on any site-block `reverse_proxy` to an app upstream that does
+  not strip the gateway session cookie (`import strip_auth_cookie`); a
+  deliberate exception is declared with `# scaffold-lint: allow-session-cookie`
+  on the preceding line.
+
+**Operator actions:**
+
+1. Before bumping the pointer, run the renderer in the server repo and fix any
+   `reverse_proxy` it reports; the fix is a block with
+   `import strip_auth_cookie` (see the instance template's `apps/*/*.caddy`).
+2. If a deploy fails with "working tree differs from HEAD", the box has local
+   edits: inspect with `sudo -u deploy git -C /opt/deploy status`, then either
+   land them through git or discard them (`git checkout -- <file>`).
+3. On an L2 host, after the next reboot confirm `sudo auditctl -s` reports
+   `enabled 2` and `sudo auditctl -l | wc -l` is in the hundreds.
+4. After the next nightly export, confirm the journal for `log-export.service`
+   shows the `caddy_logs` entry resolving to the project-prefixed volume.
+5. Optional tidy-up: the deploy user's keyring copy of the web-flow key
+   (`~deploy/.gnupg`) is no longer read and may be removed.
+
+---
+
 ## 2026-07-04 — Hands-off update fast path
 
 **What lands automatically on the next `site-quick.yml`:** the

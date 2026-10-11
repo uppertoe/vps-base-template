@@ -1,7 +1,11 @@
 {% for path in baseline_existing_docker_audit_paths %}
 -w {{ path }} -p wa -k docker
 {% endfor %}
--w /run/containerd/containerd.sock -p rwxa -k docker
+# No watch on /run/containerd/containerd.sock or /var/run/docker.sock: those
+# paths do not exist when augenrules loads at boot, the load aborts at the
+# failing line, and every later rule (the CIS L2 files and the immutable flag
+# sort after this file) is silently dropped. The unit files and binaries
+# above cover the Docker surface; see defaults/main.yml.
 -w /etc/ssh/sshd_config -p wa -k sshd
 -w /etc/ssh/sshd_config.d -p wa -k sshd
 -w /etc/sudoers -p wa -k scope

@@ -72,18 +72,48 @@ rm -rf "${WORK:?}"/*
 journalctl --cursor-file="$CURSOR" -o export --no-pager > "$WORK/journal.export" || true
 
 # --- 2. extra file trees, incremental on mtime ---
+# A Docker volume path is resolved by name suffix when it does not exist as
+# written: compose prefixes volume names with the project name, so the
+# configured caddy_logs is <project>_caddy_logs on the box. Silently skipping
+# a missing tree would drop the Caddy access logs from the off-host record
+# without any sign, so every entry's outcome is logged and recorded in the
+# archive (files/EXTRA_PATHS.txt).
+resolve_extra_path() {
+  local p="$1" vol match
+  if [[ -e "$p" ]]; then
+    printf '%s\n' "$p"
+    return 0
+  fi
+  if [[ "$p" =~ ^/var/lib/docker/volumes/([^/]+)/_data$ ]] && command -v docker >/dev/null 2>&1; then
+    vol="${BASH_REMATCH[1]}"
+    match="$(docker volume ls -q 2>/dev/null | grep -E "(^|_)${vol}$" | head -n1 || true)"
+    if [[ -n "$match" ]]; then
+      docker volume inspect -f '{{ .Mountpoint }}' "$match" 2>/dev/null && return 0
+    fi
+  fi
+  return 1
+}
+
 mkdir -p "$WORK/files"
+MANIFEST="$WORK/files/EXTRA_PATHS.txt"
+: > "$MANIFEST"
 IFS=: read -ra extra <<< "$EXTRA_PATHS"
 for p in "${extra[@]}"; do
-  [[ -e "$p" ]] || continue
+  if ! resolved="$(resolve_extra_path "$p")"; then
+    log "EXTRA_PATHS entry not found, skipped: $p"
+    printf 'MISSING %s\n' "$p" >> "$MANIFEST"
+    continue
+  fi
+  [[ "$resolved" == "$p" ]] || log "EXTRA_PATHS entry $p resolved to $resolved"
+  printf 'OK %s -> %s\n' "$p" "$resolved" >> "$MANIFEST"
   if [[ -f "$NEWER_STAMP" ]]; then
-    find "$p" -type f -newer "$NEWER_STAMP" -exec cp -a --parents {} "$WORK/files/" \; 2>/dev/null || true
+    find "$resolved" -type f -newer "$NEWER_STAMP" -exec cp -a --parents {} "$WORK/files/" \; 2>/dev/null || true
   else
-    find "$p" -type f -exec cp -a --parents {} "$WORK/files/" \; 2>/dev/null || true
+    find "$resolved" -type f -exec cp -a --parents {} "$WORK/files/" \; 2>/dev/null || true
   fi
 done
 
-if [[ ! -s "$WORK/journal.export" ]] && ! find "$WORK/files" -type f -print -quit 2>/dev/null | grep -q .; then
+if [[ ! -s "$WORK/journal.export" ]] && ! find "$WORK/files" -type f ! -name EXTRA_PATHS.txt -print -quit 2>/dev/null | grep -q .; then
   log "Nothing new to export."
   touch "$NEWER_STAMP"
   exit 0

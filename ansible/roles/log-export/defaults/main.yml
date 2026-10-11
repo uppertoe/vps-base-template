@@ -28,7 +28,11 @@ log_export_accept_none: false
 log_export_schedule: "*-*-* 04:47:00"
 log_export_state_dir: /var/lib/log-export
 
-# Extra log file globs to include beyond the journal (find -newer incremental).
+# Extra log file trees to include beyond the journal (find -newer incremental).
+# A /var/lib/docker/volumes/<name>/_data entry that does not exist is resolved
+# by volume name suffix (compose prefixes volumes with the project name, so
+# caddy_logs is really <project>_caddy_logs); a path that still cannot be
+# found is reported in the export log and in the archive's EXTRA_PATHS.txt.
 log_export_extra_paths:
   - /var/log/audit
   - /var/lib/docker/volumes/caddy_logs/_data

@@ -201,16 +201,14 @@
     mode: "0755"
 
 # --- Signed-deploy trust store (deploy_verify_signature) ------------------
-# vps-deploy refuses to apply a HEAD the deploy user cannot verify. Two kinds
-# of signature must verify: the operator's SSH-signed commits (allowed-signers
-# file) and GitHub's web-flow GPG key (web/API merge commits, incl. Renovate
-# automerge). Both trust anchors are root-owned; the deploy user consumes but
-# cannot extend them.
+# vps-deploy refuses to apply a HEAD it cannot verify. Two kinds of signature
+# must verify: the operator's SSH-signed commits (allowed-signers file) and
+# GitHub's web-flow GPG key (web/API merge commits, incl. Renovate automerge).
+# Verification runs AS ROOT inside vps-deploy, with root-owned configuration
+# only (an explicit allowedSignersFile and a fixed GNUPGHOME, the deploy
+# user's git config and keyring ignored), so the trust store is genuinely
+# outside the deploy account's reach — a stolen deploy key cannot add a signer.
 
-# /etc/ssh (0755 root) rather than /etc/vps-scaffold (0750 root): the deploy
-# user must READ the trust anchors at verify time but must not be able to
-# modify or replace them — a root-owned file in a root-owned world-readable
-# dir gives exactly that; the 0750 config dir would block the read.
 - name: Install allowed-signers file for signed deploys
   ansible.builtin.template:
     src: allowed_signers.j2
@@ -220,16 +218,17 @@
     mode: "0644"
   when: deploy_verify_signature | bool
 
-- name: Point the deploy user's git at the allowed-signers file
+# Earlier releases verified as the deploy user and pointed its ~/.gitconfig at
+# the signers file. Root now passes the path explicitly, so the pointer is
+# retired (it was also a deploy-writable knob over which signers file applied).
+- name: Retire the deploy user's allowed-signers git pointer
   community.general.ini_file:
     path: "/home/{{ deploy_user }}/.gitconfig"
     section: 'gpg "ssh"'
     option: allowedSignersFile
-    value: /etc/ssh/allowed_signers
+    state: absent
     owner: "{{ deploy_user }}"
     group: "{{ deploy_user }}"
-    # 0640, not 0644: baseline-hardening strips world bits from interactive
-    # users' dotfiles; a wider mode here would ping-pong on every run.
     mode: "0640"
   when: deploy_verify_signature | bool
 
@@ -252,11 +251,51 @@
     - deploy_verify_signature | bool
     - deploy_trust_github_merges | bool
 
-# Root reads the key file (the 0750 config dir blocks the deploy user) and
-# pipes it in; only the import runs as the deploy user.
-- name: Import GitHub web-flow key into the deploy user's keyring
+# Pin the downloaded trust anchor to GitHub's published fingerprint before it
+# is imported anywhere; a tampered download must fail the play, not widen trust.
+- name: Read the primary fingerprint of the downloaded web-flow key
   ansible.builtin.shell:
-    cmd: cat /etc/vps-scaffold/github-web-flow.gpg | runuser -u {{ deploy_user }} -- gpg --import
+    cmd: >-
+      set -o pipefail;
+      gpg --batch --with-colons --show-keys /etc/vps-scaffold/github-web-flow.gpg
+      | awk -F: '/^fpr:/ { print $10; exit }'
+    executable: /bin/bash
+  register: webflow_fpr
+  changed_when: false
+  when:
+    - deploy_verify_signature | bool
+    - deploy_trust_github_merges | bool
+
+- name: Refuse a web-flow key with an unexpected fingerprint
+  ansible.builtin.assert:
+    that:
+      - webflow_fpr.stdout | trim == deploy_github_webflow_fingerprint
+    fail_msg: >-
+      /etc/vps-scaffold/github-web-flow.gpg does not carry fingerprint
+      {{ deploy_github_webflow_fingerprint }}. Refusing to import it as a deploy
+      trust anchor; compare with GitHub's published key and update
+      deploy_github_webflow_fingerprint only if GitHub has rotated it.
+    quiet: true
+  when:
+    - deploy_verify_signature | bool
+    - deploy_trust_github_merges | bool
+
+- name: Create the root-owned keyring for merge-commit verification
+  ansible.builtin.file:
+    path: /etc/vps-scaffold/gnupg
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  when:
+    - deploy_verify_signature | bool
+    - deploy_trust_github_merges | bool
+
+- name: Import GitHub web-flow key into the root-owned keyring
+  ansible.builtin.command:
+    cmd: gpg --batch --import /etc/vps-scaffold/github-web-flow.gpg
+  environment:
+    GNUPGHOME: /etc/vps-scaffold/gnupg
   register: webflow_import
   changed_when: "'imported:' in webflow_import.stderr"
   when:
@@ -337,6 +376,7 @@
     group: root
     mode: "0600"
   register: deploy_trigger_conf
+  no_log: true
   when: deploy_push_trigger | bool
 
 - name: Remove deploy-trigger config when disabled

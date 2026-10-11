@@ -112,8 +112,13 @@
         exit 0
       fi
 
+      # DOCKER-USER is created by dockerd when it manages iptables. If it is
+      # missing while this unit runs (Requires=docker.service), the engine is
+      # not filtering through iptables and container egress is unconstrained:
+      # fail loudly (OnFailure pages) rather than report success.
       if ! iptables -S DOCKER-USER >/dev/null 2>&1; then
-        exit 0
+        echo "vps-scaffold-docker-firewall: DOCKER-USER chain not found; container egress policy NOT applied" >&2
+        exit 1
       fi
 
       iptables -N VPS-SCAFFOLD-DOCKER-USER 2>/dev/null || true

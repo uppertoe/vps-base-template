@@ -345,8 +345,14 @@ and hooks legitimately need Docker access (which is root-equivalent). With
 in the loop**.
 
 Restricted mode confines the interactive SSH `deploy` user; it deliberately
-does not confine the repo. That means GitHub account security, branch
-protection, and review requirements ARE part of the host's root boundary.
+does not confine the repo. The wrapper therefore executes only what git says
+is at HEAD: it refuses a checkout off the deployed branch, any modified or
+staged tracked file (including a dirty `scaffold` submodule), a compose
+override file, or an untracked `apps/*/deploy.sh`. Without that, the deploy
+user (which owns `/opt/deploy`) could place a hook or compose change that
+never went through git and have root run it on the next deploy. GitHub
+account security, branch protection, and review requirements ARE part of the
+host's root boundary.
 Treat them with the same seriousness as SSH keys:
 
 - **Branch protection** on `main`: require PRs and passing CI; no force-push.
@@ -363,20 +369,28 @@ Treat them with the same seriousness as SSH keys:
 Branch protection lives in GitHub's plan tier (unavailable on free private
 repos) and protects the repo, not the host. `deploy_verify_signature: true`
 moves enforcement onto the box itself: `vps-deploy` runs
-`git verify-commit HEAD` as the deploy user and refuses to deploy a HEAD it
-cannot verify. The role provisions two root-owned trust anchors:
+`git verify-commit HEAD` **as root**, with root-owned configuration only (an
+explicit allowed-signers path and a fixed `GNUPGHOME`; the deploy user's git
+config and keyring are not read), and refuses to deploy a HEAD it cannot
+verify. The role provisions two root-owned trust anchors:
 
 - `/etc/ssh/allowed_signers` from `deploy_allowed_signers` — the
   operator's SSH signing key(s), for direct pushes to main.
-- GitHub's web-flow GPG key (`deploy_trust_github_merges`, default true) —
-  covers every commit GitHub's own merge machinery creates: web-UI merges and
-  API merges, which is what Renovate automerge produces.
+- GitHub's web-flow GPG key (`deploy_trust_github_merges`, default true),
+  downloaded at provision time, checked against its published fingerprint
+  (`deploy_github_webflow_fingerprint`) and imported into
+  `/etc/vps-scaffold/gnupg` — covers every commit GitHub's own merge
+  machinery creates: web-UI merges and API merges, which is what Renovate
+  automerge produces.
 
 Net effect: PR merges and Renovate automerges deploy; a raw unsigned push
-(stolen laptop token, compromised bot pushing directly) is refused and the
-failed deploy pages via ntfy. An attacker with full account control can still
-merge through a PR — this gate compensates for missing branch protection; it
-does not replace account security.
+(stolen laptop token, a bot pushing directly) is refused and the failed deploy
+pages via ntfy. Be clear about the breadth of the web-flow trust: a web-UI
+edit on `main` or an API merge by ANY account or GitHub App with write access
+produces a web-flow signature and deploys. On a free-plan private repo (no
+branch protection) that makes every write-capable identity root-equivalent on
+the host — this gate compensates for missing branch protection; it does not
+replace account security or the scoping of app tokens.
 
 Operator setup (once per machine that pushes directly to main):
 

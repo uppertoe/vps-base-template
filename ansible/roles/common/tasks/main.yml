@@ -171,7 +171,8 @@
     group: root
     mode: "0644"
     content: |
-      EARLYOOM_ARGS="-m {{ host_earlyoom_min_free_mem_percent }} -s {{ host_earlyoom_min_free_swap_percent }}"
+      EARLYOOM_ARGS="-m {{ host_earlyoom_min_free_mem_percent }} -s {{ host_earlyoom_min_free_swap_percent }} -r {{ host_earlyoom_report_interval_sec | default(3600) }}"
+  notify: Restart earlyoom
   when: host_earlyoom_enabled | bool
 
 # The CIS remediation mounts /proc with hidepid=2, which hides every other

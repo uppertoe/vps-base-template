@@ -55,6 +55,10 @@ host_monitoring_packages:
 host_earlyoom_enabled: true
 host_earlyoom_min_free_mem_percent: 5
 host_earlyoom_min_free_swap_percent: 10
+# Seconds between earlyoom's memory reports (-r); 0 disables them. Without -r
+# earlyoom reports every second, about 86k journal lines a day. 3600 matches
+# Ubuntu's stock /etc/default/earlyoom, which our template replaces.
+host_earlyoom_report_interval_sec: 3600
 
 # -----------------------------------------------------------------------------
 # SSH hardening (passed to devsec.hardening.ssh_hardening)

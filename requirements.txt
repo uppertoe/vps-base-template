@@ -2,4 +2,4 @@
 # manage this file; bump on maintenance day alongside a green run).
 ansible-lint==26.6.0
 molecule==26.6.0
-molecule-plugins[docker]==25.8.12
+molecule-plugins[docker]==26.7.8

@@ -34,7 +34,7 @@
 
 set -euo pipefail
 
-TRIVY_IMAGE="${TRIVY_IMAGE:-aquasec/trivy:0.59.1}"
+TRIVY_IMAGE="${TRIVY_IMAGE:-aquasec/trivy:0.72.0}"
 SEVERITY="${SEVERITY:-HIGH,CRITICAL}"
 CACHE_DIR="${CACHE_DIR:-/var/cache/trivy}"
 STATE_DIR="${STATE_DIR:-/var/lib/vuln-scan}"

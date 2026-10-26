@@ -1,0 +1,104 @@
+#!/bin/bash
+# vps-sqlite-watch — alert via ntfy when an app's SQLite database is corrupt.
+#
+# A malformed SQLite file gives no outward sign until an app reads the bad
+# page: the container stays healthy and only the requests that reach that
+# page fail (prod-rch-vps 2026-10-26, a neverdrugs cache went malformed after
+# the host's unclean stops). This sweeps every Docker volume for SQLite files
+# and runs a read-only PRAGMA quick_check on each, pushing through vps-notify
+# on STATE TRANSITIONS only: ok→corrupt (high priority) and an all-clear when
+# the file passes again or is replaced — so a bad file alerts once, not every
+# run.
+#
+# Detection only, never repair: only the app knows whether a file is a
+# regenerable cache (safe to rebuild) or real data (restore from restic, see
+# docs/09-recovery.md). The check opens each file read-only alongside the
+# running app, which SQLite supports; when root has to create a missing
+# -wal/-shm file, SQLite gives it the database file's owner, so the app's
+# access is unchanged. A file that cannot be checked (locked, vanished
+# mid-run) is logged and left in its previous state.
+#
+# Candidates: *.db, *.sqlite, *.sqlite3, *.db3 in each volume's _data or up to
+# two directories below it, confirmed by the SQLite header (Docker's own metadata.db is
+# BoltDB and is skipped). Files moved aside as *.corrupt-<stamp> do not match.
+set -u
+
+VOLUMES_DIR="${SQLITE_WATCH_VOLUMES_DIR:-/var/lib/docker/volumes}"
+STATE_DIR="${VPS_NOTIFY_STATE_DIR:-/var/lib/vps-notify}/sqlite"
+mkdir -p "$STATE_DIR"
+
+# Exit 0 = ok, 1 = corrupt (detail on stdout), 2 = not SQLite, 3 = could not check.
+check() {
+  python3 - "$1" <<'PY'
+import sqlite3, sys
+path = sys.argv[1]
+try:
+    with open(path, "rb") as fh:
+        if fh.read(16) != b"SQLite format 3\x00":
+            sys.exit(2)
+except OSError as e:
+    print(e); sys.exit(3)
+CORRUPT = {sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB}
+try:
+    c = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=30)
+    rows = [r[0] for r in c.execute("PRAGMA quick_check(10)")]
+    c.close()
+except sqlite3.DatabaseError as e:
+    code = getattr(e, "sqlite_errorcode", None)
+    print(e)
+    sys.exit(1 if code is not None and (code & 0xFF) in CORRUPT else 3)
+if rows == ["ok"]:
+    sys.exit(0)
+print("\n".join(rows)); sys.exit(1)
+PY
+}
+
+checked=0; corrupt=0; skipped=0
+seen="$(mktemp)"
+trap 'rm -f "$seen"' EXIT
+
+while IFS= read -r -d '' f; do
+  detail="$(check "$f")"; rc=$?
+  case "$rc" in
+    2) continue ;;
+    3) skipped=$((skipped + 1)); echo "could not check $f: $detail"; continue ;;
+  esac
+  checked=$((checked + 1))
+  key="$(printf '%s' "${f#"$VOLUMES_DIR"/}" | tr '/' '_')"
+  echo "$key" >> "$seen"
+  state_file="$STATE_DIR/$key.state"
+  prev="$(cat "$state_file" 2>/dev/null || echo ok)"
+  level=ok; [ "$rc" -eq 1 ] && level=corrupt
+  [ "$level" = corrupt ] && { corrupt=$((corrupt + 1)); echo "CORRUPT $f: $detail"; }
+  [ "$level" = "$prev" ] && continue
+  echo "$level" > "$state_file"
+
+  volume="${f#"$VOLUMES_DIR"/}"; volume="${volume%%/*}"
+  if [ "$level" = corrupt ]; then
+    vps-notify "SQLite database corrupt: $(basename "$f")" \
+      "${f}
+Volume: ${volume}
+${detail}
+
+The app keeps running, but requests that read the damaged pages will fail. If the app treats this file as a regenerable cache, stop the app, move the file and its -wal/-shm aside, and start it again. Otherwise stop the app and restore the file from its restic snapshot (docs/09-recovery.md)." \
+      high rotating_light
+  else
+    vps-notify "SQLite database healthy again: $(basename "$f")" \
+      "${f}
+Passed quick_check." \
+      low white_check_mark
+  fi
+done < <(find "$VOLUMES_DIR" -mindepth 3 -maxdepth 5 -path '*/_data/*' -type f \
+           \( -name '*.db' -o -name '*.sqlite' -o -name '*.sqlite3' -o -name '*.db3' \) -print0 2>/dev/null)
+
+# A file that has gone (app removed, cache rebuilt under another name) no
+# longer needs an all-clear; drop its state so a future file of the same
+# name starts fresh.
+for state_file in "$STATE_DIR"/*.state; do
+  [ -e "$state_file" ] || continue
+  key="$(basename "$state_file" .state)"
+  grep -qxF "$key" "$seen" || rm -f "$state_file"
+done
+
+echo "checked ${checked} SQLite files: ${corrupt} corrupt, ${skipped} could not be checked"
+exit 0

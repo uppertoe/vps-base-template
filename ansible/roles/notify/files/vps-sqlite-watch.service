@@ -1,0 +1,16 @@
+# vps-sqlite-watch.service — one read-only integrity sweep of app SQLite files.
+#
+# Triggered by vps-sqlite-watch.timer. Installed by the notify role.
+
+[Unit]
+Description=SQLite integrity watch (alerts via ntfy on corruption)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/vps-sqlite-watch
+# A quick_check reads every page of every file: yield CPU and disk to the
+# app tier so the sweep throttles rather than slowing requests.
+Nice=10
+CPUWeight=20
+IOWeight=20
+TimeoutStartSec=30min

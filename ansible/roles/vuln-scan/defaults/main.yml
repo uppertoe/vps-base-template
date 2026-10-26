@@ -34,7 +34,7 @@ vuln_scan_alert_grace_days: 8
 # Trivy runs as a container so nothing is installed on the host. It mounts the
 # Docker socket, so pin the scanner image by digest like any other privileged
 # helper image.
-vuln_scan_trivy_image: "aquasec/trivy:0.59.1@sha256:029e990b328d149bf0a9ffe355919041e1f86192db2df47e217f8a36dd42ceac"
+vuln_scan_trivy_image: "aquasec/trivy:0.72.0@sha256:cffe3f5161a47a6823fbd23d985795b3ed72a4c806da4c4df16266c02accdd6f"
 
 # Vulnerability DB cache (shared with audit-vuln.yml) and report retention.
 vuln_scan_cache_dir: /var/cache/trivy

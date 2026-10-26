@@ -61,6 +61,10 @@ ansible-playbook -i "$INVENTORY_FILE" ansible/bootstrap.yml \
 # and fail loudly there.
 # notify_deadman_accept_none: the runner is ephemeral — an external heartbeat
 # is meaningless here; real hosts must set notify_deadman_url (notify role
+# fails without it). notify_alerts_accept_none: the same applies to the ntfy
+# alert route (notify_ntfy_url).
+# log_export_accept_none: likewise, the ephemeral runner has no Object-Locked
+# bucket to export to; real hosts must set log_export_s3_uri (log-export role
 # fails without it).
 ansible-playbook -i "$INVENTORY_FILE" ansible/site-first-run.yml \
   -e "{\"deploy_user_public_key\": \"${DEPLOY_USER_PUBLIC_KEY}\"}" \
@@ -70,7 +74,9 @@ ansible-playbook -i "$INVENTORY_FILE" ansible/site-first-run.yml \
   -e deploy_restricted_mode=true \
   -e baseline_manage_apparmor_profile_modes=false \
   -e baseline_initialize_aide_database=false \
-  -e notify_deadman_accept_none=true
+  -e notify_deadman_accept_none=true \
+  -e notify_alerts_accept_none=true \
+  -e log_export_accept_none=true
 
 DIAGNOSTICS_DIR="$REPO_ROOT/reports/ci-diagnostics"
 mkdir -p "$DIAGNOSTICS_DIR"

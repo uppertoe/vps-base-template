@@ -19,6 +19,7 @@ All of these arrive via ntfy; know what each means before you need to:
 | AIDE integrity change / `dailyaidecheck` failure | AIDE sweep | Host file tampering (or an unrecorded legitimate change) |
 | Real-time audit event | auditd → ntfy bridge | Crown-jewel config touched (sshd_config, sudoers, passwd) NOW |
 | Container unhealthy / restart-looping | vps-container-watch | App compromise, resource exhaustion, or plain crash |
+| SQLite database corrupt | vps-sqlite-watch (daily) | Storage fault or unclean stop; requests reading the damaged pages fail. Rebuild a cache, restore real data from restic |
 | Unit failure (ssh, docker, fail2ban, backup…) | OnFailure hooks | Service-level failure — also how tampering often first surfaces |
 | Auth-denial spike / new listening socket | weekly digest | Probing of the login wall; unexpected service exposure |
 | Silence (external monitor alarms) | dead-man's switch | Host down — outage or takeover |

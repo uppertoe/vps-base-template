@@ -40,6 +40,14 @@ notify_disk_watch_enabled: true
 notify_disk_watch_warn_pct: 80
 notify_disk_watch_crit_pct: 90
 
+# SQLite integrity: daily read-only quick_check of every SQLite file in the
+# Docker volumes; alerts once when a file turns corrupt, with an all-clear when
+# it passes again. Detection only — the app (cache) or a restic restore (data)
+# does the repair. Schedule is UTC, in the small hours for Australian users and
+# clear of the 17:00 reboot window.
+notify_sqlite_watch_enabled: true
+notify_sqlite_watch_schedule: "*-*-* 18:37:00"
+
 # Container health: unhealthy / restart-looping containers between deploys
 # (deploy's --wait only proves health at deploy time). Grace before the first
 # alert; cooldown before repeating it.

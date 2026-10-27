@@ -122,9 +122,9 @@
   tags:
     - molecule-notest
 
-# On-box watchers: disk thresholds, container health between deploys, the
-# post-boot stack report, and the monthly alert-channel self-test. All alert
-# through vps-notify, all no-op while notify_ntfy_url is unset.
+# On-box watchers: disk thresholds, SQLite integrity, container health between
+# deploys, the post-boot stack report, and the monthly alert-channel self-test.
+# All alert through vps-notify, all no-op while notify_ntfy_url is unset.
 - name: Install watcher scripts
   ansible.builtin.copy:
     src: "{{ item }}"
@@ -134,6 +134,7 @@
     mode: "0755"
   loop:
     - vps-disk-watch
+    - vps-sqlite-watch
     - vps-container-watch
     - vps-boot-check
     - vps-log-digest
@@ -158,6 +159,7 @@
   loop:
     - vps-disk-watch.service
     - vps-disk-watch.timer
+    - vps-sqlite-watch.service
     - vps-container-watch.service
     - vps-boot-check.service
     - vps-panic-guard.service
@@ -178,6 +180,15 @@
     mode: "0644"
   notify: Reload systemd
 
+- name: Install vps-sqlite-watch.timer
+  ansible.builtin.template:
+    src: vps-sqlite-watch.timer.j2
+    dest: /etc/systemd/system/vps-sqlite-watch.timer
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd
+
 - name: Enable watcher timers
   ansible.builtin.systemd:
     name: "{{ item.unit }}"
@@ -187,6 +198,8 @@
   loop:
     - unit: vps-disk-watch.timer
       want: "{{ notify_disk_watch_enabled | bool }}"
+    - unit: vps-sqlite-watch.timer
+      want: "{{ notify_sqlite_watch_enabled | bool }}"
     - unit: vps-container-watch.timer
       want: "{{ notify_container_watch_enabled | bool }}"
     - unit: vps-notify-selftest.timer

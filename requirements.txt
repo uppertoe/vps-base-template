@@ -1,5 +1,5 @@
 # Pinned to the versions CI last proved green (Renovate pep8/pip does not
 # manage this file; bump on maintenance day alongside a green run).
 ansible-lint==26.10.1
-molecule==26.6.0
+molecule==26.10.0
 molecule-plugins[docker]==26.7.8

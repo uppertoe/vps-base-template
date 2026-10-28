@@ -14,7 +14,7 @@ permissions:
 jobs:
   compliance-audits:
     name: OpenSCAP and Docker Audits
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     # No ANSIBLE_* env here on purpose: run-ci-compliance-audits.sh defaults
     # them under $RUNNER_TEMP. They must stay OUT of /tmp and /var/tmp — the
     # play mounts both as tmpfs mid-run (os-hardening), which vaporises the
@@ -56,7 +56,7 @@ jobs:
 
   container-security:
     name: Container image and compose scan
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -111,7 +111,7 @@ jobs:
     name: Publish Compliance Reports
     if: github.ref == 'refs/heads/main'
     needs: compliance-audits
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       pages: write
       id-token: write

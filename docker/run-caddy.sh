@@ -27,6 +27,11 @@ generated_config="/tmp/Caddyfile"
 mounted_config="/etc/caddy/Caddyfile"
 mounted_globals="/tmp/Caddyfile.globals"
 mounted_sites="/tmp/Caddyfile.sites"
+# Start each run from empty files: /tmp can survive a container restart, and a
+# globals file left by a previous Caddyfile must not outlive the global block
+# that wrote it.
+: > "$mounted_globals"
+: > "$mounted_sites"
 awk -v globals="$mounted_globals" -v sites="$mounted_sites" '
   state == 0 && /^[[:space:]]*(#|$)/ { print > sites; next }
   state == 0 && /^[[:space:]]*\{[[:space:]]*$/ { state = 1; depth = 1; next }

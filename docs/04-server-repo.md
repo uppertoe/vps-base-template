@@ -149,16 +149,17 @@ a gated app whose CSS/JS/fonts are re-fetched (or 304-revalidated) on every page
 load. Prefer this over making `/static` public: the assets stay behind the login
 wall, and invalidation is exact (by content), not a time-based guess.
 
-Two fingerprint conventions are honoured — use whichever your stack emits:
+These fingerprint conventions are honoured — use whichever your stack emits:
 
 | Convention | Example | Emitted by |
 |---|---|---|
-| content hash in the filename | `app.9f3a1c2b.css` | Vite, webpack, esbuild, Django `ManifestStaticFilesStorage` / WhiteNoise, Rails digests |
+| content hash in the filename | `app.9f3a1c2b.css` | Vite, webpack, esbuild, Django `ManifestStaticFilesStorage` / WhiteNoise, Rails digests, Hugo `fingerprint` |
+| Hugo's processed-image name | `photo_hu_9f3a1c2b4d5e6f70.webp` | Hugo image processing (`.Resize`, `.Process`); the hash covers the source bytes and the options |
 | a `?v=` build tag on the URL | `coffee.css?v=9f3a1c2b` | hand-rolled cache-busting (a template helper that appends a per-file hash) |
 
-Matching either, the renderer sets `Cache-Control: private, max-age=31536000,
+Matching any of them, the renderer sets `Cache-Control: private, max-age=31536000,
 immutable`. `private` (not `public`) keeps gated assets out of any shared/CDN
-cache. Both rules are scoped to static file extensions, so a *document* URL that
+cache. The rules are scoped to static file extensions, so a *document* URL that
 carries `?v=` is never frozen, and the header is set only if the app didn't set
 its own `Cache-Control` — so an app can still override. An app that serves
 **un-fingerprinted** assets matches neither rule and keeps its existing ETag

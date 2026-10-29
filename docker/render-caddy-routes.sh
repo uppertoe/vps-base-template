@@ -136,7 +136,9 @@ if [[ -d "$repo_root/apps" ]]; then
           # Two fingerprint conventions are honoured so any app can opt in with
           # whatever its stack already emits:
           #   * content hash in the filename -- app.9f3a1c2b.css
-          #     (Vite / webpack / Django ManifestStaticFilesStorage, WhiteNoise)
+          #     (Vite / webpack / Django ManifestStaticFilesStorage, WhiteNoise),
+          #     or a Hugo processed-image name -- photo_hu_9f3a1c2b4d5e6f70.webp
+          #     (the hash covers the source bytes and the processing options)
           #   * a ?v= build tag -- coffee.css?v=9f3a1c2b (hand-rolled busting)
           # Both are scoped to static file extensions, so a *document* URL that
           # happens to carry ?v= is never frozen. "private" (not "public") keeps
@@ -144,7 +146,7 @@ if [[ -d "$repo_root/apps" ]]; then
           # ?-prefix defers to an app that sets its own Cache-Control. An app
           # that serves un-fingerprinted assets matches neither rule and keeps
           # its existing ETag revalidation, so this is a no-op until adopted.
-          print "    @scaffold_static_hashed path_regexp \\.[0-9a-f]{8,}\\.(?:css|js|mjs|woff2?|ttf|otf|svg|png|jpe?g|webp|avif|gif|ico)$" >> target
+          print "    @scaffold_static_hashed path_regexp (?:\\.[0-9a-f]{8,}|_hu_[0-9a-f]{12,16})\\.(?:css|js|mjs|woff2?|ttf|otf|svg|png|jpe?g|webp|avif|gif|ico)$" >> target
           print "    header @scaffold_static_hashed ?Cache-Control \"private, max-age=31536000, immutable\"" >> target
           print "    @scaffold_static_versioned {" >> target
           print "        query v=*" >> target

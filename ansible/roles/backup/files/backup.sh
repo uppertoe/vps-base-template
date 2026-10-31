@@ -312,13 +312,28 @@ apply_retention() {
 
   local _b2_id_env="${b2_id:-${B2_ACCOUNT_ID:-}}"
   local _b2_key_env="${b2_key:-${B2_ACCOUNT_KEY:-}}"
-  if ! RESTIC_REPOSITORY="$repo" RESTIC_PASSWORD="$password" \
-      B2_ACCOUNT_ID="$_b2_id_env" B2_ACCOUNT_KEY="$_b2_key_env" \
-      run_restic_with_lock_retry "$service_name" "retention" \
-      restic forget --retry-lock "$RESTIC_RETRY_LOCK_DURATION" "${forget_args[@]}"; then
-    warn "[$service_name] Retention application failed."
-    return 1
-  fi
+  # restic's default grouping is host+paths, so the moment a service's
+  # BACKUP_PATHS changes its old snapshots form a group of their own that the
+  # keep-* rules never shrink again (prod-rch-vps, 2026-10-31: July snapshots of
+  # a superseded path set still "kept" in October). Group by host only and
+  # select each snapshot family by its tag instead: the database dumps carry the
+  # service name, the file snapshots carry "<service>-files". The two families
+  # keep their own retention, and a path change no longer forks either of them.
+  # $service_name may be a comma-joined list when several services share a
+  # repository (queue_retention).
+  local _label _tag
+  for _label in ${service_name//,/ }; do
+    for _tag in "$_label" "${_label}-files"; do
+      if ! RESTIC_REPOSITORY="$repo" RESTIC_PASSWORD="$password" \
+          B2_ACCOUNT_ID="$_b2_id_env" B2_ACCOUNT_KEY="$_b2_key_env" \
+          run_restic_with_lock_retry "$service_name" "retention" \
+          restic forget --retry-lock "$RESTIC_RETRY_LOCK_DURATION" \
+            --group-by host --tag "$_tag" "${forget_args[@]}"; then
+        warn "[$service_name] Retention application failed (tag $_tag)."
+        return 1
+      fi
+    done
+  done
 
   if [[ "$prune_mode" != "true" ]]; then
     info "[$service_name] Retention applied."
@@ -567,12 +582,31 @@ backup_service() {
 
   # Back up file paths if configured (separate snapshot, tagged SERVICE_NAME-files).
   # For files-only services this is the only snapshot. The retention pass below
-  # covers both DB and file snapshots — restic groups them by path so retention
-  # is applied to each independently.
+  # covers both DB and file snapshots, selecting each family by its tag.
   if [[ -n "${BACKUP_PATHS:-}" ]]; then
     info "[$SERVICE_NAME] Backing up file paths..."
     local -a _paths _excludes=()
     IFS=: read -ra _paths <<< "$BACKUP_PATHS"
+    # A configured path that is not on disk is a configuration fault, not a
+    # partial success: restic would log "does not exist, skipping" and exit 0,
+    # and the service would report success for months with that path missing
+    # (prod-rch-vps: the Authelia user list moved directories in July and was
+    # silently absent from its repository until 2026-10-31). Fail the service
+    # so the run's failure path (ntfy / email) carries it. OPTIONAL services
+    # keep restic's lenient behaviour, having already passed the any-exist check.
+    if [[ "$OPTIONAL" != "true" ]]; then
+      local _p _missing=""
+      for _p in "${_paths[@]}"; do
+        [[ -e "$_p" ]] || _missing="${_missing:+$_missing, }$_p"
+      done
+      if [[ -n "$_missing" ]]; then
+        warn "[$SERVICE_NAME] BACKUP_PATHS entry does not exist on disk: $_missing"
+        record_failure "$failure_id" "$SERVICE_NAME" "file-backup" \
+          "$("$FILES_ONLY" && echo "snapshot not saved" || echo "database snapshot saved")" \
+          "configured backup path missing on disk: $_missing"
+        return 1
+      fi
+    fi
     if [[ -n "${BACKUP_EXCLUDE:-}" ]]; then
       local _exc
       while IFS= read -r -d: _exc || [[ -n "$_exc" ]]; do
@@ -628,7 +662,9 @@ verify_service() {
   if [[ -n "${CHECK_READ_DATA_SUBSET:-}" ]]; then
     check_args+=("--read-data-subset=${CHECK_READ_DATA_SUBSET}")
   fi
-  if ! run restic check --retry-lock "$RESTIC_RETRY_LOCK_DURATION" "${check_args[@]}"; then
+  # ${arr[@]+...}: an empty array is fatal under set -u on bash 3.2 (macOS),
+  # which is where the integration suite is run by hand.
+  if ! run restic check --retry-lock "$RESTIC_RETRY_LOCK_DURATION" ${check_args[@]+"${check_args[@]}"}; then
     warn "[$SERVICE_NAME] Repository verification failed."
     record_failure "$failure_id" "$SERVICE_NAME [verify]" "verify" "no backup attempted" \
       "restic check failed"

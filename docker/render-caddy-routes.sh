@@ -70,8 +70,10 @@ if [[ -d "$repo_root/apps" ]]; then
         }
 
         # Every app upstream in a site block must drop the gateway session
-        # cookie (import strip_auth_cookie, or an equivalent header_up Cookie
-        # rewrite): the cookie is scoped to the whole domain and is a live
+        # cookie (import strip_auth_cookie; on a public route import
+        # strip_public, which also drops client-sent Remote-* headers; or an
+        # equivalent header_up Cookie rewrite): the cookie is scoped to the
+        # whole domain and is a live
         # estate-wide bearer credential no app needs. The guards do this
         # already; this catches hand-written reverse_proxy lines. The auth
         # service itself (auth:8080) is the one upstream that must see it. A
@@ -86,7 +88,7 @@ if [[ -d "$repo_root/apps" ]]; then
             printf "ERROR: %s:%d: reverse_proxy without a block; use a block with import strip_auth_cookie so the gateway session cookie never reaches the app\n", FILENAME, FNR > "/dev/stderr"
             bad = 1
           }
-        } else if (in_proxy && (trimmed ~ /^import strip_auth_cookie/ || trimmed ~ /^header_up Cookie/)) {
+        } else if (in_proxy && (trimmed ~ /^import strip_auth_cookie/ || trimmed ~ /^import strip_public/ || trimmed ~ /^header_up Cookie/)) {
           seen_strip = 1
         }
 

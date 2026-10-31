@@ -14,7 +14,8 @@ generated_config="/tmp/Caddyfile"
 # pass would otherwise put that bearer token on stdout, into journald and into
 # the shipped logs. Same rule as the access log (render-caddy-routes.sh): a
 # 16+ character URL-safe base64 path segment or query value becomes REDACTED,
-# in the request line, the Referer and htmx's Hx-Current-Url.
+# as does a 32+ character one carrying a file extension (a calendar feed, a
+# signed file URL), in the request line, the Referer and htmx's Hx-Current-Url.
 : > "$generated_config"
 
 # The mounted Caddyfile may open with a global options block of its own
@@ -58,9 +59,9 @@ awk -v globals="$mounted_globals" -v sites="$mounted_sites" '
 		format filter {
 			wrap json
 			fields {
-				request>uri regexp ([/=])[A-Za-z0-9_-]{16,}([/?&]|$) ${1}REDACTED${2}
-				request>headers>Referer regexp ([/=])[A-Za-z0-9_-]{16,}([/?&]|$) ${1}REDACTED${2}
-				request>headers>Hx-Current-Url regexp ([/=])[A-Za-z0-9_-]{16,}([/?&]|$) ${1}REDACTED${2}
+				request>uri regexp ([/=])(?:[A-Za-z0-9_-]{16,}([/?&]|$)|[A-Za-z0-9_-]{32,}(\.[A-Za-z0-9]{1,8}(?:[/?&]|$))) ${1}REDACTED${2}${3}
+				request>headers>Referer regexp ([/=])(?:[A-Za-z0-9_-]{16,}([/?&]|$)|[A-Za-z0-9_-]{32,}(\.[A-Za-z0-9]{1,8}(?:[/?&]|$))) ${1}REDACTED${2}${3}
+				request>headers>Hx-Current-Url regexp ([/=])(?:[A-Za-z0-9_-]{16,}([/?&]|$)|[A-Za-z0-9_-]{32,}(\.[A-Za-z0-9]{1,8}(?:[/?&]|$))) ${1}REDACTED${2}${3}
 			}
 		}
 	}

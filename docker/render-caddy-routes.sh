@@ -98,10 +98,13 @@ if [[ -d "$repo_root/apps" ]]; then
           # unsubscribe link, a guest pass: any run of 16+ URL-safe base64
           # characters standing as a whole path segment or a query value is
           # replaced, in the request line and in the two headers that carry the
-          # referring page (Referer, and Hx-Current-Url from htmx). Fingerprinted
-          # asset names have a dot, short parameters are short, so neither
-          # matches. The same filter is on the default logger (run-caddy.sh),
-          # which the request dumps in the error log go through.
+          # referring page (Referer, and Hx-Current-Url from htmx). A token that
+          # carries a file extension (a per-user calendar feed, a signed file
+          # URL) is caught by the second alternative, which asks for 32+
+          # characters so ordinary long file names stay readable. Fingerprinted
+          # asset names have a dot before the hash, short parameters are short,
+          # so neither matches. The same filter is on the default logger
+          # (run-caddy.sh), which the request dumps in the error log go through.
           print "    log {" >> target
           print "        output file /var/log/caddy/access.log {" >> target
           print "            roll_size 20MiB" >> target
@@ -111,9 +114,9 @@ if [[ -d "$repo_root/apps" ]]; then
           print "        format filter {" >> target
           print "            wrap json" >> target
           print "            fields {" >> target
-          print "                request>uri regexp ([/=])[A-Za-z0-9_-]{16,}([/?&]|$) ${1}REDACTED${2}" >> target
-          print "                request>headers>Referer regexp ([/=])[A-Za-z0-9_-]{16,}([/?&]|$) ${1}REDACTED${2}" >> target
-          print "                request>headers>Hx-Current-Url regexp ([/=])[A-Za-z0-9_-]{16,}([/?&]|$) ${1}REDACTED${2}" >> target
+          print "                request>uri regexp ([/=])(?:[A-Za-z0-9_-]{16,}([/?&]|$)|[A-Za-z0-9_-]{32,}(\\.[A-Za-z0-9]{1,8}(?:[/?&]|$))) ${1}REDACTED${2}${3}" >> target
+          print "                request>headers>Referer regexp ([/=])(?:[A-Za-z0-9_-]{16,}([/?&]|$)|[A-Za-z0-9_-]{32,}(\\.[A-Za-z0-9]{1,8}(?:[/?&]|$))) ${1}REDACTED${2}${3}" >> target
+          print "                request>headers>Hx-Current-Url regexp ([/=])(?:[A-Za-z0-9_-]{16,}([/?&]|$)|[A-Za-z0-9_-]{32,}(\\.[A-Za-z0-9]{1,8}(?:[/?&]|$))) ${1}REDACTED${2}${3}" >> target
           print "            }" >> target
           print "        }" >> target
           print "    }" >> target
@@ -122,13 +125,15 @@ if [[ -d "$repo_root/apps" ]]; then
           # ships to the tamper-evident log bucket. Empty on public routes.
           print "    log_append user {http.request.header.Remote-User}" >> target
           # Security-header baseline for every site. ?-prefix sets a header
-          # only when the app did not set its own, so apps can override.
-          print "    header {" >> target
-          print "        ?Strict-Transport-Security \"max-age=31536000; includeSubDomains\"" >> target
-          print "        ?X-Content-Type-Options nosniff" >> target
-          print "        ?Referrer-Policy strict-origin-when-cross-origin" >> target
-          print "        ?X-Frame-Options DENY" >> target
-          print "    }" >> target
+          # only when the app did not set its own, so apps can override. One
+          # directive per header: inside a single header block Caddy folds the
+          # four ?-conditions into one handler that fires only when ALL four
+          # are absent, so an app setting one of them (Authelia, fellows) lost
+          # the other three, HSTS included (2026-10-31 review).
+          print "    header ?Strict-Transport-Security \"max-age=31536000; includeSubDomains\"" >> target
+          print "    header ?X-Content-Type-Options nosniff" >> target
+          print "    header ?Referrer-Policy strict-origin-when-cross-origin" >> target
+          print "    header ?X-Frame-Options DENY" >> target
           # Static-asset caching. A *fingerprinted* asset URL changes whenever
           # its bytes change, so the browser may cache it forever and never
           # revalidate -- no round-trip, and on a gated app no repeat hit on the

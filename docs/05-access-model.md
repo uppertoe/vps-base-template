@@ -371,8 +371,14 @@ repos) and protects the repo, not the host. `deploy_verify_signature: true`
 moves enforcement onto the box itself: `vps-deploy` runs
 `git verify-commit HEAD` **as root**, with root-owned configuration only (an
 explicit allowed-signers path and a fixed `GNUPGHOME`; the deploy user's git
-config and keyring are not read), and refuses to deploy a HEAD it cannot
-verify. The role provisions two root-owned trust anchors:
+config and keyring are not read, and the verifier programs, hooks path and
+replace-ref handling are pinned on the command line so the deploy-owned
+repository config cannot choose them), and refuses to deploy a HEAD it cannot
+verify. Around that gate the wrapper also requires HEAD to equal the fetched
+`origin/<branch>`, reads the index flags as root so a skip-worktree bit cannot
+hide an edited file from the clean-tree check, and refuses a project `.env`
+that sets any `COMPOSE_*` variable (the 2026-10-31 review). The role
+provisions two root-owned trust anchors:
 
 - `/etc/ssh/allowed_signers` from `deploy_allowed_signers` — the
   operator's SSH signing key(s), for direct pushes to main.

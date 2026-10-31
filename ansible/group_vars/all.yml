@@ -205,6 +205,7 @@ baseline_host_sysctls:
 baseline_mask_idle_services:
   - ModemManager    # no modems on a VPS
   - fwupd           # no firmware to flash in a guest
+  - fwupd-refresh.timer  # fails on every run once fwupd is masked, and stays failed
 
 # -----------------------------------------------------------------------------
 # Firewall (ufw)

@@ -54,6 +54,28 @@
     state: absent
   when: not (common_unattended_include_updates | bool)
 
+# unattended-upgrades refuses any package whose conffile would prompt, logging
+# "has conffile prompt and needs to be upgraded manually", and never retries.
+# Found 2026-10-31 holding back apparmor, snapd and ubuntu-pro-client for
+# months. With --force-confold in Dpkg::Options it skips that check (see
+# dpkg_conffile_prompt() in unattended-upgrade) and keeps the local conffile,
+# which is what we want: the roles own every conffile they touch, and a
+# package's new default must not replace them. --force-confdef lets dpkg take
+# the default when the local file is unmodified.
+- name: Let unattended-upgrades upgrade packages whose conffiles would prompt
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/53unattended-upgrades-dpkg
+    content: |
+      // Managed by Ansible (common role). Without this, unattended-upgrades
+      // holds back any package with a conffile prompt for ever.
+      Dpkg::Options {
+          "--force-confdef";
+          "--force-confold";
+      };
+    owner: root
+    group: root
+    mode: "0644"
+
 # Patches that need a reboot must actually get one, or the running kernel
 # drifts ever further from the patched one on disk. WithUsers is deliberate:
 # this class of host has no interactive users to protect, and skipping the

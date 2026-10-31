@@ -8,6 +8,9 @@
 Description=Post-boot container stack health report
 After=docker.service network-online.target
 Wants=network-online.target
+# The script reports its own verdict; this catches the cases where it cannot
+# (timeout, crash before reporting) so a failed unit never stays silent.
+OnFailure=notify@%n.service
 
 [Service]
 Type=oneshot

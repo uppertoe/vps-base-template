@@ -52,7 +52,7 @@
         cmd: "cat /etc/apt/apt.conf.d/20auto-upgrades; echo; journalctl -t patch-sla --no-pager -n 14 2>/dev/null || echo 'no PATCH-SLA entries yet'"
       - name: vuln-scan-latest
         rows: "9"
-        cmd: "d=$(ls -1 /var/lib/vuln-scan 2>/dev/null | tail -n 1); [ -n \"$d\" ] && cat \"/var/lib/vuln-scan/$d/summary.txt\" || echo 'no vuln-scan runs yet'"
+        cmd: "d=$(ls -1 /var/lib/vuln-scan 2>/dev/null | grep -E '^20[0-9]{2}-' | tail -n 1); [ -n \"$d\" ] && cat \"/var/lib/vuln-scan/$d/summary.txt\" || echo 'no vuln-scan runs yet'"
       - name: restore-drill-latest
         rows: "14"
         cmd: "cat /var/lib/backup-drill/latest.txt 2>/dev/null || echo 'no restore drill runs yet'"

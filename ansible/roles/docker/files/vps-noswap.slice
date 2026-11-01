@@ -18,3 +18,7 @@ Before=slices.target
 
 [Slice]
 MemorySwapMax=0
+# The tier as a whole stays below physical memory (2 GB hosts), so a burst
+# across several no-swap containers is answered by an OOM kill inside this
+# slice rather than by the host running out and wedging.
+MemoryMax=1400M

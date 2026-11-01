@@ -56,6 +56,11 @@ done
 # tree root reads) see a different object than the one at HEAD. Exported so
 # both the deploy-user and root invocations ignore replacements.
 export GIT_NO_REPLACE_OBJECTS=1
+# GIT_OPTIONAL_LOCKS=0: the root-side git reads below must never write the
+# deploy-owned index. Without it a status-style refresh can rewrite .git/index
+# as root (seen 2026-11-01 after a bind-mounted directory changed owner), and
+# the deploy user's next pull fails with "index file open failed".
+export GIT_OPTIONAL_LOCKS=0
 old_head="$(runuser -u {{ deploy_user }} -- git rev-parse HEAD)"
 old_scaffold="$(runuser -u {{ deploy_user }} -- git -C scaffold rev-parse HEAD 2>/dev/null || echo none)"
 runuser -u {{ deploy_user }} -- git pull --recurse-submodules
@@ -97,7 +102,7 @@ fi
 # skip-worktree or assume-unchanged bit hides an edited tracked file from it.
 # Read the index flags as root (plumbing only, nothing is written) and accept
 # only plain tracked entries ("H").
-flagged="$(env -i PATH="$PATH" HOME=/root GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 \
+flagged="$(env -i PATH="$PATH" HOME=/root GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 GIT_OPTIONAL_LOCKS=0 \
   git -C /opt/deploy -c safe.directory=/opt/deploy -c core.fsmonitor=false ls-files -v | grep -v '^H ' || true)"
 if [[ -n "$flagged" ]]; then
   echo "vps-deploy: index entries carry non-default flags (skip-worktree/assume-unchanged); the clean-tree check cannot be trusted — refusing to deploy:" >&2
@@ -142,7 +147,7 @@ done
 # command line, which outranks any config file, so the only code root runs
 # here is the system gpg and ssh-keygen.
 if ! env -i PATH="$PATH" HOME=/root GNUPGHOME=/etc/vps-scaffold/gnupg \
-       GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 \
+       GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 GIT_OPTIONAL_LOCKS=0 \
      git -C /opt/deploy -c safe.directory=/opt/deploy \
        -c gpg.program=/usr/bin/gpg -c gpg.openpgp.program=/usr/bin/gpg \
        -c gpg.ssh.program=/usr/bin/ssh-keygen -c gpg.x509.program=/usr/bin/gpgsm \

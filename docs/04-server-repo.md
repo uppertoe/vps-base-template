@@ -34,7 +34,8 @@ server-myserver/
 ├── Caddyfile                    ← base Caddy config
 ├── .generated/caddy/            ← rendered bundle (committed, CI-checked)
 │   ├── apps.caddy               ← all app routes, mounted into Caddy
-│   └── networks.yml             ← per-app proxy-network wiring
+│   ├── networks.yml             ← per-app proxy-network wiring
+│   └── route-groups.tsv         ← groups each route requires, for the auth service
 ├── Caddyfile.local              ← local dev (self-signed certs)
 ├── docker-compose.yml           ← includes scaffold base + each app
 ├── docker-compose.override.yml.example
@@ -132,10 +133,12 @@ git add .generated
 
 The renderer regenerates `.generated/caddy/apps.caddy` (every app's routes —
 Caddy mounts this file instead of the deploy repo, keeping `.env` and backup
-secrets off the reverse proxy) and `.generated/caddy/networks.yml` (the per-app
-proxy networks). Both are committed like lockfiles; CI fails if they drift from
-the sources, and `audit-compose.yml` fails at runtime if two apps ever share a
-proxy network.
+secrets off the reverse proxy), `.generated/caddy/networks.yml` (the per-app
+proxy networks) and `.generated/caddy/route-groups.tsv` (each gateway group a
+site's guard requires, which the auth service mounts so its Groups page can
+list the groups the routes use). All three are committed like lockfiles; CI
+fails if they drift from the sources, and `audit-compose.yml` fails at runtime
+if two apps ever share a proxy network.
 
 ### Static-asset caching (fingerprint to cache forever)
 

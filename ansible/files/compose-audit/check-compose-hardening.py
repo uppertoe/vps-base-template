@@ -15,6 +15,7 @@ Exit code: 0 if every (non-excepted) control passes, 1 otherwise — so the audi
 playbook fails loudly on a regression.
 """
 import argparse
+import os
 import json
 import subprocess
 import sys
@@ -192,12 +193,33 @@ def is_root(user):
     return u in ("", "0", "root")
 
 
-def is_forbidden_uid(user):
+def real_uid(c):
+    """The uid the container's main process actually runs as, read from the
+    host's /proc, or None when the container is not running or /proc is not
+    readable. Needed because a compose `user:` or image USER may be a NAME
+    (node, weroster, app) that only resolves inside the image."""
+    pid = ((c.get("State") or {}).get("Pid") or 0)
+    if not pid:
+        return None
+    try:
+        return str(os.stat(f"/proc/{pid}").st_uid)
+    except OSError:
+        return None
+
+
+def is_forbidden_uid(user, c=None):
     """True when the container's uid is one the deployment has reserved for a
     host account (typically 1000, the deploy user). Sharing a uid with a host
-    account means the container's processes own that account's files."""
+    account means the container's processes own that account's files. Checks
+    the configured user string and, when available, the real uid of the
+    running process, since a named user hides the number."""
+    if not FORBIDDEN_UIDS:
+        return False
     u = (user or "").split(":")[0].strip()
-    return u in FORBIDDEN_UIDS
+    if u in FORBIDDEN_UIDS:
+        return True
+    r = real_uid(c) if c is not None else None
+    return r is not None and r in FORBIDDEN_UIDS
 
 
 def evaluate(c):
@@ -216,7 +238,7 @@ def evaluate(c):
         "read_only": bool(host.get("ReadonlyRootfs", False)),
         "mem_limit": (host.get("Memory") or 0) > 0,
         "pids_limit": (host.get("PidsLimit") or 0) > 0,
-        "non_root": not is_root(user) and not is_forbidden_uid(user),
+        "non_root": not is_root(user) and not is_forbidden_uid(user, c),
         "healthcheck": len([t for t in hc_test if t not in ("", "NONE")]) > 0,
         "network_none": host.get("NetworkMode") == "none",
         "no_sensitive_mounts": not sensitive_mounts(c),

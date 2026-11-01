@@ -35,7 +35,8 @@ server-myserver/
 ├── .generated/caddy/            ← rendered bundle (committed, CI-checked)
 │   ├── apps.caddy               ← all app routes, mounted into Caddy
 │   ├── networks.yml             ← per-app proxy-network wiring
-│   └── route-groups.tsv         ← groups each route requires, for the auth service
+│   ├── route-groups.tsv         ← groups each route requires, for the auth service
+│   └── route-access.tsv         ← each site's access rules, for the auth service
 ├── Caddyfile.local              ← local dev (self-signed certs)
 ├── docker-compose.yml           ← includes scaffold base + each app
 ├── docker-compose.override.yml.example
@@ -139,6 +140,23 @@ site's guard requires, which the auth service mounts so its Groups page can
 list the groups the routes use). All three are committed like lockfiles; CI
 fails if they drift from the sources, and `audit-compose.yml` fails at runtime
 if two apps ever share a proxy network.
+
+The renderer also refuses a site that does not declare who may reach it.
+Every site block must import a gateway guard (`protected*`, `auth_gate*`) or
+`forward_auth`, or carry a marker on a comment line just above its address or
+inside the block:
+
+```caddyfile
+# scaffold-lint: public -- the feed checks its own token
+rvg.{$DOMAIN} {
+```
+
+A forgotten gate on a new app therefore fails the render, and CI with it,
+instead of reaching the server. A partly open site (a public homepage with
+gated paths) can carry the marker inside its block to say which part is open.
+The markers, guards and `import <name>_network` hooks are collected into
+`.generated/caddy/route-access.tsv`, which the auth service shows to
+administrators as a "who can reach what" table.
 
 ### Static-asset caching (fingerprint to cache forever)
 

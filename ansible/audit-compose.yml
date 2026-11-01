@@ -27,6 +27,9 @@
     #   pids_limit, non_root, healthcheck
     # The default stack (caddy, auth) passes every control, so this is empty.
     audit_compose_exceptions: {}
+    # uids no container may run as, e.g. [1000] where 1000 is the deploy user;
+    # set per deployment (same extra-vars file as the exceptions).
+    audit_compose_forbidden_uids: []
     # Fail the play when a non-excepted control fails. Set false for report-only.
     audit_compose_enforce: true
     compose_audit_dir: /tmp/compose-audit
@@ -64,6 +67,7 @@
           --json {{ compose_audit_dir }}/compose-audit.json
           --md {{ compose_audit_dir }}/compose-audit.md
           --exceptions {{ compose_audit_dir }}/exceptions.json
+          {% for u in audit_compose_forbidden_uids %}--forbid-uid {{ u }} {% endfor %}
       register: compose_audit
       changed_when: false
       # Script exits 1 on any non-excepted finding; surface output regardless.

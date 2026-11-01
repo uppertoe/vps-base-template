@@ -158,6 +158,17 @@ The markers, guards and `import <name>_network` hooks are collected into
 `.generated/caddy/route-access.tsv`, which the auth service shows to
 administrators as a "who can reach what" table.
 
+An app that reads `Remote-Groups` itself, to decide what a person may do
+inside it, declares those groups in its `.caddy` file so the auth service does
+not report them as unused:
+
+```caddyfile
+# scaffold-groups: insights-admins -- the app's admin pages
+roster.{$DOMAIN} {
+```
+
+They are listed in `.generated/caddy/route-groups.tsv` against the site.
+
 ### Static-asset caching (fingerprint to cache forever)
 
 The renderer stamps every site with a static-asset cache rule, so an app gets

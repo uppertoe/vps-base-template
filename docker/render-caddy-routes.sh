@@ -19,7 +19,9 @@
 #                    "import <name>_network" snippet -- or public with the
 #                    marker's reason). The auth service shows
 #                    it as a "who can reach what" table.
-#   route-groups.tsv -- every gateway group a site's guard requires, one
+#   route-groups.tsv -- every gateway group a site's guard requires, or that
+#                    the app declares it reads itself with
+#                    "# scaffold-groups: <groups> -- <why>", one
 #                    "group<TAB>host" line each. Mounted read-only into the auth
 #                    service, whose Groups page lists the groups the routes use
 #                    so administrators pick names instead of typing them.
@@ -320,7 +322,19 @@ mv "$networks_file.tmp" "$networks_file"
               line = $0
               trimmed = line
               sub(/^[[:space:]]*/, "", trimmed)
-              if (substr(trimmed, 1, 1) == "#") { next }
+              # "# scaffold-groups: a b -- <why>" declares groups the app
+              # reads from Remote-Groups itself (an admin page, say), so the
+              # auth service does not call them unused. Above the site
+              # address or inside its block.
+              if (substr(trimmed, 1, 1) == "#") {
+                if (trimmed ~ /scaffold-groups:/) {
+                  declared = trimmed
+                  sub(/.*scaffold-groups:[[:space:]]*/, "", declared)
+                  sub(/[[:space:]]*--.*$/, "", declared)
+                  if (depth == 0) { pending_groups = declared } else { emit(declared) }
+                }
+                next
+              }
               if (depth == 0 && line ~ /\{[[:space:]]*$/) {
                 if (substr(trimmed, 1, 1) == "(") {
                   site = ""
@@ -328,7 +342,11 @@ mv "$networks_file.tmp" "$networks_file"
                   site = trimmed
                   sub(/[[:space:]]*\{[[:space:]]*$/, "", site)
                   gsub(/[[:space:]]*,[[:space:]]*/, ",", site)
+                  if (pending_groups != "") { emit(pending_groups) }
                 }
+                pending_groups = ""
+              } else if (depth == 0 && trimmed != "") {
+                pending_groups = ""
               }
               if (site != "") {
                 if (trimmed ~ /^import protected_groups[[:space:]]/)            { emit(quoted(trimmed, 1)) }

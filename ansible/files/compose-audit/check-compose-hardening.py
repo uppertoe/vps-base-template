@@ -27,7 +27,7 @@ CONTROLS = [
     ("5.12 read-only rootfs", "read_only"),
     ("5.10 memory limit", "mem_limit"),
     ("5.28 pids limit", "pids_limit"),
-    ("5.x non-root user", "non_root"),
+    ("5.x non-root user (and not a reserved host uid)", "non_root"),
     ("5.26 healthcheck", "healthcheck"),
     ("5.31 no docker.sock / sensitive host mounts", "no_sensitive_mounts"),
     ("5.3 minimal cap_add (allowlist)", "cap_add_minimal"),
@@ -184,9 +184,20 @@ def image_user(image):
         return ""
 
 
+FORBIDDEN_UIDS = set()
+
+
 def is_root(user):
     u = (user or "").split(":")[0].strip()
     return u in ("", "0", "root")
+
+
+def is_forbidden_uid(user):
+    """True when the container's uid is one the deployment has reserved for a
+    host account (typically 1000, the deploy user). Sharing a uid with a host
+    account means the container's processes own that account's files."""
+    u = (user or "").split(":")[0].strip()
+    return u in FORBIDDEN_UIDS
 
 
 def evaluate(c):
@@ -205,7 +216,7 @@ def evaluate(c):
         "read_only": bool(host.get("ReadonlyRootfs", False)),
         "mem_limit": (host.get("Memory") or 0) > 0,
         "pids_limit": (host.get("PidsLimit") or 0) > 0,
-        "non_root": not is_root(user),
+        "non_root": not is_root(user) and not is_forbidden_uid(user),
         "healthcheck": len([t for t in hc_test if t not in ("", "NONE")]) > 0,
         "network_none": host.get("NetworkMode") == "none",
         "no_sensitive_mounts": not sensitive_mounts(c),
@@ -286,7 +297,15 @@ def main():
         "--exceptions",
         help="JSON: {container_name: [control_key, ...]} to accept as documented exceptions",
     )
+    ap.add_argument(
+        "--forbid-uid",
+        action="append",
+        default=[],
+        help="uid that no container may run as (repeatable), e.g. the deploy user's 1000; "
+        "fails the non-root control for containers using it",
+    )
     args = ap.parse_args()
+    FORBIDDEN_UIDS.update(str(u).strip() for u in args.forbid_uid)
 
     exceptions = {}
     if args.exceptions:

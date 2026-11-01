@@ -1,0 +1,20 @@
+# vps-batch.slice — containers whose work is a batch job, not a page a visitor
+# is waiting on: roster allocation, site builds, narration.
+#
+# Each of these carries its own mem_limit, and the limits add up to more than
+# the host has. On their own they are ceilings, not reservations, so the host
+# only ever stalled when several ran at once (twice in 2026). Placing them
+# beneath one slice gives the group a single ceiling: cgroup v2 enforces the
+# smallest limit found along the path, so the batch tier as a whole can never
+# take more than MemoryMax, whatever each scope says. A job that collides with
+# another is killed and retried by its own scheduler rather than wedging the
+# machine. Swap stays allowed here (no MemorySwapMax), unlike vps-noswap.slice.
+#
+# Put a service here with `cgroup_parent: vps-batch.slice`.
+
+[Unit]
+Description=Batch containers sharing one memory ceiling
+Before=slices.target
+
+[Slice]
+MemoryMax=700M

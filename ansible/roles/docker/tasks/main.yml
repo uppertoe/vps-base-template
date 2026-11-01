@@ -98,6 +98,15 @@
     mode: "0644"
   notify: Reload systemd for slices
 
+- name: Install the batch slice that caps the batch tier's memory as a group
+  ansible.builtin.copy:
+    src: vps-batch.slice
+    dest: /etc/systemd/system/vps-batch.slice
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd for slices
+
 - name: Deploy docker-prune systemd service
   ansible.builtin.copy:
     src: docker-prune.service

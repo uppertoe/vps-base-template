@@ -22,7 +22,7 @@ jobs:
       - name: Shellcheck role scripts and repo tooling
         run: |
           set -euo pipefail
-          files="$(git ls-files 'ansible/roles/*/files/*' 'scripts/*.sh' 'backup/tests/integration/*.sh' 'docker/*.sh' 'docker/tests/*.sh' \
+          files="$(git ls-files 'ansible/roles/*/files/*' 'scripts/*.sh' 'scripts/server/*.sh' 'scripts/server/lib/*.sh' 'server-files/scripts/*' 'backup/tests/integration/*.sh' 'docker/*.sh' 'docker/tests/*.sh' \
             | while read -r f; do head -n1 "$f" | grep -qE '^#!.*\b(ba)?sh\b' && echo "$f" || true; done)"
           echo "$files"
           # shellcheck disable=SC2086

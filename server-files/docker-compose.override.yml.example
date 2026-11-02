@@ -1,0 +1,15 @@
+---
+# LOCAL DEVELOPMENT ONLY
+# Copy to docker-compose.override.yml (gitignored).
+# Docker Compose loads it automatically — swaps in self-signed certs.
+#
+# One-time setup:
+#   docker compose exec caddy caddy trust
+#
+# The Caddy bundle (.generated/caddy/) is committed; after changing apps,
+# re-render it with: bash scaffold/docker/render-caddy-routes.sh
+
+services:
+  caddy:
+    volumes:
+      - ./Caddyfile.local:/etc/caddy/Caddyfile:ro

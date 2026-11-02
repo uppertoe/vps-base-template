@@ -36,6 +36,7 @@ provides everything specific to that VPS.
 | `ansible/site-quick.yml` | Explicit fast day-to-day apply path |
 | `ansible/audit-*.yml` | Lynis, OpenSCAP, docker-bench security audits |
 | `docker/caddy.base.yml` | Base Caddy service — included by server repos |
+| `scripts/server/`, `server-files/`, `.github/workflows/server-*.yml` | The server repos' CI checks, operator scripts and reusable workflows; servers carry shims kept in step by `check-server-files.sh` (docs/14) |
 | `molecule/default/` | Role deployment tests — Ubuntu 24.04 |
 | `molecule/backup/` | Backup role deployment test |
 | `backup/tests/integration/` | End-to-end backup + restore script tests |

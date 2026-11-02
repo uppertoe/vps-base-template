@@ -1,0 +1,26 @@
+.env
+apps/**/.env
+ansible/hosts
+docker-compose.override.yml
+
+# Catch-all for any env-file variant (.env.production, foo.env, config.env.bak)
+# — defence for new apps/paths the explicit rules above don't anticipate.
+*.env
+!*.env.example
+
+# Encrypted recovery bundles — the crown-jewel archive, never commit.
+recovery-bundle-*.tar.gz.enc
+# Timestamp marker left by make-recovery-bundle.sh (proof-of-bundle, read by the
+# smoke test); box-local state, never committed.
+.recovery-bundle-last
+
+# Backup secrets — never commit real credentials
+backup/config.env
+backup/services/*.env
+
+# Python
+__pycache__/
+*.pyc
+
+# Security audit reports (regenerable; can be large).
+reports/

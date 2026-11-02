@@ -1,0 +1,81 @@
+name: Server container security
+
+# Reusable: a server repo's .github/workflows/container-security.yml calls this
+# at the commit its scaffold submodule is at. See docs/14-server-tooling.md.
+
+on:
+  workflow_call:
+    secrets:
+      GHCR_READ_TOKEN:
+        description: read:packages token for private first-party images (optional)
+        required: false
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  container-security:
+    name: App image and compose scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Prepare reports directory
+        run: mkdir -p reports/container-security
+
+      # Private first-party images need a registry login or Trivy cannot pull
+      # them. GHCR_READ_TOKEN is a read:packages PAT; without it, fall back to
+      # the repo's own token, which reaches the packages that grant it access.
+      - name: Log in to ghcr.io
+        env:
+          TOKEN: ${{ secrets.GHCR_READ_TOKEN || github.token }}
+          USER: ${{ secrets.GHCR_READ_TOKEN && 'uppertoe' || github.actor }}
+        run: echo "$TOKEN" | docker login ghcr.io -u "$USER" --password-stdin
+
+      # Image CVE scan of every app image: report-only so an unfixable upstream
+      # CVE does not block deploys. The summary leads with a per-image count
+      # table so findings cannot hide behind a green tick, and an image Trivy
+      # could not scan is flagged, not skipped silently.
+      - name: Trivy image scan (app images)
+        run: |
+          images="$(grep -rhoE 'image:\s*\S+' apps/*/docker-compose.yml | awk '{print $2}' | sort -u)"
+          {
+            echo "### Trivy HIGH/CRITICAL by image"
+            echo
+            echo "| Image | High | Critical | Fixable |"
+            echo "|---|---|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for img in $images; do
+            safe="$(echo "$img" | tr '/:@' '___')"
+            short="${img%@*}"
+            if docker run --rm -v "$HOME/.docker/config.json:/root/.docker/config.json:ro" \
+                -v "$PWD/reports/container-security:/out" aquasec/trivy:latest@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c image \
+                --severity HIGH,CRITICAL --no-progress --format json \
+                --output "/out/trivy-${safe}.json" "$img"; then
+              jq -r --arg img "$short" '[.Results[]?.Vulnerabilities[]?] | unique_by(.VulnerabilityID + .PkgName) as $v
+                | "| \($img) | \([$v[] | select(.Severity == "HIGH")] | length) | \([$v[] | select(.Severity == "CRITICAL")] | length) | \([$v[] | select(.Status == "fixed")] | length) |"' \
+                "reports/container-security/trivy-${safe}.json" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "::warning title=Trivy scan failed::${short} could not be scanned (registry access?)"
+              echo "| ${short} | — | — | scan failed |" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+
+      # Static compose misconfig lint of every app. Fails on HIGH. Excluded
+      # query IDs are the accepted public-reverse-proxy exceptions documented
+      # in docs/08-security-model.md.
+      - name: KICS compose scan (apps)
+        run: |
+          docker run --rm -v "$PWD/apps:/path" -v "$PWD/reports/container-security:/out" \
+            checkmarx/kics:latest@sha256:ef29dbac14b046b1ef65f3280646112e927a61781c5f01bca1aeb723e0b96003 scan -p /path --type DockerCompose \
+            --exclude-queries 8c978947-0ff6-485c-b0c2-0bfca6026466,bc2908f3-f73c-40a9-8793-c1b7d5544f79,451d79dc-0588-476a-ad03-3c7f0320abb3,ce76b7d0-9e77-464d-b86f-c5c48e03e22d \
+            --report-formats json --output-name kics-apps -o /out --fail-on high
+
+      - name: Upload container security reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: container-security-reports
+          path: reports/container-security

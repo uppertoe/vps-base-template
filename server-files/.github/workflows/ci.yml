@@ -1,0 +1,29 @@
+name: CI
+
+# The checks themselves live in the scaffold (scaffold/.github/workflows/
+# server-ci.yml) and run the scripts from this repo's scaffold submodule, so a
+# scaffold bump carries the tooling here. The ref below is kept equal to the
+# submodule commit by scripts/check-server-files.sh; this server's choices
+# (gateway suite, provenance, SOPS) are in .scaffold-server.yml.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+# Renovate rebases its PRs freely and each rebase re-runs CI; only the newest
+# head matters, so superseded PR runs stop early. Pushes to main never cancel
+# each other.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  ci:
+    uses: uppertoe/vps-base-template/.github/workflows/server-ci.yml@SCAFFOLD_COMMIT
+    secrets: inherit

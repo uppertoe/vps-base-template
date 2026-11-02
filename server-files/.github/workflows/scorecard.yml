@@ -1,0 +1,46 @@
+name: OpenSSF Scorecard
+
+# Supply-chain hygiene scoring of THIS repository (branch protection, pinned
+# dependencies, workflow permissions, ...). Results publish to the OpenSSF
+# API (public badge) and to the repo's code-scanning tab.
+
+on:
+  schedule:
+    - cron: "23 20 * * 0"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: read-all
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    # Scorecard uploads SARIF to the code-scanning tab, which needs GitHub
+    # Advanced Security on private repos. Deployments created from this
+    # template are private free-plan repos where that upload fails on every
+    # push — billing minutes to produce a red X. Gate it to the public
+    # template repo, mirroring the CodeQL gate: it scans here and is skipped
+    # (neutral, not failed) in every private fork — no per-repo cleanup.
+    if: github.repository == 'uppertoe/server-instance-template'
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Run analysis
+        uses: ossf/scorecard-action@fa7117db83c52d787ae5a89f350999701505d78e # v2.5.0
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+
+      - name: Upload to code-scanning
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
+        with:
+          sarif_file: results.sarif

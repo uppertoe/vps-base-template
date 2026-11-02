@@ -1,0 +1,56 @@
+name: Digest Freshness
+
+# Weekly truth-check on the supply-chain pins: compares every image:tag@sha256
+# against the registry's current digest for that tag and raises/updates an
+# issue on drift. With the Renovate app enabled, drift arrives as bump PRs
+# instead and this stays green — either way a stale pin cannot be silent.
+
+on:
+  schedule:
+    - cron: "37 19 * * 0"   # weekly, Sun 19:37 UTC (Mon 05:37 AEST)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  digest-freshness:
+    name: Compare pinned digests to registry
+    # The template's pins are examples that no server runs; Renovate PRs keep
+    # them current, and the check only means something in a stamped instance.
+    if: github.repository != 'uppertoe/server-instance-template'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Sync scaffold submodule
+        run: |
+          git config --global url."https://github.com/".insteadOf git@github.com:
+          git submodule sync --recursive
+          git submodule update --init --recursive
+
+      - name: Check digest freshness
+        id: fresh
+        run: |
+          set -o pipefail
+          bash scripts/check-digest-freshness.sh | tee freshness.txt
+
+      - name: Raise or update drift issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="Pinned image digests have drifted"
+          body="$(printf 'Weekly digest-freshness check found drift:\n\n```\n%s\n```\n\nUpdate the pins (test, then commit) or enable the Renovate app for automated bump PRs.\n' "$(cat freshness.txt)")"
+          existing="$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number' || true)"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            # gh refuses unknown labels, which would swallow the alert on a
+            # fresh repo — ensure the label exists first (idempotent).
+            gh label create security --color B60205 \
+              --description "Automated security/drift alerts" --force || true
+            gh issue create --title "$title" --body "$body" --label security
+          fi

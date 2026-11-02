@@ -1,0 +1,35 @@
+name: Container Security
+
+# Image CVE + compose misconfig scans, pulled out of the per-commit CI: both
+# scanners read only the compose files, so results only change when a compose
+# file changes. Runs on compose changes, weekly (new CVEs land against
+# unchanged pins), and on demand. The job itself lives in the scaffold
+# (scaffold/.github/workflows/server-container-security.yml).
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "apps/**/docker-compose.yml"
+      - ".github/workflows/container-security.yml"
+  pull_request:
+    paths:
+      - "apps/**/docker-compose.yml"
+      - ".github/workflows/container-security.yml"
+  schedule:
+    - cron: "37 4 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  container-security:
+    uses: uppertoe/vps-base-template/.github/workflows/server-container-security.yml@SCAFFOLD_COMMIT
+    secrets: inherit

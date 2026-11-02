@@ -372,9 +372,18 @@ done
 # changed_paths OLD NEW prints the repo-relative paths that differ between two
 # commits, one per line. Kept as a function so another deploy mode (a release
 # tree without a checkout) can supply its own source for the same answer.
+{% if deploy_release_tree | default(false) | bool %}
+# Release tree: there is no checkout; root's mirror holds both commits.
+changed_paths() {
+  env -i PATH="$PATH" HOME=/root GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 \
+    git --git-dir=/var/lib/vps-deploy/repo.git -c core.hooksPath=/dev/null \
+    diff --name-only "$1" "$2" -- 2>/dev/null || true
+}
+{% else %}
 changed_paths() {
   rootgit diff --name-only "$1" "$2" -- 2>/dev/null || true
 }
+{% endif %}
 changed="$(changed_paths "$old_head" "$new_head")"
 if [[ "$old_scaffold" != "$new_scaffold" ]]; then
   changed="${changed}"$'\n'"scaffold"
@@ -394,13 +403,17 @@ if [[ -n "${changed//[[:space:]]/}" ]]; then
   # resolved them, never from a repository path.
   done < <(docker compose config --format json 2>/dev/null | python3 -c '
 import json, os, sys
-root = os.getcwd().rstrip("/") + "/"
+# Under the release tree /opt/deploy is a link: compose may report sources
+# under the link (PWD) or under the release it points at (getcwd).
+roots = {p.rstrip("/") + "/" for p in (os.getcwd(), os.environ.get("PWD", "")) if p}
 cfg = json.load(sys.stdin)
 for name, svc in sorted(cfg.get("services", {}).items()):
     for vol in svc.get("volumes", []) or []:
         src = vol.get("source", "") if isinstance(vol, dict) else ""
-        if vol.get("type") == "bind" and src.startswith(root):
-            print(name + "\t" + src[len(root):].rstrip("/"))
+        for root in roots:
+            if vol.get("type") == "bind" and src.startswith(root):
+                print(name + "\t" + src[len(root):].rstrip("/"))
+                break
 ')
 fi
 
@@ -421,7 +434,17 @@ compose_up() {
     fi
   fi
 }
+{% if deploy_release_tree | default(false) | bool %}
+# The first deploy from a release replaces a checkout: recreate everything once,
+# so no container keeps a mount opened in the old checkout.
+if [[ "$old_head" == none ]]; then
+  compose_up --force-recreate
+else
+  compose_up
+fi
+{% else %}
 compose_up
+{% endif %}
 # (Not "${{ '#' }}recreate[@]": that opens a Jinja comment in this template.)
 if [[ -n "${recreate[*]:-}" ]]; then
   mapfile -t recreate < <(printf '%s\n' "${recreate[@]}" | sort -u)
@@ -441,7 +464,7 @@ docker image prune -af || true
 /usr/local/sbin/vps-release prune || true
 if [[ "$action" == rollback ]]; then
   /usr/local/bin/vps-notify "Rolled back to ${new_head:0:7}" \
-"vps-deploy --rollback switched /opt/deploy from ${old_head:0:7} to ${new_head:0:7} and recreated the stack. Auto-deploy skips ${old_head:0:7} until a new commit reaches the branch." \
+"vps-deploy --rollback switched /opt/deploy from ${old_head:0:7} to ${new_head:0:7} and redeployed it. Auto-deploy skips ${old_head:0:7} until a new commit reaches the branch." \
     high warning || true
 fi
 {% endif %}

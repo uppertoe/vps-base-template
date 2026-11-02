@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2016,SC2029  # commands are built here and run on the box over ssh on purpose
+# shellcheck disable=SC2016,SC2029,SC2015  # commands are built here and run on the box over ssh on purpose; the A && B || C lines are deliberate fallbacks
 set -euo pipefail
 
 usage() {

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2016  # the loop runs under sudo on the box; the quotes are deliberate
+# shellcheck disable=SC2016,SC2015  # remote loops keep their quotes; the A && B || C lines are deliberate fallbacks
 # make-recovery-bundle.sh — collect everything NOT in git that a rebuild needs,
 # into one encrypted file you store offsite.
 #

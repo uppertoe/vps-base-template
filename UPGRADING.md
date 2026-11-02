@@ -142,6 +142,34 @@ of the actions, once.
 ---
 
 ## 2026-10-11 — Deploy wrapper executes only the verified HEAD; off-host Caddy logs; audit rules load at boot
+## 2026-11-02: Kernel crash record kept in reserved RAM (ramoops), archived and shipped
+
+**What lands automatically on the next `site-quick.yml`:**
+
+- The notify role chooses a 1 MiB region at the top of low RAM from the
+  host's `/proc/iomem`, records it in `/etc/vps-scaffold/crash-record.env`,
+  reserves it on the kernel command line
+  (`/etc/default/grub.d/99-vps-scaffold-crash-record.cfg`, `update-grub`),
+  configures the `ramoops` module to keep kernel crash records in it, pins
+  `systemd-pstore` to archive those records to `/var/lib/systemd/pstore`, and
+  installs `vps-crash-record-check.service`, which reports over ntfy after
+  each boot. `kernel.panic_print` is set to 31 by the panic guard so a panic
+  prints the task list and memory state. The log export's default
+  `EXTRA_PATHS` gains `/var/lib/systemd/pstore`.
+- The play refuses with a clear message if the memory map has no suitable
+  region; `notify_crash_record_enabled: false` opts out.
+
+**Operator actions:**
+
+- Expect one ntfy message, "Reboot required for crash record". Nothing
+  reboots by itself for this. The next patch-window reboot (or your own
+  `reboot` in a window) applies the reservation; the boot after it reports
+  "Crash record active", and the one after that reports whether the region
+  survived the reboot on this hypervisor ("Crash record survives a reboot" or
+  "did NOT survive"). If it did not survive, the record cannot be kept on this
+  box and a network console is the remaining option; see docs/09.
+- Do not test with `echo c > /proc/sysrq-trigger` on a production host. The
+  recipe for a throwaway VM is in docs/09 §"The crash record".
 
 **What lands automatically on the next `site-quick.yml`:**
 

@@ -914,6 +914,10 @@
         - /usr/local/bin/log-export.sh
         - /etc/systemd/system/log-export.timer
         - /etc/vps-scaffold/log-export.env
+        - /usr/local/bin/vps-crash-record-address
+        - /usr/local/bin/vps-crash-record-check
+        - /etc/systemd/system/vps-crash-record-check.service
+        - /etc/systemd/pstore.conf.d/vps-scaffold.conf
 
     - name: Assert compliance control artifacts exist
       ansible.builtin.assert:

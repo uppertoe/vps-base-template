@@ -17,10 +17,10 @@ permissions:
 jobs:
   digest-freshness:
     name: Compare pinned digests to registry
+    runs-on: ubuntu-latest
     # The template's pins are examples that no server runs; Renovate PRs keep
     # them current, and the check only means something in a stamped instance.
     if: github.repository != 'uppertoe/server-instance-template'
-    runs-on: ubuntu-latest
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -33,24 +33,42 @@ jobs:
 
       - name: Check digest freshness
         id: fresh
+        env:
+          # Resolve PRIVATE first-party images instead of the anonymous WARN.
+          # GHCR_READ_TOKEN (a read:packages PAT, the same one the container scan
+          # uses) when the repo has it; otherwise GITHUB_TOKEN, which covers the
+          # packages linked to this repo. Anything still unreadable stays a WARN.
+          GHCR_USER: ${{ github.repository_owner }}
+          GHCR_TOKEN: ${{ secrets.GHCR_READ_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
-          set -o pipefail
-          bash scripts/check-digest-freshness.sh | tee freshness.txt
+          # Report-only: these pins are auto-bumped by Renovate, so a transient
+          # digest lag between a rebuild and its bump PR must not page us with a red
+          # run every week. Capture drift WITHOUT failing the step; the issue below
+          # is the durable, non-silent signal (opened on drift, closed when fresh).
+          if bash scripts/check-digest-freshness.sh | tee freshness.txt; then
+            echo "drift=0" >> "$GITHUB_OUTPUT"
+          else
+            echo "drift=1" >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: Raise or update drift issue
-        if: failure()
+      - name: Sync drift issue
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           title="Pinned image digests have drifted"
-          body="$(printf 'Weekly digest-freshness check found drift:\n\n```\n%s\n```\n\nUpdate the pins (test, then commit) or enable the Renovate app for automated bump PRs.\n' "$(cat freshness.txt)")"
           existing="$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number' || true)"
-          if [ -n "$existing" ]; then
-            gh issue comment "$existing" --body "$body"
-          else
-            # gh refuses unknown labels, which would swallow the alert on a
-            # fresh repo — ensure the label exists first (idempotent).
-            gh label create security --color B60205 \
-              --description "Automated security/drift alerts" --force || true
-            gh issue create --title "$title" --body "$body" --label security
+          if [ "${{ steps.fresh.outputs.drift }}" = "1" ]; then
+            body="$(printf 'Weekly digest-freshness check found drift:\n\n```\n%s\n```\n\nRenovate normally bumps these within a day, so a single run is usually just a rebuild-vs-bump lag. If this issue keeps getting comments across runs, a pin is genuinely stale — update it (test, then commit) or check the Renovate app.\n' "$(cat freshness.txt)")"
+            if [ -n "$existing" ]; then
+              gh issue comment "$existing" --body "$body"
+            else
+              # gh refuses unknown labels, which would swallow the alert on a
+              # fresh repo — ensure the label exists first (idempotent).
+              gh label create security --color B60205 \
+                --description "Automated security/drift alerts" --force || true
+              gh issue create --title "$title" --body "$body" --label security
+            fi
+          elif [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "Pins are fresh again as of this run — auto-closing."
+            gh issue close "$existing"
           fi

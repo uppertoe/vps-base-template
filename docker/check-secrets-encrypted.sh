@@ -18,7 +18,9 @@ say() { echo "check-secrets-encrypted: $*" >&2; fail=1; }
 
 # Keep in step with ALLOWED_METADATA in ansible/roles/deploy-user/files/vps-secrets-render.
 meta='sops_(age__list_[0-9]+__map_(recipient|enc)|mac|lastmodified|version|unencrypted_suffix|encrypted_suffix|unencrypted_regex|encrypted_regex|unencrypted_comment_regex|encrypted_comment_regex|mac_only_encrypted|shamir_threshold)='
-ok_line="^([^=#[:space:]][^=[:space:]]*=ENC\\[AES256_GCM,.*\\]|#ENC\\[AES256_GCM,.*\\]|[^=#[:space:]][^=[:space:]]*=|${meta}.*)\$"
+# An empty comment line ("#" alone, or "#" and spaces) is left unencrypted by
+# SOPS and carries nothing; a comment with content must be encrypted.
+ok_line="^([^=#[:space:]][^=[:space:]]*=ENC\\[AES256_GCM,.*\\]|#ENC\\[AES256_GCM,.*\\]|#[[:space:]]*|[^=#[:space:]][^=[:space:]]*=|${meta}.*)\$"
 
 if [[ -d secrets ]]; then
   [[ -f .sops.yaml ]] || say "secrets/ exists but .sops.yaml does not"

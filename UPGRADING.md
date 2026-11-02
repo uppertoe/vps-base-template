@@ -23,6 +23,20 @@ of the actions, once.
 
 ---
 
+## 2026-11-02 — Digest freshness resolves private images and closes its issue; empty comment lines in secrets
+
+**What to do in each server repo:** `bash scripts/check-server-files.sh --fix`
+after the bump; the canonical `digest-freshness.yml` is report-only, opens or
+updates a drift issue and closes it when the pins are fresh again, and passes
+`GHCR_READ_TOKEN` (or the repo token) so private first-party images resolve. A
+server-specific copy is no longer needed for that.
+
+`check-secrets-encrypted.sh` now accepts an empty comment line (`#` alone or
+with spaces), which SOPS leaves unencrypted; a comment with content must still
+be encrypted.
+
+---
+
 ## 2026-11-02 — Server tooling moves into the scaffold; servers keep shims and call reusable workflows
 
 **What to do in each server repo (one-off, after bumping the pointer):**

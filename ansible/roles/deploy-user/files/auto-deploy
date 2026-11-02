@@ -13,6 +13,10 @@ set -euo pipefail
 REPO=/opt/deploy
 cd "$REPO"
 
+# Hand back anything under .git that a hand-run root git has taken, so the
+# fetch and pull below do not fail on a root-owned index (see vps-git-heal).
+/usr/local/sbin/vps-git-heal || true
+
 runuser -u deploy -- git fetch --quiet origin
 
 local_head="$(runuser -u deploy -- git rev-parse HEAD)"

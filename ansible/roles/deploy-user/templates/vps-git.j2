@@ -1,0 +1,16 @@
+#!/bin/bash
+# vps-git — run git in the deploy checkout as the account that owns it
+# (managed by Ansible, deploy-user role).
+#
+# `sudo git -C /opt/deploy status` rewrites the index as root and breaks the
+# next deploy; `sudo -u deploy git -C /opt/deploy ...` is the right thing and
+# is easy to forget. This wrapper is the short spelling of the right thing:
+#   vps-git status --short
+#   vps-git log --oneline -5
+# Every argument is passed to git unchanged. The optional-locks guard means a
+# status-style read never writes the index even as the deploy account.
+set -euo pipefail
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+REPO="${VPS_DEPLOY_REPO:-/opt/deploy}"
+exec runuser -u "{{ deploy_user }}" -- env GIT_OPTIONAL_LOCKS=0 git -C "$REPO" "$@"

@@ -1,0 +1,54 @@
+#!/bin/bash
+# vps-git-heal — give the deploy account back any file under its checkout's
+# .git that root has taken (managed by Ansible, deploy-user role).
+#
+# The deploy wrapper runs its own git reads with GIT_OPTIONAL_LOCKS=0 so they
+# never write the deploy-owned index. A hand-run `sudo git status` in
+# /opt/deploy has no such guard: git refreshes the index and rewrites it as
+# root, and from then on the deploy account cannot open it, so the next pull
+# fails. Seen twice on prod-rch-vps on 2026-11-01 and 2026-11-02, the second
+# time during a security review that had been told not to. Rather than rely on
+# everyone remembering, auto-deploy and vps-deploy call this first: every path
+# under .git not owned by the deploy account is handed back, the repair is
+# logged and announced, and the deploy proceeds. A stale root-owned lock file
+# is removed as well, since no deploy-account git could have created it.
+#
+# Administrators who need git in the checkout should use `vps-git`, which runs
+# git as the deploy account.
+set -euo pipefail
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+DEPLOY_USER="{{ deploy_user }}"
+REPO="${VPS_DEPLOY_REPO:-/opt/deploy}"
+GIT_DIR="$REPO/.git"
+
+[ -d "$GIT_DIR" ] || exit 0
+
+# Root-owned lock files older than five minutes: a live root git would be the
+# wrapper's own read-only invocation, which takes no locks, so anything left
+# is debris from a hand-run command.
+stale_locks="$(find "$GIT_DIR" -name '*.lock' ! -user "$DEPLOY_USER" -mmin +5 2>/dev/null || true)"
+if [ -n "$stale_locks" ]; then
+  printf '%s\n' "$stale_locks" | xargs -r rm -f
+fi
+
+wrong="$(find "$GIT_DIR" ! -user "$DEPLOY_USER" 2>/dev/null || true)"
+[ -n "$wrong" ] || exit 0
+
+count="$(printf '%s\n' "$wrong" | wc -l | tr -d ' ')"
+printf '%s\n' "$wrong" | xargs -r chown "$DEPLOY_USER:$DEPLOY_USER"
+# Files git writes are user- and group-writable in this checkout; make the
+# handed-back ones match so the next deploy-account write succeeds.
+printf '%s\n' "$wrong" | xargs -r chmod u+rw,g+rw
+printf '%s\n' "$wrong" | while IFS= read -r p; do [ -d "$p" ] && chmod u+rwx,g+rwx "$p"; done || true
+
+echo "vps-git-heal: handed $count path(s) under $GIT_DIR back to $DEPLOY_USER:" >&2
+printf '  %s\n' "$wrong" >&2
+
+if command -v vps-notify >/dev/null 2>&1; then
+  vps-notify "Deploy checkout repaired: $count root-owned path(s) under .git" \
+"Something ran git as root in $REPO (a hand-run sudo git, most likely), which left these owned by root and would have failed the next deploy:
+$(printf '%s\n' "$wrong" | head -n 8)
+Ownership was restored to $DEPLOY_USER before deploying. Use vps-git for git in the checkout." \
+    default wrench || true
+fi

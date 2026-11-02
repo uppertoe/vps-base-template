@@ -32,6 +32,28 @@ common_automatic_reboot_time: "17:00"
 host_swap_encrypted: true
 host_swap_crypt_name: cryptswap
 
+# Swap is two tiers. A zram device (compressed pages held in RAM, no disk I/O,
+# nothing written anywhere) takes every page first; the encrypted swapfile is
+# the overflow behind it. The kernel fills the device with the higher priority
+# before touching the lower one, so the loop-over-dm-crypt-over-ext4 path that
+# the 2026-11-01 stop was writing to is reached only once zram is full.
+#
+# host_swap_zram_size is either "auto" (half of RAM, capped at 2048 MB; the
+# uncompressed capacity, and zram's RAM cost is roughly a third to a half of
+# it) or a size such as "1G" or "768M". zstd compresses best per CPU cycle of
+# the algorithms the Ubuntu kernel offers; lz4 trades ratio for speed if the
+# host is CPU-bound. A size or algorithm change applies at the next boot, or
+# after `systemctl stop dev-zram0.swap && systemctl restart
+# systemd-zram-setup@zram0.service` in a quiet window; the role never swaps a
+# live device off.
+host_swap_zram_enabled: true
+host_swap_zram_size: auto
+host_swap_zram_algorithm: zstd
+host_swap_zram_priority: 100
+# The encrypted (or plain) swapfile sits beneath zram. The priority of a
+# swapfile that is already active changes at the next boot.
+host_swapfile_priority: 10
+
 common_packages:
   - curl
   - git

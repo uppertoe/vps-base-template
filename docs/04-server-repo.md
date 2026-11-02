@@ -245,6 +245,41 @@ and 18 ms once resident. `vm.swappiness` is therefore 10 rather than the
 distro's 60, so the kernel reclaims page cache (cheap to re-read) before it
 pages out anonymous memory.
 
+### Swap: zram first, the encrypted file as overflow
+
+The host has two swap devices, and the kernel fills the one with the higher
+priority before it touches the other:
+
+| Device | Priority | What it is | Cost of a page |
+|---|---|---|---|
+| `/dev/zram0` | 100 (`host_swap_zram_priority`) | compressed pages held in RAM; half of RAM capped at 2 GB (`host_swap_zram_size: auto`), zstd | microseconds of CPU, no I/O, nothing leaves RAM |
+| `/dev/mapper/cryptswap` | 10 (`host_swapfile_priority`) | the random-key dm-crypt mapping over `/swapfile` on the root filesystem | a loop device, a decrypt and a disk write on one vCPU |
+
+The file is kept as overflow because zram's capacity is the uncompressed size
+and its RAM cost when full is a third to a half of that; a workload that
+genuinely exceeds RAM still needs somewhere to go, and a 4 GB file that is
+rarely reached is cheaper than an OOM kill. The 2026-11-01 stop on
+prod-rch-vps followed thirty seconds of writing about 200 MiB to that file
+while the kernel was reclaiming hard; with zram in front, the same burst stays
+in RAM. Encryption at rest is unaffected: zram never writes anywhere, and the
+file is still re-keyed every boot.
+
+`vm.swappiness` stays at 10. It decides how readily anonymous memory is
+evicted at all, not which device receives it, and an idle app's working set
+faulted back from zram is still a wait for the next visitor, so the no-swap
+slice below remains the real protection for the user-facing tier. A higher
+value would push the batch and data tiers into zram sooner and spend the
+single vCPU on compression nobody is waiting on. earlyoom keeps `-m 5 -s 10`:
+its percentages are of `SwapTotal`, which now includes the zram device, so it
+still acts only when both memory and swap are nearly exhausted; the memory
+tiers below are what bound the estate's swap use in practice.
+
+Check it with `swapon --show` (both devices, zram with the higher priority)
+and `zramctl` (algorithm, data and compressed sizes). The size and algorithm
+are set in `/etc/systemd/zram-generator.conf`, which `systemd-zram-generator`
+turns into `dev-zram0.swap`; a change there takes effect at the next boot
+because the role never swaps a live device off.
+
 **Anything Caddy can reach belongs in the no-swap slice.** By definition it is
 something a person waits on, and the compose audit now asserts it — a
 Caddy-reachable app container without the slice is a WARN:

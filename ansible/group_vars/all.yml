@@ -45,13 +45,30 @@ host_swapfile_size_mb: auto
 host_swap_encrypted: true
 host_swap_crypt_name: cryptswap
 
+# zram first, the encrypted swapfile as overflow. The kernel fills the swap
+# device with the higher priority before the lower one, so pages leave RAM for
+# a compressed region of RAM (no disk I/O, nothing written anywhere) and reach
+# the loop-over-dm-crypt-over-ext4 file only once zram is full. "auto" is half
+# of RAM capped at 2048 MB (the uncompressed capacity; the RAM cost is about a
+# third to a half of it). See roles/common/defaults/main.yml for the knobs and
+# docs/04-server-repo.md ("Memory on a 2 GB host") for how this sits with
+# vm.swappiness, earlyoom and the memory tiers.
+host_swap_zram_enabled: true
+host_swap_zram_size: auto
+host_swap_zram_algorithm: zstd
+host_swap_zram_priority: 100
+host_swapfile_priority: 10
+
 # Lightweight host monitoring for post-incident analysis on small VPSes.
 host_monitoring_enabled: true
 host_monitoring_packages:
   - atop
   - sysstat
 
-# Kill large processes before the kernel reaches full OOM thrash.
+# Kill large processes before the kernel reaches full OOM thrash. The two
+# percentages are of MemTotal and SwapTotal; SwapTotal includes the zram
+# device, and the memory tiers (docker role) bound what the containers may
+# swap, so these are left as they were when zram was added (2026-11-02).
 host_earlyoom_enabled: true
 host_earlyoom_min_free_mem_percent: 5
 host_earlyoom_min_free_swap_percent: 10
@@ -197,6 +214,12 @@ baseline_host_sysctls:
   # At 10 the kernel reclaims page cache — of which there is plenty, and which
   # costs a cheap re-read — before it pages out anonymous memory. It does not
   # disable swap: a genuine shortfall still swaps rather than OOM-killing.
+  # Kept at 10 with zram in front of the file (2026-11-02): swappiness decides
+  # how readily anonymous pages are evicted at all, not which device takes
+  # them, and evicting an idle app's working set still costs the next visitor
+  # a fault-in even from zram. The no-swap slice protects the user-facing tier
+  # directly; a higher value would only push the batch and data tiers into
+  # zram sooner and spend the single vCPU on compression nobody is waiting on.
   vm.swappiness: "10"
 
 # Services that ship enabled on a desktop-derived Ubuntu image and do nothing

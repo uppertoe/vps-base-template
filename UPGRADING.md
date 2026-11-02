@@ -76,6 +76,23 @@ of the actions, once.
    that already carries `# scaffold-lint: public` for a path inside its block
    can replace that line with the `open-path` marker, which carries the paths
    as well as the reason.
+## 2026-11-02 — zram swap tier
+
+**What lands automatically on the next `site-quick.yml`:**
+
+- The common role installs `systemd-zram-generator` and a `/dev/zram0` swap
+  device at priority 100 (half of RAM, capped at 2 GB, zstd). The encrypted
+  swapfile stays active as overflow; its own priority becomes 10 at the next
+  boot (an already-active swap keeps its old priority until then, and the
+  role never swaps a live device off). `swapon --show` should list both.
+  Turn it off with `host_swap_zram_enabled: false`; size it with
+  `host_swap_zram_size: 768M`.
+
+**Operator actions:**
+
+1. None required. After the play, confirm with `swapon --show` that zram has
+   the higher priority, and expect `zramctl` to show pages moving there in
+   preference to the file over the following days.
 
 ---
 

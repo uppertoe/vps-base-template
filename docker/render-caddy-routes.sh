@@ -17,14 +17,19 @@
 #                    line each (kind: groups, domains, signed-in, guests,
 #                    network -- open on a named network via an
 #                    "import <name>_network" snippet -- or public with the
-#                    marker's reason). The auth service shows
-#                    it as a "who can reach what" table.
-#   route-groups.tsv -- every gateway group a site's guard requires, or that
-#                    the app declares it reads itself with
-#                    "# scaffold-groups: <groups> -- <why>", one
-#                    "group<TAB>host" line each. Mounted read-only into the auth
-#                    service, whose Groups page lists the groups the routes use
-#                    so administrators pick names instead of typing them.
+#                    marker's reason; an open path beside a gate, declared
+#                    with "# scaffold-lint: open-path -- <paths>: <why>", is a
+#                    public row whose value is "<paths>: <why>"). The auth
+#                    service shows it as a "who can reach what" table.
+#   route-groups.tsv -- every gateway group a site's guard requires, one
+#                    "group<TAB>host" line each, and every group an app
+#                    declares it reads itself with
+#                    "# scaffold-groups: <groups> -- <why>", as
+#                    "group<TAB>host<TAB>declared". Mounted read-only into the
+#                    auth service, whose Groups page lists the groups the
+#                    routes use so administrators pick names instead of typing
+#                    them, and which refuses a declared group as a break-glass
+#                    target.
 #
 # Both files are derived purely from committed sources, so they are committed
 # like lockfiles: run this after adding/changing apps and commit the result.
@@ -93,6 +98,10 @@ if [[ -d "$repo_root/apps" ]]; then
         if (depth == 0) {
           if (substr(trimmed, 1, 1) == "#") {
             if (trimmed ~ /scaffold-lint: public/) { pending_public = 1 }
+            if (trimmed ~ /scaffold-lint: open-path/) {
+              printf "ERROR: %s:%d: an open-path marker belongs inside a site block, inside or just above the handle it describes\n", FILENAME, FNR > "/dev/stderr"
+              bad = 1
+            }
           } else if (trimmed != "" && !(line ~ /\{[[:space:]]*$/ && substr(trimmed, 1, 1) != "(")) {
             pending_public = 0
           }
@@ -103,6 +112,49 @@ if [[ -d "$repo_root/apps" ]]; then
         } else if (in_site && depth > 0) {
           if (trimmed ~ /^import (protected|auth_gate)/ || trimmed ~ /^forward_auth([[:space:]]|$)/) { site_guarded = 1 }
           if (substr(trimmed, 1, 1) == "#" && trimmed ~ /scaffold-lint: public/) { site_declared = 1 }
+        }
+
+        # Open paths beside a gate. In a site that has a guard, every handle,
+        # handle_path or route block that serves something itself (a
+        # reverse_proxy, file_server or respond line) must be guarded, by a
+        # guard import or forward_auth inside it, in a route block nested in
+        # it, or in an enclosing block, or it must carry the marker
+        #   # scaffold-lint: open-path -- <paths>: <why these paths are open>
+        # inside the block or on the comment line just above it (a named
+        # matcher may sit between). route-access.tsv lists the marker as a
+        # public row, so the "who can reach what" table shows the open paths
+        # of a gated site and not only its gate. A comment line never counts
+        # as code, and a handle_errors block is not a door. The check is
+        # settled when the site block closes, once it is known whether the
+        # site has a guard at all; a site with no guard is covered by the
+        # public marker above.
+        if (in_site && depth > 0) {
+          if (substr(trimmed, 1, 1) == "#") {
+            if (trimmed ~ /scaffold-lint: open-path/) {
+              marker_text = trimmed; sub(/.*scaffold-lint: open-path[[:space:]]*(--)?[[:space:]]*/, "", marker_text)
+              if (marker_text !~ /^[^:]+:[[:space:]]*[^[:space:]]/) {
+                printf "ERROR: %s:%d: the marker must read \"# scaffold-lint: open-path -- <paths>: <reason>\"\n", FILENAME, FNR > "/dev/stderr"
+                bad = 1
+              }
+              pending_open = 1; site_declared = 1
+            }
+          } else if (trimmed ~ /^(handle|handle_path|route|handle_errors)([[:space:]]|\{)/ && line ~ /\{[[:space:]]*$/) {
+            nframes++
+            frame_depth[nframes] = depth; frame_line[nframes] = FNR
+            frame_route[nframes] = (trimmed ~ /^route/)
+            frame_code[nframes] = 0; frame_guard[nframes] = 0
+            frame_marker[nframes] = pending_open; pending_open = 0
+            frame_exempt[nframes] = (trimmed ~ /^handle_errors/) || (nframes > 1 && frame_exempt[nframes - 1])
+          } else if (trimmed != "" && substr(trimmed, 1, 1) != "@") {
+            if (pending_open) {
+              if (nframes > 0) { frame_marker[nframes] = 1 }
+              pending_open = 0
+            }
+            if (nframes > 0) {
+              if (trimmed ~ /^(reverse_proxy|file_server|respond)([[:space:]]|\{|$)/) { frame_code[nframes] = 1 }
+              if (trimmed ~ /^import (protected|auth_gate)/ || trimmed ~ /^forward_auth([[:space:]]|$)/) { frame_guard[nframes] = 1 }
+            }
+          }
         }
 
         # Every app upstream in a site block must drop the gateway session
@@ -135,14 +187,21 @@ if [[ -d "$repo_root/apps" ]]; then
           # Bearer tokens in URLs stay out of the access log. A magic link, an
           # unsubscribe link, a guest pass: any run of 16+ URL-safe base64
           # characters standing as a whole path segment or a query value is
-          # replaced, in the request line and in the two headers that carry the
-          # referring page (Referer, and Hx-Current-Url from htmx). A token that
-          # carries a file extension (a per-user calendar feed, a signed file
-          # URL) is caught by the second alternative, which asks for 32+
-          # characters so ordinary long file names stay readable. Fingerprinted
-          # asset names have a dot before the hash, short parameters are short,
-          # so neither matches. The same filter is on the default logger
-          # (run-caddy.sh), which the request dumps in the error log go through.
+          # replaced, in the request line, in the two headers that carry the
+          # referring page (Referer, and Hx-Current-Url from htmx) and in the
+          # Location header of a redirect, which carries the gated URL a
+          # signed-out person asked for and, after sign-in, where they were
+          # sent. A token that carries a file extension (a per-user calendar
+          # feed, a signed file URL) is caught by the second alternative, which
+          # asks for 32+ characters so ordinary long file names stay readable.
+          # The delimiters are accepted percent-encoded as well (%2F %3D before,
+          # %2F %3F %26 after), because the login redirect carries the asked-for
+          # URL encoded inside its rd= value. Fingerprinted asset names have a
+          # dot before the hash, short parameters are short, so neither
+          # matches. The same filter is on the default logger (run-caddy.sh),
+          # which the request dumps in the error log go through; the offline
+          # test in docker/tests/test-render-caddy-routes.sh keeps the two
+          # identical and checks the token shapes above.
           print "    log {" >> target
           print "        output file /var/log/caddy/access.log {" >> target
           print "            roll_size 20MiB" >> target
@@ -152,9 +211,10 @@ if [[ -d "$repo_root/apps" ]]; then
           print "        format filter {" >> target
           print "            wrap json" >> target
           print "            fields {" >> target
-          print "                request>uri regexp ([/=])(?:[A-Za-z0-9_-]{16,}([/?&]|$)|[A-Za-z0-9_-]{32,}(\\.[A-Za-z0-9]{1,8}(?:[/?&]|$))) ${1}REDACTED${2}${3}" >> target
-          print "                request>headers>Referer regexp ([/=])(?:[A-Za-z0-9_-]{16,}([/?&]|$)|[A-Za-z0-9_-]{32,}(\\.[A-Za-z0-9]{1,8}(?:[/?&]|$))) ${1}REDACTED${2}${3}" >> target
-          print "                request>headers>Hx-Current-Url regexp ([/=])(?:[A-Za-z0-9_-]{16,}([/?&]|$)|[A-Za-z0-9_-]{32,}(\\.[A-Za-z0-9]{1,8}(?:[/?&]|$))) ${1}REDACTED${2}${3}" >> target
+          print "                request>uri regexp ([/=]|%2[Ff]|%3[Dd])(?:[A-Za-z0-9_-]{16,}([/?&]|%2[Ff]|%3[Ff]|%26|$)|[A-Za-z0-9_-]{32,}(\\.[A-Za-z0-9]{1,8}(?:[/?&]|%2[Ff]|%3[Ff]|%26|$))) ${1}REDACTED${2}${3}" >> target
+          print "                request>headers>Referer regexp ([/=]|%2[Ff]|%3[Dd])(?:[A-Za-z0-9_-]{16,}([/?&]|%2[Ff]|%3[Ff]|%26|$)|[A-Za-z0-9_-]{32,}(\\.[A-Za-z0-9]{1,8}(?:[/?&]|%2[Ff]|%3[Ff]|%26|$))) ${1}REDACTED${2}${3}" >> target
+          print "                request>headers>Hx-Current-Url regexp ([/=]|%2[Ff]|%3[Dd])(?:[A-Za-z0-9_-]{16,}([/?&]|%2[Ff]|%3[Ff]|%26|$)|[A-Za-z0-9_-]{32,}(\\.[A-Za-z0-9]{1,8}(?:[/?&]|%2[Ff]|%3[Ff]|%26|$))) ${1}REDACTED${2}${3}" >> target
+          print "                resp_headers>Location regexp ([/=]|%2[Ff]|%3[Dd])(?:[A-Za-z0-9_-]{16,}([/?&]|%2[Ff]|%3[Ff]|%26|$)|[A-Za-z0-9_-]{32,}(\\.[A-Za-z0-9]{1,8}(?:[/?&]|%2[Ff]|%3[Ff]|%26|$))) ${1}REDACTED${2}${3}" >> target
           print "            }" >> target
           print "        }" >> target
           print "    }" >> target
@@ -206,11 +266,29 @@ if [[ -d "$repo_root/apps" ]]; then
           }
           in_proxy = 0
         }
+        while (nframes > 0 && depth <= frame_depth[nframes]) {
+          covered = frame_guard[nframes] || frame_marker[nframes] || frame_exempt[nframes]
+          for (k = 1; k < nframes && !covered; k++) { if (frame_guard[k] || frame_marker[k]) { covered = 1 } }
+          if (frame_code[nframes] && !covered) { nopen++; open_line[nopen] = frame_line[nframes] }
+          # A route block runs its directives and falls through, so a guard
+          # inside it also guards what follows in the enclosing block. A
+          # handle block answers only the requests it matched, so its guard
+          # says nothing about its siblings.
+          if (nframes > 1 && frame_route[nframes] && frame_guard[nframes]) { frame_guard[nframes - 1] = 1 }
+          nframes--
+        }
         if (depth == 0 && in_site && FNR != site_line) {
           if (!site_guarded && !site_declared) {
             printf "ERROR: %s:%d: site %s declares no access: import a gateway guard, or mark it public with a comment \"# scaffold-lint: public -- <reason>\"\n", FILENAME, site_line, site_addr > "/dev/stderr"
             bad = 1
           }
+          if (site_guarded) {
+            for (k = 1; k <= nopen; k++) {
+              printf "ERROR: %s:%d: site %s has a gate, but this block serves without one: import a gateway guard, or declare the open path with a comment \"# scaffold-lint: open-path -- <paths>: <reason>\" so route-access.tsv lists it\n", FILENAME, open_line[k], site_addr > "/dev/stderr"
+              bad = 1
+            }
+          }
+          nopen = 0; nframes = 0; pending_open = 0
           in_site = 0
         }
         if (depth == 0) { target = "" }
@@ -295,15 +373,22 @@ mv "$networks_file.tmp" "$networks_file"
 # the auth service to fill in. Domain-only guards name no group and add nothing.
 {
   printf '# Generated by scaffold/docker/render-caddy-routes.sh; do not edit.\n'
-  printf '# Gateway groups required by each site, one "group<TAB>host" per line.\n'
+  printf '# Gateway groups required by each site, one "group<TAB>host" per line; a group\n'
+  printf '# the app reads itself (a scaffold-groups marker) has "declared" as a third field.\n'
   if [[ -d "$repo_root/apps" ]]; then
     find "$repo_root/apps" -mindepth 2 -maxdepth 2 -type f -name '*.caddy' | sort \
       | while IFS= read -r snippet; do
           awk '
-            function emit(list,    n, parts, i) {
+            # A guard group is two columns; a group the app reads itself (a
+            # scaffold-groups marker) carries "declared" as a third column,
+            # so the auth service can tell the admin group of an application
+            # from a route gate and refuse it as a break-glass target.
+            function emit(list, tag,    n, parts, i) {
               n = split(list, parts, /[ ,]+/)
               for (i = 1; i <= n; i++) {
-                if (parts[i] != "" && site != "") { printf "%s\t%s\n", parts[i], site }
+                if (parts[i] != "" && site != "") {
+                  if (tag != "") { printf "%s\t%s\t%s\n", parts[i], site, tag } else { printf "%s\t%s\n", parts[i], site }
+                }
               }
             }
             # groups=... field of an X-Auth-Policy string
@@ -331,7 +416,7 @@ mv "$networks_file.tmp" "$networks_file"
                   declared = trimmed
                   sub(/.*scaffold-groups:[[:space:]]*/, "", declared)
                   sub(/[[:space:]]*--.*$/, "", declared)
-                  if (depth == 0) { pending_groups = declared } else { emit(declared) }
+                  if (depth == 0) { pending_groups = declared } else { emit(declared, "declared") }
                 }
                 next
               }
@@ -342,7 +427,7 @@ mv "$networks_file.tmp" "$networks_file"
                   site = trimmed
                   sub(/[[:space:]]*\{[[:space:]]*$/, "", site)
                   gsub(/[[:space:]]*,[[:space:]]*/, ",", site)
-                  if (pending_groups != "") { emit(pending_groups) }
+                  if (pending_groups != "") { emit(pending_groups, "declared") }
                 }
                 pending_groups = ""
               } else if (depth == 0 && trimmed != "") {
@@ -368,7 +453,8 @@ mv "$groups_file.tmp" "$groups_file"
 
 # --- route-access.tsv: who can reach each site --------------------------------
 # Same recognition as route-groups.tsv, plus domain lists, the plain
-# "any signed-in user" guards, and the public marker the render lint requires.
+# "any signed-in user" guards, the public marker the render lint requires and
+# the open-path marker it requires on an unguarded handle in a gated site.
 # A site can apply different rules to different paths; every rule found in the
 # block is listed against the site.
 {
@@ -401,6 +487,11 @@ mv "$groups_file.tmp" "$groups_file"
                 if (trimmed ~ /scaffold-lint: public/) {
                   reason = trimmed; sub(/.*scaffold-lint: public[[:space:]]*(--)?[[:space:]]*/, "", reason)
                   if (depth == 0) { pending = reason; has_pending = 1 } else { rule("public", reason) }
+                }
+                # An open path beside a gate: "<paths>: <why>" as a public row.
+                if (trimmed ~ /scaffold-lint: open-path/ && depth > 0) {
+                  reason = trimmed; sub(/.*scaffold-lint: open-path[[:space:]]*(--)?[[:space:]]*/, "", reason)
+                  rule("public", reason)
                 }
                 next
               }

@@ -23,6 +23,36 @@ of the actions, once.
 
 ---
 
+## 2026-11-02: Open paths beside a gate must be declared; the access-log filter covers percent-encoded tokens and Location
+
+**What lands automatically on the next render and deploy:**
+
+- The Caddy route renderer requires a marker on every open path of a gated
+  site. Inside a site that has a guard, a `handle`, `handle_path` or `route`
+  block that serves something itself (`reverse_proxy`, `file_server` or
+  `respond`) must be guarded or carry
+  `# scaffold-lint: open-path -- <paths>: <reason>` inside the block or on the
+  comment line above it. The marker becomes a `public` row in
+  `route-access.tsv`, so the auth service's "who can reach what" table shows a
+  public QR view, a webhook, a calendar feed or an office-network door beside
+  the gate it sits next to. See `docs/04-server-repo.md`.
+- The access-log token filter also recognises a token whose delimiters are
+  percent-encoded (the login redirect carries the asked-for URL inside its
+  `rd=` value) and is applied to the `Location` response header. The change
+  is in the per-site log block the renderer stamps and in the default logger
+  block `run-caddy.sh` assembles; nothing to configure.
+
+**Operator actions:**
+
+1. Before bumping the pointer, run the renderer in the server repo
+   (`bash scaffold/docker/render-caddy-routes.sh`) and add the marker to each
+   block it reports, then commit the re-rendered `.generated/caddy`. A site
+   that already carries `# scaffold-lint: public` for a path inside its block
+   can replace that line with the `open-path` marker, which carries the paths
+   as well as the reason.
+
+---
+
 ## 2026-10-11 — Deploy wrapper executes only the verified HEAD; off-host Caddy logs; audit rules load at boot
 
 **What lands automatically on the next `site-quick.yml`:**

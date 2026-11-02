@@ -15,7 +15,12 @@ generated_config="/tmp/Caddyfile"
 # the shipped logs. Same rule as the access log (render-caddy-routes.sh): a
 # 16+ character URL-safe base64 path segment or query value becomes REDACTED,
 # as does a 32+ character one carrying a file extension (a calendar feed, a
-# signed file URL), in the request line, the Referer and htmx's Hx-Current-Url.
+# signed file URL), in the request line, the Referer, htmx's Hx-Current-Url
+# and the Location header of a redirect. The delimiters around the token may
+# be percent-encoded (%2F %3D before, %2F %3F %26 after), which is how the
+# login redirect carries the asked-for URL inside its rd= value. The offline
+# test in docker/tests/test-render-caddy-routes.sh keeps this block and the
+# renderer's identical.
 : > "$generated_config"
 
 # The mounted Caddyfile may open with a global options block of its own
@@ -59,9 +64,10 @@ awk -v globals="$mounted_globals" -v sites="$mounted_sites" '
 		format filter {
 			wrap json
 			fields {
-				request>uri regexp ([/=])(?:[A-Za-z0-9_-]{16,}([/?&]|$)|[A-Za-z0-9_-]{32,}(\.[A-Za-z0-9]{1,8}(?:[/?&]|$))) ${1}REDACTED${2}${3}
-				request>headers>Referer regexp ([/=])(?:[A-Za-z0-9_-]{16,}([/?&]|$)|[A-Za-z0-9_-]{32,}(\.[A-Za-z0-9]{1,8}(?:[/?&]|$))) ${1}REDACTED${2}${3}
-				request>headers>Hx-Current-Url regexp ([/=])(?:[A-Za-z0-9_-]{16,}([/?&]|$)|[A-Za-z0-9_-]{32,}(\.[A-Za-z0-9]{1,8}(?:[/?&]|$))) ${1}REDACTED${2}${3}
+				request>uri regexp ([/=]|%2[Ff]|%3[Dd])(?:[A-Za-z0-9_-]{16,}([/?&]|%2[Ff]|%3[Ff]|%26|$)|[A-Za-z0-9_-]{32,}(\.[A-Za-z0-9]{1,8}(?:[/?&]|%2[Ff]|%3[Ff]|%26|$))) ${1}REDACTED${2}${3}
+				request>headers>Referer regexp ([/=]|%2[Ff]|%3[Dd])(?:[A-Za-z0-9_-]{16,}([/?&]|%2[Ff]|%3[Ff]|%26|$)|[A-Za-z0-9_-]{32,}(\.[A-Za-z0-9]{1,8}(?:[/?&]|%2[Ff]|%3[Ff]|%26|$))) ${1}REDACTED${2}${3}
+				request>headers>Hx-Current-Url regexp ([/=]|%2[Ff]|%3[Dd])(?:[A-Za-z0-9_-]{16,}([/?&]|%2[Ff]|%3[Ff]|%26|$)|[A-Za-z0-9_-]{32,}(\.[A-Za-z0-9]{1,8}(?:[/?&]|%2[Ff]|%3[Ff]|%26|$))) ${1}REDACTED${2}${3}
+				resp_headers>Location regexp ([/=]|%2[Ff]|%3[Dd])(?:[A-Za-z0-9_-]{16,}([/?&]|%2[Ff]|%3[Ff]|%26|$)|[A-Za-z0-9_-]{32,}(\.[A-Za-z0-9]{1,8}(?:[/?&]|%2[Ff]|%3[Ff]|%26|$))) ${1}REDACTED${2}${3}
 			}
 		}
 	}

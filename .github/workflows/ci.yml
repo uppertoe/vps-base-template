@@ -22,7 +22,7 @@ jobs:
       - name: Shellcheck role scripts and repo tooling
         run: |
           set -euo pipefail
-          files="$(git ls-files 'ansible/roles/*/files/*' 'scripts/*.sh' 'backup/tests/integration/*.sh' 'docker/*.sh' \
+          files="$(git ls-files 'ansible/roles/*/files/*' 'scripts/*.sh' 'backup/tests/integration/*.sh' 'docker/*.sh' 'docker/tests/*.sh' \
             | while read -r f; do head -n1 "$f" | grep -qE '^#!.*\b(ba)?sh\b' && echo "$f" || true; done)"
           echo "$files"
           # shellcheck disable=SC2086
@@ -35,6 +35,12 @@ jobs:
 
       - name: Compose-audit control unit checks
         run: python3 ansible/files/compose-audit/test_check_compose_hardening.py
+
+      # The Caddy renderer: the access-log token filter (same regex in the
+      # per-site and global blocks, run through Go's RE2 against the token
+      # shapes in use) and the route lint fixtures.
+      - name: Renderer checks
+        run: bash docker/tests/test-render-caddy-routes.sh
 
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0

@@ -174,6 +174,13 @@
           - "'chmod o+r' in (vps_deploy_raw.content | b64decode)"
         msg: "vps-deploy is missing the checkout permission-normalisation passes"
 
+    - name: Assert wrapper recreates only services whose mounted files changed
+      ansible.builtin.assert:
+        that:
+          - "'--remove-orphans --wait --force-recreate' not in vps_deploy_wrapper.content | b64decode"
+          - "'recreating services whose mounted files changed' in vps_deploy_wrapper.content | b64decode"
+        fail_msg: "vps-deploy must not force-recreate the whole stack; it recreates the services whose bind-mounted files changed"
+
     - name: Assert wrapper compares the tree as root against a private index copy
       ansible.builtin.assert:
         that:

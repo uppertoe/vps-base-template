@@ -23,6 +23,25 @@ of the actions, once.
 
 ---
 
+## 2026-11-03 — A deploy recreates only what changed
+
+**What lands automatically on the next `site-quick.yml`:** `vps-deploy` no
+longer runs `docker compose up --force-recreate` for the whole stack. Compose
+recreates a container itself when its image, definition or environment (env
+file contents included) changed; the wrapper additionally recreates the
+services whose bind-mounted repo files changed in this deploy (the Caddy
+bundle and route tables, `sites.yaml`, custom terms, override images), found
+from the resolved compose config. A deploy of a small change therefore starts
+one or two containers, not twenty, and a slow starter no longer misses its
+health deadline because every other app is starting beside it (prod-rch-vps,
+2026-11-02, 02:29Z and 22:16Z).
+
+**What to check:** a hook that relied on the full recreate (none known) must
+recreate its own service. A file read once at start-up that is NOT
+bind-mounted from the repo is unaffected, as before.
+
+---
+
 ## 2026-11-02 — Digest freshness resolves private images and closes its issue; empty comment lines in secrets
 
 **What to do in each server repo:** `bash scripts/check-server-files.sh --fix`

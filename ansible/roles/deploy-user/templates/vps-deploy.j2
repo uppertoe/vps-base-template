@@ -270,20 +270,64 @@ for hook in ./apps/*/deploy.sh; do
   fi
 done
 
+# Recreate only what changed. Compose recreates a container by itself when
+# its image, its compose definition or its environment (env_file contents
+# included) differ from the running one, so a deploy need not recreate the
+# whole stack: doing so put every app's start-up on the one vCPU at once, and
+# a slow starter then missed its health deadline with nothing actually wrong
+# (prod-rch-vps, 2026-11-02, twice). What compose cannot see is a change to a
+# file bind-mounted from the repo (a Caddy bundle, sites.yaml, custom terms):
+# those services are recreated explicitly, chosen from the paths this deploy
+# changed and each service's bind mounts in the resolved config.
+changed_paths="$(rootgit diff --name-only "$old_head" "$new_head" -- 2>/dev/null || true)"
+if [[ "$old_scaffold" != "$new_scaffold" ]]; then
+  changed_paths="${changed_paths}"$'\n'"scaffold"
+fi
+recreate=()
+if [[ -n "${changed_paths//[[:space:]]/}" ]]; then
+  while IFS=$'\t' read -r svc rel; do
+    [[ -n "$svc" ]] || continue
+    while IFS= read -r changed; do
+      [[ -n "$changed" ]] || continue
+      if [[ "$changed" == "$rel" || "$changed" == "$rel"/* || "$rel" == "$changed"/* ]]; then
+        recreate+=("$svc")
+        break
+      fi
+    done <<< "$changed_paths"
+  done < <(docker compose config --format json 2>/dev/null | python3 -c '
+import json, os, sys
+root = os.getcwd().rstrip("/") + "/"
+cfg = json.load(sys.stdin)
+for name, svc in sorted(cfg.get("services", {}).items()):
+    for vol in svc.get("volumes", []) or []:
+        src = vol.get("source", "") if isinstance(vol, dict) else ""
+        if vol.get("type") == "bind" and src.startswith(root):
+            print(name + "\t" + src[len(root):].rstrip("/"))
+')
+fi
+
 # One retry covers a transient engine hiccup (a container that failed to start
 # right after a dockerd/containerd restart). If it still fails, say exactly
 # which containers are not Up before exiting non-zero — `docker ps` without -a
 # hides a container stuck in Created, which is how the 2026-09-05 outage went
 # unnoticed for its first hour.
-if ! docker compose up -d --remove-orphans --wait --force-recreate; then
-  echo "vps-deploy: compose up --wait failed; retrying once in 30 s…" >&2
-  sleep 30
-  if ! docker compose up -d --remove-orphans --wait; then
-    echo "vps-deploy: compose up --wait failed again. Containers not Up:" >&2
-    # A one-shot init container that has exited cleanly is not a failure.
-    docker ps -a --format '  {% raw %}{{.Names}}: {{.Status}}{% endraw %}' | grep -vE ': (Up |Exited \(0\))' >&2 || true
-    exit 1
+compose_up() {
+  if ! docker compose up -d --remove-orphans --wait "$@"; then
+    echo "vps-deploy: compose up --wait failed; retrying once in 30 s…" >&2
+    sleep 30
+    if ! docker compose up -d --remove-orphans --wait "$@"; then
+      echo "vps-deploy: compose up --wait failed again. Containers not Up:" >&2
+      # A one-shot init container that has exited cleanly is not a failure.
+      docker ps -a --format '  {% raw %}{{.Names}}: {{.Status}}{% endraw %}' | grep -vE ': (Up |Exited \(0\))' >&2 || true
+      exit 1
+    fi
   fi
+}
+compose_up
+if (( ${#recreate[@]} > 0 )); then
+  mapfile -t recreate < <(printf '%s\n' "${recreate[@]}" | sort -u)
+  echo "vps-deploy: recreating services whose mounted files changed: ${recreate[*]}"
+  compose_up --force-recreate "${recreate[@]}"
 fi
 
 # Every digest bump strands the superseded image (untagged, unreferenced), and

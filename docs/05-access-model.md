@@ -152,7 +152,9 @@ sudo /usr/local/sbin/vps-deploy
 - normalize `.env` permissions
 - run approved app deploy hooks
 - `docker compose pull`
-- `docker compose up -d --remove-orphans --wait`
+- `docker compose up -d --remove-orphans --wait`, then the same with
+  `--force-recreate` for only the services whose bind-mounted repo files this
+  deploy changed (compose recreates image, definition and env changes itself)
 - `docker image prune -af` (reclaim superseded images once the new containers are healthy)
 
 ### App maintenance entrypoint

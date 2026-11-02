@@ -1,0 +1,21 @@
+# vps-crash-record-check.service — report the kernel crash record after a boot.
+#
+# Runs once per boot, after systemd-pstore has archived whatever ramoops kept
+# across the reboot. Alerts via ntfy when a record was captured, when the
+# reservation is configured but not live, and once when persistence across a
+# reboot is proven or disproven. Installed by the notify role.
+
+[Unit]
+Description=Kernel crash record report (ramoops via pstore)
+After=systemd-pstore.service network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/vps-scaffold/crash-record.env
+OnFailure=notify@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/vps-crash-record-check boot
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

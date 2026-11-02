@@ -231,6 +231,11 @@
   tags:
     - molecule-notest
 
+# The crash record completes the panic guard: what the kernel said when it
+# stopped survives the reboot in reserved RAM and is archived at the next boot.
+- name: Configure the kernel crash record
+  ansible.builtin.import_tasks: crash-record.yml
+
 # Start the timer now so a host gets its re-arm without waiting for a reboot.
 # The arming service itself is deliberately not started here: it reads the
 # previous boot's outcome, and running it mid-play would count this live host

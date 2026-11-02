@@ -20,3 +20,17 @@
   ansible.builtin.command: /usr/local/bin/vps-panic-guard reapply
   changed_when: true
   when: ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
+# The memmap= reservation and the ramoops options only take effect when the
+# kernel boots with them. This records the requirement in /var/lib/vps-notify
+# and alerts once over ntfy; it never reboots. The patch-window reboot, or an
+# operator, applies it, and vps-crash-record-check clears the marker when it
+# sees the reservation live.
+- name: Record that the crash record needs a reboot
+  ansible.builtin.command:
+    argv:
+      - /usr/local/bin/vps-crash-record-check
+      - pending
+      - "The kernel command line now reserves RAM for the crash record (ramoops), or its module options changed."
+  changed_when: true
+  when: ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']

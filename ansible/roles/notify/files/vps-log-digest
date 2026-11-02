@@ -54,6 +54,7 @@ add "Disk /: $(df -h / 2>/dev/null | awk 'NR==2 {print $5" used, "$4" free"}')"
 
 # --- patching ------------------------------------------------------------------
 [ -f /run/reboot-required ] && add "Reboot required: YES (pending patch-window reboot)"
+[ -f /var/lib/vps-notify/crash-record/reboot-required ] && add "Reboot required: crash record reservation (ramoops) not yet live"
 sla="$(journalctl --since "$SINCE" --no-pager -g 'PATCH-SLA' 2>/dev/null | tail -1 | sed 's/^.*PATCH-SLA/PATCH-SLA/')"
 [ -n "$sla" ] && add "$sla"
 

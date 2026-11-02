@@ -32,6 +32,12 @@
 #                              failure that otherwise panics nothing and logs
 #                              nothing. Set 0 if legitimate I/O on the host
 #                              regularly blocks past hung_task_timeout_secs.)
+#   PANIC_GUARD_PANIC_PRINT   (default 31; what the kernel appends to the
+#                              panic text: 1 task list with stacks, 2 memory
+#                              information, 4 timers, 8 locks, 16 ftrace. Set
+#                              whether armed or disarmed, because the crash
+#                              record (ramoops, see vps-crash-record-check)
+#                              is only worth having with this detail in it.)
 set -u
 
 CONF="${VPS_NOTIFY_CONF:-/etc/vps-scaffold/notify.env}"
@@ -45,6 +51,7 @@ ON_OOPS="${PANIC_GUARD_ON_OOPS:-1}"
 ON_SOFTLOCKUP="${PANIC_GUARD_ON_SOFTLOCKUP:-1}"
 ON_HUNG_TASK="${PANIC_GUARD_ON_HUNG_TASK:-1}"
 STABLE_MIN="${PANIC_GUARD_STABLE_MIN:-30}"
+PANIC_PRINT="${PANIC_GUARD_PANIC_PRINT:-31}"
 
 # Overridable so the state machine can be exercised in tests.
 STATE_DIR="${PANIC_GUARD_STATE_DIR:-/var/lib/vps-notify/panic-guard}"
@@ -65,8 +72,10 @@ read_strikes() {
 }
 
 # arm=1 applies the reboot-on-fault settings; arm=0 makes every fault leave the
-# machine exactly where it stopped.
+# machine exactly where it stopped. The detail printed with a panic is wanted
+# either way.
 apply() {
+  setsysctl kernel.panic_print "$PANIC_PRINT"
   if [ "$1" = 1 ]; then
     setsysctl kernel.panic "$REBOOT_SECS"
     setsysctl kernel.panic_on_oops "$ON_OOPS"
@@ -107,7 +116,7 @@ cmd_arm() {
     apply 0
     notify "Auto-reboot disarmed" \
       "This host stopped uncleanly ${strikes}x without a stable run in between, so its automatic reboot is now OFF: the next panic or lockup will leave the box down and intact for inspection rather than rebooting.
-Read the console in the provider panel before rebooting - it is the only place a panic message survives.
+If the box is down, read the console in the provider panel before rebooting it. If it has come back, the previous boot's crash record (when ramoops kept one) is under /var/lib/systemd/pstore and ships with the hourly log export.
 Re-arms by itself after ${STABLE_MIN} min of uptime." \
       high rotating_light
   else

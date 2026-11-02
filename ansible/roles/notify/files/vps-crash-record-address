@@ -1,0 +1,164 @@
+#!/bin/bash
+# vps-crash-record-address — choose the physical RAM region that ramoops keeps
+# a crash record in.
+#
+# The notify role runs this on the target during the play and writes the
+# answer to /etc/vps-scaffold/crash-record.env, so the address is chosen from
+# the machine's own memory map rather than guessed, and stays the same on
+# every later run while it remains valid.
+#
+# Rule: the highest top-level "System RAM" range in /proc/iomem that ends
+# below 4 GiB; the region is the top SIZE bytes of that range, rounded down to
+# a 1 MiB boundary, and it must not overlap the kernel's own nested ranges
+# (code, rodata, data, bss). On a BIOS KVM guest the top of low RAM is clear of
+# everything the bootloader places: GRUB loads the initrd below 0x38000000 and
+# the kernel image low, and KASLR reads memmap= and keeps away from it.
+#
+#   vps-crash-record-address --size BYTES [--keep 0xADDR] [--iomem FILE]
+#
+# Prints the chosen address as 0x... on stdout. With --keep, the previously
+# chosen address is printed unchanged when it still lies inside a top-level
+# "System RAM" or "Reserved" range (the memmap= reservation turns the region
+# itself into "Reserved", so an active reservation validates); otherwise a new
+# address is chosen and a note goes to stderr. Exit 3 when no range suits,
+# with the reason on stderr, so the play can refuse with a clear message.
+set -u
+
+SIZE=""
+KEEP=""
+IOMEM="/proc/iomem"
+ALIGN=$((1024 * 1024))
+BELOW=$((4 * 1024 * 1024 * 1024))
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --size) SIZE="${2:-}"; shift 2 ;;
+    --keep) KEEP="${2:-}"; shift 2 ;;
+    --iomem) IOMEM="${2:-}"; shift 2 ;;
+    --below) BELOW="${2:-}"; shift 2 ;;
+    -h|--help)
+      sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'
+      exit 0
+      ;;
+    *) echo "unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+
+case "$SIZE" in ''|*[!0-9]*) echo "--size must be a decimal byte count" >&2; exit 2 ;; esac
+if [ "$SIZE" -lt 4096 ] || [ $((SIZE % 4096)) -ne 0 ]; then
+  echo "--size must be a multiple of 4096 bytes" >&2
+  exit 2
+fi
+[ -r "$IOMEM" ] || { echo "cannot read $IOMEM (it needs root: unprivileged readers see zeros)" >&2; exit 2; }
+
+# Parse the top-level entries and the nested entries beneath each of them.
+# top_start[i], top_end[i], top_name[i]; nested ranges are kept as
+# "parent-index start end name" lines in NESTED.
+declare -a top_start top_end top_name
+NESTED=""
+idx=-1
+while IFS= read -r line; do
+  if [[ "$line" =~ ^([0-9a-f]+)-([0-9a-f]+)\ :\ (.*)$ ]]; then
+    idx=$((idx + 1))
+    top_start[idx]=$((16#${BASH_REMATCH[1]}))
+    top_end[idx]=$((16#${BASH_REMATCH[2]}))
+    top_name[idx]="${BASH_REMATCH[3]}"
+  elif [[ "$line" =~ ^[[:space:]]+([0-9a-f]+)-([0-9a-f]+)\ :\ (.*)$ ]]; then
+    [ "$idx" -ge 0 ] || continue
+    NESTED+="$idx $((16#${BASH_REMATCH[1]})) $((16#${BASH_REMATCH[2]})) ${BASH_REMATCH[3]}"$'\n'
+  fi
+done < "$IOMEM"
+
+if [ "$idx" -lt 0 ]; then
+  echo "$IOMEM has no address ranges (all zeros means the reader lacks CAP_SYS_ADMIN)" >&2
+  exit 3
+fi
+# A memory map of zeros is what an unprivileged reader sees.
+if [ "${top_end[idx]}" -eq 0 ]; then
+  echo "$IOMEM shows zero addresses: run as root" >&2
+  exit 3
+fi
+
+# Does [start, end] overlap a nested range of parent i that belongs to the
+# kernel image? Other nested entries (our own ramoops claim, PCI windows) are
+# not conflicts.
+overlaps_kernel() {
+  local parent="$1" start="$2" end="$3" p s e name
+  while read -r p s e name; do
+    [ -n "${p:-}" ] || continue
+    [ "$p" -eq "$parent" ] || continue
+    case "$name" in Kernel*) ;; *) continue ;; esac
+    if [ "$start" -le "$e" ] && [ "$end" -ge "$s" ]; then
+      return 0
+    fi
+  done <<< "$NESTED"
+  return 1
+}
+
+# Validate a previously chosen address: still inside one top-level System RAM
+# or Reserved range, below the limit, clear of the kernel image.
+if [ -n "$KEEP" ]; then
+  case "$KEEP" in 0x*|0X*) ;; *) echo "--keep expects a 0x-prefixed address" >&2; exit 2 ;; esac
+  keep_start=$((KEEP))
+  keep_end=$((keep_start + SIZE - 1))
+  if [ "$keep_end" -lt "$BELOW" ]; then
+    for ((i = 0; i <= idx; i++)); do
+      case "${top_name[i]}" in "System RAM"|Reserved) ;; *) continue ;; esac
+      if [ "$keep_start" -ge "${top_start[i]}" ] && [ "$keep_end" -le "${top_end[i]}" ]; then
+        if ! overlaps_kernel "$i" "$keep_start" "$keep_end"; then
+          printf '0x%x\n' "$keep_start"
+          exit 0
+        fi
+      fi
+    done
+  fi
+  printf 'previously chosen address %s no longer lies in a System RAM range of %s; choosing again\n' "$KEEP" "$IOMEM" >&2
+fi
+
+# An active reservation claims its region as a nested "ramoops" entry under a
+# top-level "Reserved" range. If the fact file was lost but the reservation is
+# live, that region is the right answer: choosing a different one would leave
+# two reservations on the command line.
+while read -r p s e name; do
+  [ -n "${p:-}" ] || continue
+  [ "$name" = "ramoops" ] || continue
+  if [ $((s + SIZE - 1)) -le "${top_end[p]}" ] && [ $((s % ALIGN)) -eq 0 ]; then
+    printf 'keeping the live ramoops reservation found in %s\n' "$IOMEM" >&2
+    printf '0x%x\n' "$s"
+    exit 0
+  fi
+done <<< "$NESTED"
+
+# System RAM ranges that end below the limit, highest first. The top range is
+# normally the answer; the loop only continues when it is too small (a live
+# reservation leaves a sliver above itself, for example).
+candidates="$(for ((i = 0; i <= idx; i++)); do
+  [ "${top_name[i]}" = "System RAM" ] || continue
+  [ "${top_end[i]}" -lt "$BELOW" ] || continue
+  printf '%d %d\n' "${top_end[i]}" "$i"
+done | sort -rn | awk '{print $2}')"
+if [ -z "$candidates" ]; then
+  printf 'no "System RAM" range below 0x%x in %s\n' "$BELOW" "$IOMEM" >&2
+  exit 3
+fi
+
+for best in $candidates; do
+  range_start=${top_start[best]}
+  range_end=${top_end[best]}
+  [ $((range_end + 1 - range_start)) -ge "$SIZE" ] || continue
+  # Top SIZE bytes of the range, rounded down to the alignment, then walked
+  # down in alignment steps if the kernel image happens to sit there.
+  start=$(( ((range_end + 1 - SIZE) / ALIGN) * ALIGN ))
+  while [ "$start" -ge "$range_start" ]; do
+    end=$((start + SIZE - 1))
+    if ! overlaps_kernel "$best" "$start" "$end"; then
+      printf '0x%x\n' "$start"
+      exit 0
+    fi
+    start=$((start - ALIGN))
+  done
+done
+
+printf 'no System RAM range below 0x%x in %s has a %d-byte window aligned to 0x%x clear of the kernel image\n' \
+  "$BELOW" "$IOMEM" "$SIZE" "$ALIGN" >&2
+exit 3

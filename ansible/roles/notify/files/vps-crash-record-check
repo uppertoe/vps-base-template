@@ -1,0 +1,189 @@
+#!/bin/bash
+# vps-crash-record-check — report on the crash record (ramoops + pstore) at boot.
+#
+# The panic guard reboots the box ten seconds after a panic, so the panic text
+# on the console is gone before anyone reads it. ramoops keeps the kernel's
+# last messages in a reserved region of RAM that survives the guest's own
+# reboot, and systemd-pstore archives them to /var/lib/systemd/pstore early in
+# the next boot. This script runs after that archive step and:
+#
+#   boot (the default, run by vps-crash-record-check.service once per boot)
+#     - alerts when a new record has been archived ("Crash record captured"),
+#       with the file names and the lines of the dmesg record that name the
+#       fault, bounded for ntfy;
+#     - alerts when the record is configured but ramoops did not attach this
+#       boot (the reservation is missing from the command line, or the module
+#       failed);
+#     - confirms once, and clears the reboot-required marker, when the
+#       reservation is first seen live after a reboot;
+#     - proves persistence: ramoops says at probe whether it found its own
+#       header from the previous boot. The first boot after rollout cannot
+#       know; the second can, and the verdict is sent once either way, since a
+#       hypervisor that clears guest memory on reboot makes the record useless.
+#
+#   pending "<reason>"
+#     Called by the play's handler when the GRUB fragment or module options
+#     change. Writes the reboot-required marker and alerts once. Never reboots.
+#
+# Configuration: /etc/vps-scaffold/crash-record.env (written by the notify
+# role) with CRASH_RECORD_MEM_ADDRESS and CRASH_RECORD_MEM_SIZE as 0x values.
+# State in /var/lib/vps-notify/crash-record/.
+set -u
+
+CONF="${VPS_CRASH_RECORD_CONF:-/etc/vps-scaffold/crash-record.env}"
+# shellcheck disable=SC1090
+[ -r "$CONF" ] && . "$CONF"
+
+STATE_DIR="${VPS_CRASH_RECORD_STATE_DIR:-/var/lib/vps-notify/crash-record}"
+ARCHIVE="${VPS_CRASH_RECORD_ARCHIVE:-/var/lib/systemd/pstore}"
+PSTORE_FS="${VPS_CRASH_RECORD_PSTORE:-/sys/fs/pstore}"
+RAMOOPS_PARAMS="${VPS_CRASH_RECORD_RAMOOPS:-/sys/module/ramoops/parameters}"
+MARKER_REBOOT="$STATE_DIR/reboot-required"
+MARKER_SEEN="$STATE_DIR/archive-seen"
+MARKER_ACTIVE="$STATE_DIR/active-last-boot"
+MARKER_PROVEN="$STATE_DIR/persistence-proven"
+
+notify() {
+  command -v vps-notify >/dev/null 2>&1 || return 0
+  vps-notify "$@" || true
+}
+
+# Kernel lines of this boot that mention ramoops, bounded. The module prints
+# "ramoops: using 0x100000@0x7fe00000" when it attaches, and with dyndbg on
+# (the role sets it) either "found existing buffer" / "found existing empty
+# buffer" when its header survived the reboot or "no valid data in buffer"
+# when the region came up blank.
+ramoops_log() {
+  journalctl -b -k --no-pager -q -g 'ramoops' 2>/dev/null | sed 's/^.*kernel: //' | head -n 12
+}
+
+cmd_pending() {
+  local reason="${1:-The crash record settings changed.}"
+  mkdir -p "$STATE_DIR"
+  if [ -e "$MARKER_REBOOT" ]; then
+    exit 0
+  fi
+  printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$reason" > "$MARKER_REBOOT"
+  notify "Reboot required for crash record" \
+    "${reason}
+The reserved RAM region for the kernel's crash record takes effect at the next reboot. Nothing reboots by itself for this: the next patch-window reboot, or an operator reboot, applies it. Until then a panic still leaves no record.
+Marker: ${MARKER_REBOOT}" \
+    default information_source
+  exit 0
+}
+
+cmd_boot() {
+  mkdir -p "$STATE_DIR"
+  local configured_addr="${CRASH_RECORD_MEM_ADDRESS:-}"
+  if [ -z "$configured_addr" ]; then
+    exit 0
+  fi
+
+  # --- is the reservation live this boot? ---------------------------------
+  local active=0 live_addr=""
+  if [ -r "$RAMOOPS_PARAMS/mem_address" ]; then
+    live_addr="$(cat "$RAMOOPS_PARAMS/mem_address" 2>/dev/null)"
+    case "$live_addr" in
+      ''|*[!0-9]*) ;;
+      *) [ "$live_addr" -eq "$((configured_addr))" ] && active=1 ;;
+    esac
+  fi
+  local prev_active=0
+  [ -e "$MARKER_ACTIVE" ] && prev_active=1
+
+  if [ "$active" -eq 1 ]; then
+    if [ -e "$MARKER_REBOOT" ]; then
+      rm -f "$MARKER_REBOOT"
+      notify "Crash record active" \
+        "The kernel now keeps its crash record in reserved RAM at ${configured_addr} (size ${CRASH_RECORD_MEM_SIZE:-?}). A panic from here on is archived to ${ARCHIVE} at the next boot and ships with the hourly log export.
+$(ramoops_log)" \
+        low white_check_mark
+    fi
+    # Persistence verdict, once the previous boot also had the region live.
+    if [ "$prev_active" -eq 1 ] && [ ! -e "$MARKER_PROVEN" ]; then
+      local log verdict=""
+      log="$(ramoops_log)"
+      case "$log" in
+        *"found existing"*) verdict=survived ;;
+        *"no valid data"*) verdict=cleared ;;
+      esac
+      if [ "$verdict" = survived ]; then
+        : > "$MARKER_PROVEN"
+        notify "Crash record survives a reboot" \
+          "ramoops found its own header from the previous boot, so this hypervisor preserves the reserved region across a guest reboot. A panic record will be there after the panic guard's reboot.
+${log}" \
+          low white_check_mark
+      elif [ "$verdict" = cleared ]; then
+        notify "Crash record did NOT survive the reboot" \
+          "ramoops found no valid header from the previous boot. Either this was a cold start (a power cycle or a provider-side reset, which never preserves RAM) or the hypervisor clears guest memory on every reboot, in which case a panic record cannot be kept on this box and a network console is the remaining option. Check which: a second clean reboot that also reports no valid data means the latter.
+${log}" \
+          high warning
+      fi
+    fi
+    : > "$MARKER_ACTIVE"
+  else
+    rm -f "$MARKER_ACTIVE"
+    local cmdline_has=no
+    grep -q 'memmap=' /proc/cmdline 2>/dev/null && cmdline_has=yes
+    notify "Crash record not active after boot" \
+      "The crash record is configured for ${configured_addr} but ramoops is not attached this boot (live address: ${live_addr:-none}). memmap= on the kernel command line: ${cmdline_has}. A panic will leave no record until this is fixed.
+Check: cat /proc/cmdline; systemctl status modprobe@ramoops systemd-modules-load; journalctl -b -k -g ramoops
+$(ramoops_log)" \
+      high warning
+  fi
+
+  # --- new archived records? ----------------------------------------------
+  local files
+  if [ -d "$ARCHIVE" ]; then
+    if [ -e "$MARKER_SEEN" ]; then
+      files="$(find "$ARCHIVE" -type f -newer "$MARKER_SEEN" 2>/dev/null | sort)"
+    else
+      files="$(find "$ARCHIVE" -type f 2>/dev/null | sort)"
+    fi
+  else
+    files=""
+  fi
+  local leftover=""
+  if [ -d "$PSTORE_FS" ]; then
+    leftover="$(find "$PSTORE_FS" -mindepth 1 -type f 2>/dev/null | head -n 5 | tr '\n' ' ')"
+  fi
+
+  if [ -n "$files" ]; then
+    local count names dmesg_file excerpt
+    count="$(printf '%s\n' "$files" | wc -l | tr -d ' ')"
+    names="$(printf '%s\n' "$files" | sed "s#^$ARCHIVE/##" | head -n 12)"
+    # The merged dmesg.txt when systemd-pstore produced one, else the newest
+    # dmesg part. The record holds the last part of the kernel log; the lines
+    # that name the fault sit before the task list that panic_print appends.
+    dmesg_file="$(printf '%s\n' "$files" | grep -E '/dmesg\.txt$' | tail -n 1)"
+    [ -n "$dmesg_file" ] || dmesg_file="$(printf '%s\n' "$files" | grep -E '/dmesg[^/]*$' | tail -n 1)"
+    excerpt=""
+    if [ -n "$dmesg_file" ] && [ -r "$dmesg_file" ]; then
+      excerpt="$( {
+        head -n 3 "$dmesg_file"
+        echo '...'
+        grep -a -m 12 -E 'Kernel panic|not syncing|BUG:|Oops|hung_task|blocked for more than|soft lockup|RIP:|Call Trace|Out of memory|end Kernel panic' "$dmesg_file"
+      } 2>/dev/null | cut -c1-200 | head -c 2200)"
+    fi
+    notify "Crash record captured" \
+      "systemd-pstore archived ${count} file(s) from the previous boot's crash record under ${ARCHIVE}:
+${names}
+${excerpt:-"(no dmesg record among the files)"}
+The files ship to the log bucket with the next hourly log export. Read them on the box with: sudo ls -R ${ARCHIVE}; sudo less ${dmesg_file:-$ARCHIVE/*/dmesg.txt}${leftover:+
+Still in ${PSTORE_FS} (not archived): ${leftover}}" \
+      max rotating_light
+  elif [ -n "$leftover" ]; then
+    notify "Crash record left in pstore" \
+      "Files are present in ${PSTORE_FS} but systemd-pstore did not archive them this boot: ${leftover}
+Check: systemctl status systemd-pstore; systemd-analyze cat-config systemd/pstore.conf" \
+      high warning
+  fi
+  touch "$MARKER_SEEN"
+  exit 0
+}
+
+case "${1:-boot}" in
+  boot) cmd_boot ;;
+  pending) shift; cmd_pending "${1:-}" ;;
+  *) echo "usage: $0 {boot|pending <reason>}" >&2; exit 2 ;;
+esac

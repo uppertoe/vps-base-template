@@ -32,6 +32,52 @@ common_automatic_reboot_time: "17:00"
 host_swap_encrypted: true
 host_swap_crypt_name: cryptswap
 
+# Swap is two tiers. A zram device (compressed pages held in RAM, no disk I/O,
+# nothing written anywhere) takes every page first; the encrypted swapfile is
+# the overflow behind it. The kernel fills the device with the higher priority
+# before touching the lower one, so the loop-over-dm-crypt-over-ext4 path that
+# the 2026-11-01 stop was writing to is reached only once zram is full.
+#
+# host_swap_zram_size is either "auto" (half of RAM, capped at 2048 MB; the
+# uncompressed capacity, and zram's RAM cost is roughly a third to a half of
+# it) or a size such as "1G" or "768M". zstd compresses best per CPU cycle of
+# the algorithms the Ubuntu kernel offers; lz4 trades ratio for speed if the
+# host is CPU-bound. A size or algorithm change applies at the next boot, or
+# after `systemctl stop dev-zram0.swap && systemctl restart
+# systemd-zram-setup@zram0.service` in a quiet window; the role never swaps a
+# live device off.
+host_swap_zram_enabled: true
+host_swap_zram_size: auto
+host_swap_zram_algorithm: zstd
+host_swap_zram_priority: 100
+# The encrypted (or plain) swapfile sits beneath zram. The priority of a
+# swapfile that is already active changes at the next boot.
+host_swapfile_priority: 10
+
+# Ubuntu's server image carries desktop-era hooks that run on every apt
+# invocation and on timers: PackageKit (woken over D-Bus by 20packagekit after
+# every dpkg run and cache update; loads the whole apt cache into memory to
+# serve a desktop that is not there), update-notifier's download and MOTD
+# timers (another apt-cache load twice a day), and motd-news (an HTTP fetch
+# for a login banner nobody reads). On 2026-11-01 the site play's `apt-get
+# update` started PackageKit, apt-news and esm-cache on a host already deep in
+# swap, and the unexplained stop followed within fifteen seconds. None of them
+# does anything useful on an unattended host. PackageKit stays installed
+# (software-properties-common depends on it); its service is masked and its
+# conffile emptied, which dpkg keeps across upgrades (--force-confold).
+common_disable_desktop_apt_hooks: true
+common_desktop_apt_timers:
+  - update-notifier-download.timer
+  - update-notifier-motd.timer
+  - motd-news.timer
+
+# The Ubuntu Pro client hooks apt too (20apt-esm-hook.conf starts apt-news and
+# esm-cache before every cache update). apt news is advertising, and the ESM
+# cache serves only an attached subscription. Set false when a host is
+# attached to Ubuntu Pro: the units are unmasked again and apt_news is left
+# as it is.
+common_disable_pro_apt_hooks: true
+
 common_packages:
   - curl
   - git

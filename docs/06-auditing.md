@@ -240,7 +240,9 @@ filesystems, and service-level health checks live in each server repo's
 controls the compose files declare. `audit-compose.yml` closes that gap: it
 inspects the running stack and fails if any container is missing a required §5
 control (non-root user, `cap_drop: ALL`, `no-new-privileges`, read-only rootfs,
-memory/pids limits, healthcheck).
+memory/pids limits, healthcheck), or sits outside the scaffold's memory tiers
+(`memory_tier`: a `cgroup_parent` of some `vps*.slice`; `web_no_swap` for the
+Caddy-reachable tier).
 
 ```bash
 # Run against the real VPS with the production stack up

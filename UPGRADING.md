@@ -49,6 +49,9 @@ of the actions, once.
   it with the list `deploy_github_webflow_fingerprints`. The default lists only
   the fingerprint GitHub publishes for its current web-flow signature,
   `968479A1AFF927E37D1A566BB5690EEEBB952194`.
+
+---
+
 ## 2026-11-02: Open paths beside a gate must be declared; the access-log filter covers percent-encoded tokens and Location
 
 **What lands automatically on the next render and deploy:**
@@ -76,6 +79,65 @@ of the actions, once.
    that already carries `# scaffold-lint: public` for a path inside its block
    can replace that line with the `open-path` marker, which carries the paths
    as well as the reason.
+
+---
+
+## 2026-11-02 — zram swap tier; a data tier and one ceiling for the whole estate; quieter apt and journal
+
+**What lands automatically on the next `site-quick.yml`:**
+
+- The common role masks `packagekit.service`, empties PackageKit's apt hook
+  (`/etc/apt/apt.conf.d/20packagekit`, a conffile dpkg now keeps), disables
+  `update-notifier-download.timer`, `update-notifier-motd.timer` and
+  `motd-news.timer`, sets `ENABLED=0` in `/etc/default/motd-news`, runs
+  `pro config set apt_news=false`, and masks `apt-news.service` and
+  `esm-cache.service`. Switches: `common_disable_desktop_apt_hooks` and
+  `common_disable_pro_apt_hooks` (set the latter false on a host attached to
+  Ubuntu Pro).
+- ufw logging is turned off (`host_ufw_logging: "off"`); the exceptions
+  register in docs/08 records what is and is not still logged.
+- `docker-prune.service` gains a third pass, `docker-prune-unused-tagged`,
+  which removes tagged images no container uses, older than the same seven
+  day window, by image ID. `docker image prune --all` keeps whatever image
+  carries `repo:latest` while a container created from
+  `repo:latest@sha256:…` runs (containerd image store), which is how four
+  pre-pinning images from June and July outlived every prune.
+
+- The common role installs `systemd-zram-generator` and a `/dev/zram0` swap
+  device at priority 100 (half of RAM, capped at 2 GB, zstd). The encrypted
+  swapfile stays active as overflow; its own priority becomes 10 at the next
+  boot (an already-active swap keeps its old priority until then, and the
+  role never swaps a live device off). `swapon --show` should list both.
+  Turn it off with `host_swap_zram_enabled: false`; size it with
+  `host_swap_zram_size: 768M`.
+- The docker role installs `vps.slice` (`MemoryMax=1600M`,
+  `MemorySwapMax=1024M`) as the parent of the tiers, a new `vps-data.slice`
+  (`900M`, swap allowed) for databases and the apps excepted from the no-swap
+  tier, and lowers `vps-noswap.slice` from 1400M to 1100M. The five values
+  are `docker_slice_memory_max`, `docker_slice_swap_max`,
+  `docker_noswap_memory_max`, `docker_batch_memory_max` and
+  `docker_data_memory_max`; the arithmetic is in the role defaults and in
+  docs/04 ("Memory tiers").
+- `audit-compose.yml` gains `memory_tier`: every long-running container must
+  name some `vps*.slice` in `cgroup_parent`, or it is a WARN. Containers that
+  sat in `system.slice` until now will fail the audit until the server repo
+  places them.
+
+**Operator actions:**
+
+1. In the server repo, give every container that has no `cgroup_parent` one:
+   `cgroup_parent: vps-data.slice` for Postgres, Redis and the apps the
+   register excepts from `web_no_swap`. Deploy, then run `audit-compose.yml`
+   and expect zero `memory_tier` warnings.
+2. After the play, confirm the parent cap took effect on the running slice:
+   `systemctl show vps.slice -p MemoryMax -p MemorySwapMax` should print the
+   configured bytes, not `infinity`. If it still reads `infinity`, apply it
+   to the running slice without a reboot with `systemctl set-property
+   --runtime vps.slice MemoryMax=1600M MemorySwapMax=1024M`; the unit file
+   governs from the next boot regardless.
+3. Confirm with `swapon --show` that zram has the higher priority, and expect
+   `zramctl` to show pages moving there in preference to the file over the
+   following days.
 
 ---
 

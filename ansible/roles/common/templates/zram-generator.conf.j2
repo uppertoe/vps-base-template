@@ -1,0 +1,19 @@
+# /etc/systemd/zram-generator.conf — the zram swap tier.
+# Installed by the common role (vps-base-template). Managed by Ansible.
+#
+# systemd-zram-generator turns this into dev-zram0.swap (ordered after
+# systemd-zram-setup@zram0.service, which loads the module, sizes the device
+# and runs mkswap) at every daemon-reload and boot. Pages swapped here are
+# compressed into RAM: no disk I/O, nothing persists, so the encryption-at-rest
+# argument for the swapfile is met by construction. The swapfile stays active
+# beneath it as overflow at priority {{ host_swapfile_priority }}.
+#
+# zram-size is the uncompressed capacity in MB; the RAM it costs when full is
+# roughly a third to a half of that with {{ host_swap_zram_algorithm }}.
+# A change here takes effect at the next boot (see the role defaults).
+# Reference: zram-generator.conf(5).
+
+[zram0]
+zram-size = {{ common_zram_size_mb_effective }}
+compression-algorithm = {{ host_swap_zram_algorithm }}
+swap-priority = {{ host_swap_zram_priority }}

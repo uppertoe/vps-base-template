@@ -146,6 +146,21 @@ WEB_CASES = [
 ]
 
 
+# A container with no cgroup_parent lands in system.slice beneath no collective
+# cap; the control exists so that omission is a finding rather than a silent
+# landing. Any of the docker role's tiers (children of vps.slice) satisfies it.
+TIER_CASES = [
+    ("no-swap tier", {"HostConfig": {"CgroupParent": "vps-noswap.slice"}}, True),
+    ("batch tier", {"HostConfig": {"CgroupParent": "vps-batch.slice"}}, True),
+    ("data tier", {"HostConfig": {"CgroupParent": "vps-data.slice"}}, True),
+    ("the parent itself", {"HostConfig": {"CgroupParent": "vps.slice"}}, True),
+    ("no cgroup parent -> system.slice", {"HostConfig": {}}, False),
+    ("system.slice named explicitly", {"HostConfig": {"CgroupParent": "system.slice"}}, False),
+    ("look-alike outside the vps hierarchy", {"HostConfig": {"CgroupParent": "vpsdata.slice"}}, False),
+    ("a nested path, not a slice name", {"HostConfig": {"CgroupParent": "vps.slice/vps-data.slice"}}, False),
+]
+
+
 def main():
     fails = 0
     for name, container, key, want in CASES:
@@ -165,6 +180,15 @@ def main():
             print(f"[FAIL] {name}: web_no_swap={got} (want {want})")
         else:
             print(f"[OK] {name}: web_no_swap={got}")
+
+    for name, container, want in TIER_CASES:
+        total += 1
+        got = cch.evaluate_tier(container)["memory_tier"]
+        if got is not want:
+            fails += 1
+            print(f"[FAIL] {name}: memory_tier={got} (want {want})")
+        else:
+            print(f"[OK] {name}: memory_tier={got}")
 
     for name, inspected, expected in NET_CASES:
         got = cch.network_controls(inspected)

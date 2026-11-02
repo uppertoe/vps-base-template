@@ -24,11 +24,11 @@ provides everything specific to that VPS.
 
 | Path | Purpose |
 |------|---------|
-| `ansible/roles/common` | Base packages, auto-updates, fail2ban, swapfile, monitoring, earlyoom |
+| `ansible/roles/common` | Base packages, auto-updates, fail2ban, swap (zram + encrypted file), monitoring, earlyoom |
 | `ansible/roles/deploy-user` | Non-root deploy user, SSH key, sudoers |
 | `ansible/roles/ssh-hardening` | Hardens sshd (wraps dev-sec.io) |
 | `ansible/roles/os-hardening` | Kernel-level hardening (wraps dev-sec.io) |
-| `ansible/roles/docker` | Docker CE + compose plugin + weekly prune timer |
+| `ansible/roles/docker` | Docker CE + compose plugin, memory tier slices, weekly prune timer |
 | `ansible/roles/firewall` | UFW + Docker-aware filtering for published ports |
 | `ansible/roles/backup` | Hourly PostgreSQL → Restic backups + off-hour weekly verification |
 | `ansible/bootstrap.yml` | Run once as root — creates deploy user |
@@ -81,11 +81,11 @@ Workflow files:
 vps-base-template/
 ├── ansible/
 │   ├── roles/
-│   │   ├── common/          # base packages, auto-updates, fail2ban, swap, monitoring, earlyoom
+│   │   ├── common/          # base packages, auto-updates, fail2ban, swap (zram + encrypted file), monitoring, earlyoom
 │   │   ├── deploy-user/     # non-root user + SSH key + sudoers
 │   │   ├── ssh-hardening/   # wraps dev-sec.io ssh_hardening
 │   │   ├── os-hardening/    # wraps dev-sec.io os_hardening
-│   │   ├── docker/          # Docker CE + compose plugin + weekly prune timer
+│   │   ├── docker/          # Docker CE + compose plugin, memory tier slices, weekly prune timer
 │   │   ├── firewall/        # ufw + Docker-aware published-port filtering
 │   │   └── backup/          # hourly PostgreSQL → Restic backups + off-hour weekly verification
 │   ├── bootstrap.yml

@@ -1,5 +1,6 @@
 # vps-batch.slice — containers whose work is a batch job, not a page a visitor
 # is waiting on: roster allocation, site builds, narration.
+# Installed by the docker role (vps-base-template). Managed by Ansible.
 #
 # Each of these carries its own mem_limit, and the limits add up to more than
 # the host has. On their own they are ceilings, not reservations, so the host
@@ -8,7 +9,8 @@
 # smallest limit found along the path, so the batch tier as a whole can never
 # take more than MemoryMax, whatever each scope says. A job that collides with
 # another is killed and retried by its own scheduler rather than wedging the
-# machine. Swap stays allowed here (no MemorySwapMax), unlike vps-noswap.slice.
+# machine. Swap stays allowed here (no MemorySwapMax), unlike vps-noswap.slice;
+# the parent vps.slice bounds how much.
 #
 # Put a service here with `cgroup_parent: vps-batch.slice`.
 
@@ -17,4 +19,4 @@ Description=Batch containers sharing one memory ceiling
 Before=slices.target
 
 [Slice]
-MemoryMax=700M
+MemoryMax={{ docker_batch_memory_max }}

@@ -1,0 +1,27 @@
+# vps.slice — the parent of every container tier, and the one ceiling the
+# whole estate shares. Installed by the docker role (vps-base-template).
+# Managed by Ansible.
+#
+# systemd names slices hierarchically: vps-noswap.slice, vps-batch.slice and
+# vps-data.slice are children of this one, so a limit set here binds all three
+# together (cgroup v2 enforces the smallest limit found along the path).
+# Before this unit existed the parent was implicit, with MemoryMax=infinity,
+# and the tier caps summed above RAM with nothing above them; a container with
+# no cgroup_parent still lands in system.slice, which the compose audit now
+# reports (memory_tier).
+#
+# MemoryMax is the RAM the containers may hold between them, below the host's
+# total so dockerd, journald, the hourly backup and a site play keep room.
+# MemorySwapMax is what the tiers that may swap can borrow beyond it; the two
+# together are the estate's worst-case footprint. When both are exhausted the
+# kernel OOM-kills inside this slice and compose restarts the container, which
+# is the failure mode we want instead of the host paging itself into a wedge.
+# The arithmetic is in roles/docker/defaults/main.yml.
+
+[Unit]
+Description=All containers: one memory ceiling for the estate
+Before=slices.target
+
+[Slice]
+MemoryMax={{ docker_slice_memory_max }}
+MemorySwapMax={{ docker_slice_swap_max }}

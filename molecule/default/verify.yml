@@ -782,6 +782,38 @@
         msg: "fail2ban SSH jail is not enabled"
 
     # -------------------------------------------------------------------------
+    # Memory tiers (vps.slice and its three children)
+    # -------------------------------------------------------------------------
+    - name: Read the memory tier slice units
+      ansible.builtin.slurp:
+        path: "/etc/systemd/system/{{ item }}"
+      loop:
+        - vps.slice
+        - vps-noswap.slice
+        - vps-batch.slice
+        - vps-data.slice
+      register: tier_slices
+
+    # The parent carries both limits; each child carries a MemoryMax and the
+    # no-swap tier alone forbids swap. A tier without a cap would silently
+    # fall back to the parent's, which is the whole-estate figure.
+    - name: Assert every tier slice carries its cap
+      ansible.builtin.assert:
+        that:
+          - "'MemoryMax=' in (item.content | b64decode)"
+        msg: "{{ item.item }} has no MemoryMax"
+      loop: "{{ tier_slices.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Assert the parent slice carries the swap allowance and the no-swap tier forbids swap
+      ansible.builtin.assert:
+        that:
+          - "'MemorySwapMax=' in (tier_slices.results[0].content | b64decode)"
+          - "'MemorySwapMax=0' in (tier_slices.results[1].content | b64decode)"
+        msg: "vps.slice must set MemorySwapMax and vps-noswap.slice must set MemorySwapMax=0"
+
+    # -------------------------------------------------------------------------
     # Docker prune timer
     # -------------------------------------------------------------------------
     - name: Check docker-prune service unit exists
@@ -820,6 +852,47 @@
         that:
           - "'image prune --all' in (prune_service_content.content | b64decode)"
         msg: "docker-prune.service lacks the 'image prune --all' pass; digest-pinned deploy images accumulate forever without it"
+
+    # image prune --all keeps whatever image carries repo:tag while a container
+    # created from repo:tag@digest runs (containerd image store), so the
+    # pre-pinning latest images outlive every prune without this pass.
+    - name: Check the unused-tagged-image pass is installed
+      ansible.builtin.stat:
+        path: /usr/local/sbin/docker-prune-unused-tagged
+      register: prune_tagged_script
+
+    - name: Assert the prune removes unused tagged images by ID
+      ansible.builtin.assert:
+        that:
+          - prune_tagged_script.stat.exists
+          - prune_tagged_script.stat.mode == '0755'
+          - "'docker-prune-unused-tagged' in (prune_service_content.content | b64decode)"
+        msg: "docker-prune.service lacks the docker-prune-unused-tagged pass; latest-tagged images from before pinning survive every prune without it"
+
+    # -------------------------------------------------------------------------
+    # Desktop-era apt hooks and firewall logging
+    # -------------------------------------------------------------------------
+    - name: Read motd-news setting
+      ansible.builtin.slurp:
+        path: /etc/default/motd-news
+      register: motd_news
+
+    - name: Assert motd-news is off
+      ansible.builtin.assert:
+        that:
+          - "'ENABLED=0' in (motd_news.content | b64decode)"
+        msg: "/etc/default/motd-news does not set ENABLED=0"
+
+    - name: Check ufw logging
+      ansible.builtin.command: ufw status verbose
+      register: ufw_verbose
+      changed_when: false
+
+    - name: Assert ufw logging is off
+      ansible.builtin.assert:
+        that:
+          - "'Logging: off' in ufw_verbose.stdout"
+        msg: "ufw logging is not off. Status: {{ ufw_verbose.stdout }}"
 
     # -------------------------------------------------------------------------
     # Compliance timers (vuln-scan, patch-SLA, dead-man, log-export)

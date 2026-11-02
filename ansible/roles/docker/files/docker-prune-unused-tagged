@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# docker-prune-unused-tagged — remove tagged images that no container uses.
+# Installed by the docker role (vps-base-template). Managed by Ansible.
+#
+# Why `docker image prune --all` is not enough. Both image stores keep an
+# image whose repo:tag a container was created from, and the containerd image
+# store (the default on Docker 29) goes one step further: when a container was
+# created from repo:tag@sha256:digest, it also keeps whatever image currently
+# carries repo:tag (moby, daemon/containerd/image_prune.go,
+# filterImagesUsedByContainers: "Also exclude repo:tag image if
+# repo:tag@sha256:digest reference was used"). A deployment that pins every
+# image as repo:latest@sha256:... therefore protects the image that was pulled
+# as repo:latest before pinning began, for as long as any pinned container
+# runs, and the `until` filter never comes into it. Seen on a live host on
+# 2026-11-02: four latest-tagged images from June and July, 1.79 GB, had
+# survived every hourly `image prune -af` and weekly `until=168h` pass.
+#
+# This pass decides by image ID instead of by reference: an image is unused
+# when no container, running or stopped, has it as its image. Unused tagged
+# images older than the window are removed tag by tag; an image whose last
+# tag goes is deleted unless a digest reference still holds it, and the
+# ordinary prune handles those. An image with no creation time is treated as
+# old: it is unused, and the registry is the rollback source anyway.
+#
+# Usage: docker-prune-unused-tagged [WINDOW_HOURS]   (default 168)
+set -euo pipefail
+
+window_hours="${1:-168}"
+cutoff=$(( $(date +%s) - window_hours * 3600 ))
+
+used="$(docker container ls -aq | xargs -r docker container inspect --format '{{.Image}}' | sort -u)"
+
+removed=0
+while IFS=$'\t' read -r id repo tag; do
+  [ -n "$id" ] || continue
+  case "$tag" in ''|'<none>') continue ;; esac
+  if grep -qxF "$id" <<<"$used"; then
+    continue
+  fi
+  created="$(docker image inspect --format '{{.Created}}' "$id" 2>/dev/null || true)"
+  created_s=0
+  if [ -n "$created" ]; then
+    created_s="$(date -d "$created" +%s 2>/dev/null || echo 0)"
+  fi
+  if [ "$created_s" -gt "$cutoff" ]; then
+    continue
+  fi
+  echo "removing unused tagged image $repo:$tag ($id, created ${created:-unknown})"
+  if docker image rm "$repo:$tag" >/dev/null; then
+    removed=$(( removed + 1 ))
+  else
+    echo "could not remove $repo:$tag" >&2
+  fi
+done < <(docker image ls --no-trunc --format '{{.ID}}\t{{.Repository}}\t{{.Tag}}')
+
+echo "Unused tagged images removed: $removed"

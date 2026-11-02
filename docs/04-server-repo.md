@@ -245,15 +245,91 @@ and 18 ms once resident. `vm.swappiness` is therefore 10 rather than the
 distro's 60, so the kernel reclaims page cache (cheap to re-read) before it
 pages out anonymous memory.
 
+### Swap: zram first, the encrypted file as overflow
+
+The host has two swap devices, and the kernel fills the one with the higher
+priority before it touches the other:
+
+| Device | Priority | What it is | Cost of a page |
+|---|---|---|---|
+| `/dev/zram0` | 100 (`host_swap_zram_priority`) | compressed pages held in RAM; half of RAM capped at 2 GB (`host_swap_zram_size: auto`), zstd | microseconds of CPU, no I/O, nothing leaves RAM |
+| `/dev/mapper/cryptswap` | 10 (`host_swapfile_priority`) | the random-key dm-crypt mapping over `/swapfile` on the root filesystem | a loop device, a decrypt and a disk write on one vCPU |
+
+The file is kept as overflow because zram's capacity is the uncompressed size
+and its RAM cost when full is a third to a half of that; a workload that
+genuinely exceeds RAM still needs somewhere to go, and a 4 GB file that is
+rarely reached is cheaper than an OOM kill. The 2026-11-01 stop on
+prod-rch-vps followed thirty seconds of writing about 200 MiB to that file
+while the kernel was reclaiming hard; with zram in front, the same burst stays
+in RAM. Encryption at rest is unaffected: zram never writes anywhere, and the
+file is still re-keyed every boot.
+
+`vm.swappiness` stays at 10. It decides how readily anonymous memory is
+evicted at all, not which device receives it, and an idle app's working set
+faulted back from zram is still a wait for the next visitor, so the no-swap
+slice below remains the real protection for the user-facing tier. A higher
+value would push the batch and data tiers into zram sooner and spend the
+single vCPU on compression nobody is waiting on. earlyoom keeps `-m 5 -s 10`:
+its percentages are of `SwapTotal`, which now includes the zram device, so it
+still acts only when both memory and swap are nearly exhausted; the memory
+tiers below are what bound the estate's swap use in practice.
+
+Check it with `swapon --show` (both devices, zram with the higher priority)
+and `zramctl` (algorithm, data and compressed sizes). The size and algorithm
+are set in `/etc/systemd/zram-generator.conf`, which `systemd-zram-generator`
+turns into `dev-zram0.swap`; a change there takes effect at the next boot
+because the role never swaps a live device off.
+
+### Memory tiers: every container in a slice
+
+The docker role installs four systemd slices. `vps.slice` is the parent and
+the one ceiling the whole estate shares; the other three are its children by
+name (`vps-noswap.slice` is a child of `vps.slice` because systemd nests
+`a-b.slice` under `a.slice`), so the parent's limits bind all of them: cgroup
+v2 enforces the smallest limit found along the path.
+
+| Slice | Default cap | Swap | Who goes here |
+|---|---|---|---|
+| `vps.slice` | `MemoryMax=1600M`, `MemorySwapMax=1024M` (`docker_slice_memory_max`, `docker_slice_swap_max`) | the allowance for the tiers below | nothing directly; the parent of the three tiers |
+| `vps-noswap.slice` | `1100M` (`docker_noswap_memory_max`) | none (`MemorySwapMax=0`) | Caddy and every container a visitor waits on |
+| `vps-batch.slice` | `700M` (`docker_batch_memory_max`) | allowed | jobs nobody is waiting on: allocation runs, site builds, narration |
+| `vps-data.slice` | `900M` (`docker_data_memory_max`) | allowed | Postgres, Redis, and the apps a deployment keeps out of the no-swap tier |
+
+**Every long-running container must name one of the three tiers in
+`cgroup_parent`.** A container that names none lands in `system.slice` beside
+dockerd and sshd, beneath no collective cap, and its `mem_limit` is then the
+only thing between a database vacuum and the host. The compose audit reports
+that as `memory_tier` (WARN) for every container except one-shot init
+containers; except it in `audit_compose_exceptions` only with a reason.
+
+The arithmetic, for a 1967 MiB host: the parent's 1600 MiB leaves 367 MiB of
+RAM outside the estate for dockerd, journald, auditd, the hourly backup (125
+MiB peak) and a site play, as a ceiling rather than a reservation. The tier
+caps sum to 2700 MiB, above the parent on purpose, in the same way that
+`mem_limit`s sum above the tiers: each is what one tier may take while the
+others are quiet. Three things have to hold. The no-swap cap must sit below
+the parent by enough for the other tiers' resident minimum (1600 − 1100 = 500
+MiB; batch and data sit near 115 MiB and 200 MiB at rest), because the
+no-swap tier cannot be reclaimed. The parent plus its swap allowance (1600 +
+1024 = 2624 MiB) must stay below the sum of the tier caps, so no tier can
+reach its own ceiling while the others are full. And the swap allowance
+should be about the zram device's size (983 MiB on this host), so the
+estate's swap stays in RAM in the common case. When both parent limits are
+exhausted the kernel OOM-kills inside `vps.slice` and compose restarts the
+container, which is the failure we want instead of the host paging itself
+into a wedge. All five values are role variables; change them together.
+
 **Anything Caddy can reach belongs in the no-swap slice.** By definition it is
-something a person waits on, and the compose audit now asserts it — a
-Caddy-reachable app container without the slice is a WARN:
+something a person waits on, and the compose audit asserts it — a
+Caddy-reachable app container outside that slice is a WARN (`web_no_swap`):
 
     cgroup_parent: vps-noswap.slice
     mem_limit: 256m
 
 Caddy itself is already in it (`docker/caddy.base.yml`), since every request
-including the `forward_auth` subrequest passes through it.
+including the `forward_auth` subrequest passes through it. A database or
+cache belongs in `vps-data.slice`, and an app excepted from `web_no_swap`
+belongs there too rather than nowhere.
 
 These hosts are 1–2 GB, so pinning *everything* is not always affordable: a
 container that cannot swap is OOM-killed rather than borrowing, and the pinned
@@ -281,6 +357,8 @@ Check the enforcement, never the intent:
 
     systemctl show docker-<full-id>.scope -p MemorySwapMax   # not docker inspect
     cat /sys/fs/cgroup/vps.slice/vps-noswap.slice/<scope>/memory.swap.current
+    systemctl show vps.slice -p MemoryMax -p MemorySwapMax -p MemoryCurrent -p MemorySwapCurrent
+    systemd-cgls --no-pager -u vps.slice     # which container sits in which tier
 
 Do that only where measured usage sits well under the limit, because the
 container can no longer borrow swap under pressure: it gets OOM-killed

@@ -98,6 +98,118 @@
     state: absent
   when: not (common_automatic_reboot_enabled | bool)
 
+# --- Desktop-era apt hooks ---------------------------------------------------
+# See the role defaults for why. Masking rather than disabling: these units
+# are static (started by hooks and timers, not by an [Install] section), so
+# only a mask stops the hook from waking them. Skipped in containers, where
+# the units mostly do not exist and systemd cannot act on them anyway.
+
+- name: Mask PackageKit
+  ansible.builtin.systemd_service:
+    name: packagekit.service
+    masked: true
+  failed_when: false
+  when:
+    - common_disable_desktop_apt_hooks | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
+- name: Check for PackageKit's apt hook
+  ansible.builtin.stat:
+    path: /etc/apt/apt.conf.d/20packagekit
+  register: common_packagekit_hook
+  when: common_disable_desktop_apt_hooks | bool
+
+# The hook is a conffile of packagekit, so dpkg keeps our emptied version
+# across upgrades (--force-confold in 53unattended-upgrades-dpkg).
+- name: Neutralise PackageKit's apt hook
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20packagekit
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      // Managed by Ansible (common role, vps-base-template). PackageKit's stock
+      // hooks (DPkg::Post-Invoke and APT::Update::Post-Invoke-Success) woke the
+      // PackageKit daemon over D-Bus on every apt run, where it loaded the whole
+      // apt cache into memory to serve a desktop this host does not have. The
+      // service is masked and the hooks are removed here; the package stays
+      // because software-properties-common depends on it.
+  when:
+    - common_disable_desktop_apt_hooks | bool
+    - common_packagekit_hook.stat.exists
+
+- name: Disable the update-notifier and motd-news timers
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: false
+    state: stopped
+  loop: "{{ common_desktop_apt_timers }}"
+  failed_when: false
+  when:
+    - common_disable_desktop_apt_hooks | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
+- name: Turn off motd-news
+  ansible.builtin.lineinfile:
+    path: /etc/default/motd-news
+    regexp: '^ENABLED='
+    line: 'ENABLED=0'
+    create: true
+    owner: root
+    group: root
+    mode: "0644"
+  when: common_disable_desktop_apt_hooks | bool
+
+# --- Ubuntu Pro apt hooks ----------------------------------------------------
+
+- name: Check for the Ubuntu Pro client
+  ansible.builtin.stat:
+    path: /usr/bin/pro
+  register: common_pro_client
+
+- name: Read the apt_news setting
+  ansible.builtin.command:
+    cmd: pro config show apt_news
+  register: common_pro_apt_news
+  changed_when: false
+  failed_when: false
+  when:
+    - common_disable_pro_apt_hooks | bool
+    - common_pro_client.stat.exists
+
+- name: Disable apt news
+  ansible.builtin.command:
+    cmd: pro config set apt_news=false
+  when:
+    - common_disable_pro_apt_hooks | bool
+    - common_pro_client.stat.exists
+    - common_pro_apt_news.rc == 0
+    - "'False' not in common_pro_apt_news.stdout"
+
+- name: Mask the apt-news and esm-cache units
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    masked: true
+  loop:
+    - apt-news.service
+    - esm-cache.service
+  failed_when: false
+  when:
+    - common_disable_pro_apt_hooks | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
+- name: Unmask the apt-news and esm-cache units for an attached host
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    masked: false
+  loop:
+    - apt-news.service
+    - esm-cache.service
+  failed_when: false
+  when:
+    - not (common_disable_pro_apt_hooks | bool)
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
 - name: Install pending-security-updates check script
   ansible.builtin.copy:
     src: pending-security-updates
@@ -303,8 +415,8 @@
 - name: Ensure managed swapfile is persistent in fstab
   ansible.builtin.lineinfile:
     path: /etc/fstab
-    regexp: "^{{ host_swapfile_path | regex_escape() }}\\s+none\\s+swap\\s+sw\\s+0\\s+0$"
-    line: "{{ host_swapfile_path }} none swap sw 0 0"
+    regexp: "^{{ host_swapfile_path | regex_escape() }}\\s+none\\s+swap\\s+"
+    line: "{{ host_swapfile_path }} none swap sw,pri={{ host_swapfile_priority }} 0 0"
     state: present
   when:
     - host_swapfile_enabled | bool
@@ -312,7 +424,7 @@
 
 - name: Ensure managed swapfile is active
   ansible.builtin.command:
-    cmd: "swapon {{ host_swapfile_path }}"
+    cmd: "swapon -p {{ host_swapfile_priority }} {{ host_swapfile_path }}"
   when:
     - host_swapfile_enabled | bool
     - not (host_swap_encrypted | bool)
@@ -462,3 +574,82 @@
         name: vps-cryptswap-swapon.service
         state: started
       when: common_plain_swapoff is skipped or common_plain_swapoff.rc == 0
+
+# --- zram swap tier ---------------------------------------------------------
+# A compressed-RAM swap device at a higher priority than the swapfile. The
+# kernel fills the higher-priority device first, so under pressure pages move
+# into zram (microseconds, no I/O, nothing leaves RAM) and the encrypted file
+# is reached only once zram is full. The 2026-11-01 stop on prod-rch-vps
+# followed thirty seconds of writing about 200 MiB to the file swap through
+# loop0 -> dm-crypt -> ext4 -> vda while the kernel was reclaiming hard; that
+# path now carries overflow rather than the first page out.
+#
+# systemd-zram-generator (noble, universe) is preferred over zram-tools: one
+# declarative config file becomes real systemd units (dev-zram0.swap with the
+# priority in it) instead of a shell script, and nothing else is pulled in.
+# The role never swaps an active zram device off, so a size or algorithm
+# change waits for the next boot; the units it creates are what the audit
+# capture (`swapon --show`) reports.
+
+- name: Determine zram swap size
+  ansible.builtin.set_fact:
+    common_zram_size_mb_effective: >-
+      {%- if host_swap_zram_size != 'auto' -%}
+      {{ (host_swap_zram_size | human_to_bytes) // 1048576 }}{%- else -%}
+      {{ [(ansible_facts.memtotal_mb | int) // 2, 2048] | min }}{%- endif -%}
+  when:
+    - host_swap_zram_enabled | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
+- name: Zram swap
+  when:
+    - host_swap_zram_enabled | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+  block:
+    - name: Install systemd-zram-generator
+      ansible.builtin.apt:
+        name: systemd-zram-generator
+        state: present
+
+    - name: Configure the zram swap device
+      ansible.builtin.template:
+        src: zram-generator.conf.j2
+        dest: /etc/systemd/zram-generator.conf
+        owner: root
+        group: root
+        mode: "0644"
+
+    # The daemon-reload runs the generator, which turns the config into the
+    # units; starting an already-active swap unit is a no-op, so a changed
+    # size applies at the next boot rather than by swapping a live device off.
+    - name: Activate the zram swap device
+      ansible.builtin.systemd_service:
+        name: dev-zram0.swap
+        state: started
+        daemon_reload: true
+
+- name: Zram swap removal
+  when:
+    - not (host_swap_zram_enabled | bool)
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+  block:
+    - name: Check whether a zram configuration is present
+      ansible.builtin.stat:
+        path: /etc/systemd/zram-generator.conf
+      register: common_zram_conf_stat
+
+    # swapoff needs the decompressed pages to fit back into RAM; if it cannot,
+    # the device stays active until the next boot and the config is gone
+    # either way, so nothing recreates it.
+    - name: Deactivate the zram swap device
+      ansible.builtin.systemd_service:
+        name: dev-zram0.swap
+        state: stopped
+      failed_when: false
+      when: common_zram_conf_stat.stat.exists
+
+    - name: Remove the zram configuration
+      ansible.builtin.file:
+        path: /etc/systemd/zram-generator.conf
+        state: absent
+      notify: Reload systemd

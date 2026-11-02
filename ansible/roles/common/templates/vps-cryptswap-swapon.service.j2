@@ -20,8 +20,10 @@ Type=oneshot
 RemainAfterExit=yes
 # swapon --show prints the canonical /dev/dm-N, never the mapper symlink —
 # resolve before comparing, or every start would retry an already-active
-# device and fail.
-ExecStart=/bin/sh -c 'dev="$(readlink -f /dev/mapper/{{ host_swap_crypt_name }})"; swapon --show=NAME --noheadings | grep -qx "$dev" || exec swapon "$dev"'
+# device and fail. Priority {{ host_swapfile_priority }} keeps this file beneath
+# the zram device (priority {{ host_swap_zram_priority }}), so it is the overflow,
+# not the first stop.
+ExecStart=/bin/sh -c 'dev="$(readlink -f /dev/mapper/{{ host_swap_crypt_name }})"; swapon --show=NAME --noheadings | grep -qx "$dev" || exec swapon -p {{ host_swapfile_priority }} "$dev"'
 
 [Install]
 WantedBy=multi-user.target

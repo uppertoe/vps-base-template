@@ -55,7 +55,7 @@ chmod 0755 /usr/local/sbin/vps-secrets-render
 # just before the render step, so a test override of it can add one.
 # shellcheck source=/dev/null
 source /usr/local/sbin/vps-release
-# shellcheck disable=SC2329  # do_prepare calls this override
+# shellcheck disable=SC2317,SC2329  # do_prepare calls this override
 out="$( check_links() { mkdir -p "$1/secrets"; }; do_prepare )"
 [[ "$out" == "$rel" ]] || fail "prepare's stdout carried render output: '$out'"
 ok "the render step's output stays off prepare's stdout"

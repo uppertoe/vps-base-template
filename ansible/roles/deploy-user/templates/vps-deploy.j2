@@ -228,7 +228,7 @@ fi
 # effect.
 if [[ -d secrets ]]; then
   while IFS= read -r -d '' f; do
-    if ! rootgit ls-files --error-unmatch "$f" >/dev/null 2>&1; then
+    if ! rootgit --literal-pathspecs ls-files --error-unmatch -- "$f" >/dev/null 2>&1; then
       echo "vps-deploy: ${f#./} is not tracked by git — refusing to decrypt an unreviewed secrets file." >&2
       exit 1
     fi

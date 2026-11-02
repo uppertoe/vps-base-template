@@ -158,34 +158,34 @@
     name: age
     state: present
 
-- name: Check the installed sops version
-  ansible.builtin.command: /usr/local/bin/sops --version
-  environment:
-    SOPS_DISABLE_VERSION_CHECK: "1"  # no call to GitHub from the server
+- name: Resolve the sops architecture and checksum
+  ansible.builtin.set_fact:
+    deploy_sops_arch: "{{ ansible_facts['architecture'] | replace('x86_64', 'amd64') | replace('aarch64', 'arm64') }}"
+    deploy_sops_checksum: >-
+      {{
+        deploy_secrets_sops_checksums
+        .get(deploy_secrets_sops_version, {})
+        .get(ansible_facts['architecture'] | replace('x86_64', 'amd64') | replace('aarch64', 'arm64'), '')
+      }}
+
+- name: Fail when no sops checksum is pinned for this platform
+  ansible.builtin.fail:
+    msg: "No pinned sops checksum for version {{ deploy_secrets_sops_version }} arch {{ deploy_sops_arch }}"
+  when: deploy_sops_checksum | length == 0
+
+# Compare the installed binary's checksum with the pinned one, not a version
+# string: it is exact, and a tampered or truncated binary is replaced.
+- name: Check the installed sops binary
+  ansible.builtin.stat:
+    path: /usr/local/bin/sops
+    checksum_algorithm: sha256
   register: deploy_sops_installed
-  changed_when: false
-  failed_when: false
 
 - name: Install sops {{ deploy_secrets_sops_version }}
   when: >-
-    deploy_sops_installed.rc != 0 or
-    deploy_secrets_sops_version not in deploy_sops_installed.stdout
+    not deploy_sops_installed.stat.exists or
+    ('sha256:' ~ deploy_sops_installed.stat.checksum) != (deploy_sops_checksum | trim)
   block:
-    - name: Resolve the sops architecture and checksum
-      ansible.builtin.set_fact:
-        deploy_sops_arch: "{{ ansible_facts['architecture'] | replace('x86_64', 'amd64') | replace('aarch64', 'arm64') }}"
-        deploy_sops_checksum: >-
-          {{
-            deploy_secrets_sops_checksums
-            .get(deploy_secrets_sops_version, {})
-            .get(ansible_facts['architecture'] | replace('x86_64', 'amd64') | replace('aarch64', 'arm64'), '')
-          }}
-
-    - name: Fail when no sops checksum is pinned for this platform
-      ansible.builtin.fail:
-        msg: "No pinned sops checksum for version {{ deploy_secrets_sops_version }} arch {{ deploy_sops_arch }}"
-      when: deploy_sops_checksum | length == 0
-
     - name: Download sops
       ansible.builtin.get_url:
         url: >-

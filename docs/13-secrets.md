@@ -95,17 +95,34 @@ wrapper.
 
 The outputs stay gitignored and keep today's owner (the deploy user, mode
 `600`), because default-mode deploys and some app hooks read them as that
-user. The render step runs as root inside a checkout the deploy user owns, so
-it never follows a symlink and creates each file with `O_EXCL | O_NOFOLLOW`
-before renaming it into place. Root is never steered into writing elsewhere.
-It also refuses decrypted content that sets a `COMPOSE_*` variable, as the
-wrapper refuses such a `.env`.
+user. The server key therefore protects nothing the deploy user cannot already
+read once rendered; never encrypt a root-only secret to it.
+
+The render step runs as root inside a checkout the deploy user owns. In
+restricted mode that user is not root-equivalent, so the step is built not to
+let them write, read or hang anything they could not already
+(`vps-secrets-render` lists every rule):
+
+- Encrypted files are read through directory handles that never follow a link
+  or block on a FIFO, and handed to sops on stdin. sops never opens a path the
+  deploy user could swap for a link to the server key.
+- sops runs in an empty root-owned directory with an empty `HOME`, with age as
+  its only method, and a file naming any other key source (KMS, Vault, PGP and
+  so on) is refused before sops sees it.
+- sops' own error messages are never shown, because for a malformed file they
+  quote the offending line.
+- New files are created under a `.env.` temporary name with
+  `O_EXCL | O_NOFOLLOW` and renamed into place; stale temporary files from an
+  interrupted run are removed first.
+- Decrypted content that sets a `COMPOSE_*` variable or holds a carriage
+  return is refused.
 
 ## Guards
 
 - **CI (built):** `scaffold/docker/check-secrets-encrypted.sh` fails if a file
-  under `secrets/` is not SOPS-encrypted or holds an unencrypted value, if
-  `secrets/` exists without `.sops.yaml`, or if git tracks a plain env file.
+  under `secrets/` is not a SOPS-encrypted dotenv file in which every line is
+  encrypted, empty or SOPS' age metadata, if `secrets/` exists without
+  `.sops.yaml`, or if git tracks a plain env file (`.env`, `*.env`, `.env.*`).
   A server repo adds it to `static-checks`, so it adds no minutes.
 - **Tracked files only (built):** the wrapper refuses an untracked file under
   `secrets/`.
@@ -143,7 +160,8 @@ wrapper refuses such a `.env`.
 
 **Decision 2 (made 2026-11-02): the restic password and the inventory move
 into SOPS.** Today the recovery bundle carries them. They move into
-`secrets/recovery.sops`, encrypted to the owner and recovery keys only, not to
+`secrets/recovery.sops` (dotenv, like every secrets file; the inventory is one
+multi-line value), encrypted to the owner and recovery keys only, not to
 the server key: the server already holds the restic password in
 `/etc/restic/`, and it never needs the inventory. A rebuild then needs only
 the repo and the recovery key, and the recovery bundle is retired. The price
@@ -246,6 +264,17 @@ low-value secret stays in the environment rather than being worked around
 with a custom entrypoint.
 
 ## What this does not protect against
+
+- **A deploy-user race against the whole deploy (pre-existing).** The wrapper
+  checks a checkout the deploy user can still write to, then uses it. In
+  restricted mode, a deploy user who edits the tree during a run gets past the
+  clean-tree, tracked-file and signature checks: changing an app hook or a
+  compose file after the checks already gives root execution, without any of
+  this feature. The render step adds no new way through, because it reads each
+  file once through no-follow handles. The lasting fix is for root to deploy
+  from a root-owned snapshot of the verified commit (for example `git archive`
+  into `/run`) rather than the live checkout. That is an architecture decision
+  for the owner, recorded here and not yet made.
 
 - Root on a server can read that server's key and every secret in use. That is
   no change, since root could read them from the running containers anyway.

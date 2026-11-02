@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Tests for vps-secrets-render. Run: python3 ansible/roles/deploy-user/files/test_vps_secrets_render.py
 
-By default a stand-in for sops is used, which "decrypts" a file by dropping its
-first line (and fails if the file contains FAIL). If real `sops` and
+By default a stand-in for sops is used, which "decrypts" stdin by dropping its
+first line and its sops_ metadata lines (and fails, quoting the input on
+stderr as real sops does for a malformed file, if the input contains FAIL). If real `sops` and
 `age-keygen` are on PATH, a round-trip test with real encryption runs as well;
 CI installs the pinned release for that.
 """
@@ -33,13 +34,15 @@ loader.exec_module(render)
 STUB = textwrap.dedent("""\
     #!/usr/bin/env python3
     import sys
-    path = sys.argv[-1]
-    data = open(path, "rb").read()
+    assert sys.argv[-1] == "/dev/stdin", sys.argv
+    data = sys.stdin.buffer.read()
     if b"FAIL" in data:
-        sys.stderr.write("Error: stub refused " + path + "\\n")
+        sys.stderr.write("invalid dotenv input line: " + data.decode() + "\\n")
         sys.exit(1)
-    sys.stdout.buffer.write(data.split(b"\\n", 1)[1])
+    body = data.split(b"\\n", 1)[1]
+    sys.stdout.buffer.write(b"".join(l for l in body.splitlines(True) if not l.startswith(b"sops_")))
     """)
+META = "sops_mac=ENC[AES256_GCM,data:x,iv:y,tag:z,type:str]\nsops_version=3.13.3\n"
 
 
 class Base(unittest.TestCase):
@@ -63,7 +66,7 @@ class Base(unittest.TestCase):
         path = os.path.join(self.repo, "secrets", rel)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w") as f:
-            f.write("ENCRYPTED\n" + body)
+            f.write("ENCRYPTED\n" + body + META)
         return path
 
     def run_render(self, *extra):
@@ -181,6 +184,58 @@ class RenderTests(Base):
         self.secret(".env.sops", "A=1\n")
         self.assertEqual(self.run_render(), 0)
         self.assertEqual(self.read(".env"), "A=1\n")
+
+    def test_sops_error_output_is_never_shown(self):
+        import contextlib, io
+        self.secret(".env.sops", "FAIL SECRET_VALUE_XYZ\n")
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            self.assertEqual(self.run_render(), 1)
+        self.assertNotIn("SECRET_VALUE_XYZ", buf.getvalue())
+        self.assertIn("withheld", buf.getvalue())
+
+    def test_a_fifo_in_secrets_is_refused_without_hanging(self):
+        os.makedirs(os.path.join(self.repo, "secrets"))
+        os.mkfifo(os.path.join(self.repo, "secrets", ".env.sops"))
+        self.assertEqual(self.run_render(), 1)
+
+    def test_a_fifo_at_the_target_is_replaced_without_hanging(self):
+        os.mkfifo(os.path.join(self.repo, "apps/planka/.env"))
+        self.secret("apps/planka/.env.sops", "A=1\n")
+        self.assertEqual(self.run_render(), 0)
+        self.assertEqual(self.read("apps/planka/.env"), "A=1\n")
+
+    def test_non_age_key_sources_are_refused(self):
+        for meta in ("sops_kms__list_0__map_arn=arn:aws:kms:x\n", "sops_hc_vault__list_0__map_vault_address=https://x\n",
+                     "sops_pgp__list_0__map_fp=ABC\n"):
+            with self.subTest(meta=meta):
+                self.secret(".env.sops", "A=1\n" + meta)
+                self.assertEqual(self.run_render(), 1)
+                self.assertFalse(self.exists(".env"))
+
+    def test_a_file_without_sops_metadata_is_refused(self):
+        path = os.path.join(self.repo, "secrets", ".env.sops")
+        os.makedirs(os.path.dirname(path))
+        with open(path, "w") as f:
+            f.write("ENCRYPTED\nA=1\n")
+        self.assertEqual(self.run_render(), 1)
+
+    def test_a_carriage_return_is_refused(self):
+        self.secret(".env.sops", "A=1\rCOMPOSE_FILE=/tmp/x\n")
+        self.assertEqual(self.run_render(), 1)
+        self.assertFalse(self.exists(".env"))
+
+    def test_stale_temporary_files_are_removed(self):
+        stale = os.path.join(self.repo, "apps/planka/.env.vps-secrets-tmp-123-0")
+        with open(stale, "w") as f:
+            f.write("PLAINTEXT=old\n")
+        self.secret("apps/planka/.env.sops", "A=1\n")
+        self.assertEqual(self.run_render(), 0)
+        self.assertFalse(os.path.exists(stale))
+
+    def test_an_oversized_file_is_refused(self):
+        self.secret(".env.sops", "A=" + "x" * (render.MAX_BYTES + 10) + "\n")
+        self.assertEqual(self.run_render(), 1)
 
     def test_check_mode_writes_nothing(self):
         self.secret(".env.sops", "A=1\n")

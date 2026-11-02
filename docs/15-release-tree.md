@@ -39,9 +39,11 @@ or executed.
 
 ## 3. How a deploy runs
 
-All steps run as root, under `env -i` with no system or global git
-configuration, hooks disabled, replacement objects ignored and only the
-`https` and `ssh` transports allowed.
+All steps run as root, one deploy at a time (a lock in `vps-deploy` and
+another in `vps-release`), under `env -i` with no system or global git
+configuration or attributes, hooks disabled, replacement objects ignored,
+objects checked on fetch, and only the `https` and `ssh` transports allowed.
+A failed fetch fails the deploy; it never falls back to the cached tip.
 
 1. **Fetch.** `/var/lib/vps-deploy/repo.git` is a root-owned bare mirror of
    the server repo. Root fetches `origin/<deploy_branch>` into it with the
@@ -63,22 +65,33 @@ configuration, hooks disabled, replacement objects ignored and only the
 6. **Render secrets.** `vps-secrets-render --repo <release>` decrypts
    `secrets/**/*.sops` into the release, root-owned, 0600.
 7. **Switch.** The partial directory is renamed to its final name, a new
-   symlink is created beside `/opt/deploy` and renamed over it. Compose runs
-   with `-p deploy` from `/opt/deploy`, so the project name and the container
-   names do not change.
-8. **Run.** Image pull, app hooks and `docker compose up --wait
-   --force-recreate`, as today, from `/opt/deploy`.
-9. **Keep three.** The current release and the two before it are kept for
-   rollback; older ones are removed.
+   symlink is created beside `/opt/deploy` and renamed over it, and the switch
+   is appended to `/var/lib/vps-deploy/history`. `vps-deploy` and the app
+   wrappers set `COMPOSE_PROJECT_NAME=deploy`, so the project name and the
+   container names do not change. Anything else that runs Compose against
+   `/opt/deploy` should do the same, or the server repo's compose file should
+   carry a top-level `name: deploy`: without either, a caller with no `PWD`
+   names the project after the release directory.
+8. **Run.** Images are pulled before the switch, so an unreachable registry
+   fails the deploy with the running release in place. App hooks and `docker
+   compose up --wait --force-recreate` then run, as today, from `/opt/deploy`.
+   App hooks run as root from the release and must not write inside it; a
+   release never changes after its export.
+9. **Keep three.** The current release and the two most recently deployed
+   before it are kept for rollback; older ones are removed.
 
 If any step before the switch fails, `/opt/deploy` still points at the
 previous release and nothing has been restarted.
 
 ## 4. Rollback
 
-`sudo vps-deploy --rollback` switches `/opt/deploy` to the previous kept
-release and runs step 8. It does not fetch, so it works with GitHub
-unreachable. A rollback is announced over ntfy like a deploy. Because every
+`sudo vps-deploy --rollback` switches `/opt/deploy` to the release deployed
+before the current one (from the switch history) and runs step 8. It does
+not fetch, so it works with GitHub unreachable, but it verifies the kept
+release's signature again in case a signer has been removed since. The
+commit rolled back from is then held: auto-deploy skips it until a new
+commit reaches the branch, so the rollback is not undone within minutes. A
+rollback is announced over ntfy, and any ordinary deploy clears the hold. Because every
 deploy recreates every container (docs/04), a rollback that changes an app's
 settings carries the same risk as a deploy that does: check before running it
 on an app whose key change is irreversible (p.stonn's `DATA_ENCRYPTION_KEY`).
@@ -87,37 +100,53 @@ on an app whose key change is irreversible (p.stonn's `DATA_ENCRYPTION_KEY`).
 
 - `~/deploy` (both modes) runs `sudo vps-deploy`. In default mode the deploy
   account keeps its broad sudo, so this changes nothing about who can deploy.
-- The deploy account no longer has a checkout to pull into. Its old clone is
-  left in place, renamed to `~/deploy-checkout.retired`, for one release, and
-  then removed.
+- The deploy account no longer has a checkout to pull into. The old checkout
+  is renamed to `/opt/deploy-legacy` at the first switch and removed by hand
+  once the server has deployed cleanly from releases. Until then it still
+  holds the old plaintext `.env` files.
+- Root's Docker configuration holds only the registry logins taken from the
+  deploy account's `~/.docker/config.json`, never the rest of that file
+  (credential helpers, proxies and plugin directories would otherwise choose
+  what root's `docker` runs).
 - `vps-git <args>` reads the root mirror (`git --git-dir
   /var/lib/vps-deploy/repo.git`), so `vps-git log --oneline -5` still works.
-  `vps-git-heal` is retired, because no repository is shared.
+  `vps-git-heal` does nothing once `/opt/deploy` is a link, because no
+  repository is shared.
 - `auto-deploy` compares the mirror's fetched tip with the commit
   `/opt/deploy` points at, rather than a checkout's `HEAD` with `@{u}`.
 - `scaffold-drift-check` reads the scaffold commit from the current release's
-  `.release` file (commit, scaffold commit, time), not from a submodule.
-- AIDE watches `/opt/deploy-releases` with the `DeployConf` rule in place of
-  `/opt/deploy`. A release never changes after its export, so any change
-  inside one alerts; the rebaseline after a deploy covers the new release.
+  `.release` file (commit, scaffold commit, time) and compares it with
+  upstream through root's scaffold mirror (`vps-release scaffold-behind`).
+- AIDE's existing `/opt/deploy DeployConf` rule also covers
+  `/opt/deploy-releases`, because selection lines are prefix regexes. A
+  release never changes after its export, so any change inside one alerts;
+  every release deploy rebaselines. Root's mirrors under `/var/lib/vps-deploy`
+  are excluded, as `.git` was.
 
 ## 6. Migration on an existing server
 
 Behind `deploy_release_tree: true` in the inventory, then a site play:
 
-1. The role creates the mirrors, copies the deploy key to
-   `/etc/vps-scaffold/deploy-key` and installs the new `vps-deploy`.
+1. The role checks the running stack (step 3 below) before anything else, then
+   copies the deploy key to `/etc/vps-scaffold/deploy-key`, pins GitHub's host
+   key and installs `vps-release`. In restricted mode it takes the repo URL
+   only from `deploy_repo_url` in the inventory, never from the deploy
+   account's checkout, and requires `deploy_verify_signature: true`.
 2. The first deploy exports the current tip, renders the secrets and switches.
    Because `/opt/deploy` is a directory, not yet a link, this first switch
    renames it to `/opt/deploy-legacy`, then creates the link. Volumes, image
    cache and container state are unaffected; containers are recreated by the
    deploy as usual.
 3. Before that first deploy, every untracked file the running stack reads
-   from `/opt/deploy` must have a new home (§2.3). The play refuses to enable
-   the release tree while the compose configuration binds a path under
-   `/opt/deploy` that git does not track, and lists those paths.
+   from `/opt/deploy` must have a new home (§2.3). The play, and `vps-release`
+   again at the first switch, refuse while a running container binds a path
+   under `/opt/deploy` that git does not track or that the container writes
+   to. The first switch also refuses while an env file in the checkout has no
+   rendered counterpart in the release.
 4. `/opt/deploy-legacy` is removed by hand once the server has deployed
    cleanly from releases.
+5. The change is one-way: the play refuses `deploy_release_tree: false` once
+   `/opt/deploy` is a release link.
 
 ## 7. Things this does not change
 

@@ -13,7 +13,13 @@ set -euo pipefail
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 umask 022
 
+{% if deploy_release_tree | default(false) | bool %}
+# Release tree: start from /, so a missing or dangling /opt/deploy link (an
+# interrupted switch) cannot stop the wrapper that repairs it.
+cd /
+{% else %}
 cd /opt/deploy
+{% endif %}
 
 # Hand back anything under .git that a hand-run root git has taken (a root-owned
 # index stops the deploy account's pull). Logged and announced by the helper.
@@ -65,6 +71,13 @@ done
 # The project name is fixed, because /opt/deploy is now a symlink and Compose
 # must not name the project after the release directory.
 export COMPOSE_PROJECT_NAME=deploy
+# One deploy at a time: a release prepared by one run must not be pruned or
+# switched away by another before it goes live.
+exec 9>/run/vps-deploy.lock
+if ! flock -w 1800 9; then
+  echo "vps-deploy: another deploy has held the lock for 30 min — giving up." >&2
+  exit 1
+fi
 action=deploy
 case "${1:-}" in
   "") ;;
@@ -84,8 +97,14 @@ if [[ "$action" == rollback ]]; then
     echo "vps-deploy: there is no earlier release to roll back to." >&2
     exit 1
   fi
+  # A kept release is verified again: a signer may have been removed since.
+  /usr/local/sbin/vps-release recheck "$release"
 else
   release="$(/usr/local/sbin/vps-release prepare)"
+fi
+if [[ ! "$release" =~ ^/opt/deploy-releases/[0-9a-f]{40}$ || ! -f "$release/.release" ]]; then
+  echo "vps-deploy: vps-release returned '$release', which is not a release — refusing to deploy." >&2
+  exit 1
 fi
 new_head="$(release_field "$release" commit)"
 new_scaffold="$(release_field "$release" scaffold)"
@@ -109,6 +128,13 @@ done
 # the running release is still in place.
 (cd "$release" && docker compose pull --policy always)
 /usr/local/sbin/vps-release switch "$release"
+# A rollback holds auto-deploy off the commit rolled back from until a new
+# commit arrives; any other deploy clears the hold.
+if [[ "$action" == rollback ]]; then
+  [[ "$old_head" =~ ^[0-9a-f]{40}$ ]] && /usr/local/sbin/vps-release hold "$old_head"
+else
+  /usr/local/sbin/vps-release unhold
+fi
 cd /opt/deploy
 {% else %}
 # Update the repo as the unprivileged owner, never as root. HEAD is captured
@@ -408,7 +434,7 @@ docker image prune -af || true
 /usr/local/sbin/vps-release prune || true
 if [[ "$action" == rollback ]]; then
   /usr/local/bin/vps-notify "Rolled back to ${new_head:0:7}" \
-"vps-deploy --rollback switched /opt/deploy from ${old_head:0:7} to ${new_head:0:7} and recreated the stack." \
+"vps-deploy --rollback switched /opt/deploy from ${old_head:0:7} to ${new_head:0:7} and recreated the stack. Auto-deploy skips ${old_head:0:7} until a new commit reaches the branch." \
     high warning || true
 fi
 {% endif %}
@@ -418,7 +444,12 @@ fi
 # rebaseline once. Deploys are a trusted change channel (CI-gated, signed
 # HEAD, announced via ntfy); tampering outside a deploy still alerts. Guarded:
 # not every host runs the baseline-hardening AIDE stack.
+{% if deploy_release_tree | default(false) | bool %}
+# Every run switched /opt/deploy and may have exported or pruned a release.
+if true; then
+{% else %}
 if [[ "$old_head" != "$new_head" ]]; then
+{% endif %}
   systemctl restart aide-rebaseline-after-deploy.timer >/dev/null 2>&1 || true
 fi
 

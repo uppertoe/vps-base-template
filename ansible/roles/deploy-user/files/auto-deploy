@@ -18,6 +18,9 @@ if [[ -f /etc/vps-scaffold/release.env && -x /usr/local/sbin/vps-release ]]; the
   local_head="$(/usr/local/sbin/vps-release current)"
   remote_head="$(/usr/local/sbin/vps-release fetch)"
   [[ "$local_head" == "$remote_head" ]] && exit 0
+  # After `vps-deploy --rollback`, the commit rolled back from is held until a
+  # new commit reaches the branch; the rollback message said so.
+  [[ "$(/usr/local/sbin/vps-release held)" == "$remote_head" ]] && exit 0
   /usr/local/sbin/vps-deploy
   mgit() {
     env -i PATH="$PATH" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \

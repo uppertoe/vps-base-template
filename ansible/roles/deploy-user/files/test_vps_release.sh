@@ -5,8 +5,10 @@
 # It deploys the public server-instance-template, whose scaffold submodule is
 # recorded in SSH form, so the https normalisation is exercised as well.
 set -euo pipefail
-apt-get update -qq >/dev/null && apt-get install -y -qq git openssh-client ca-certificates >/dev/null
+apt-get update -qq >/dev/null && apt-get install -y -qq git openssh-client ca-certificates util-linux >/dev/null
 install -m 0755 /t/vps-release /usr/local/sbin/vps-release
+# The bind check needs docker; with no containers it has nothing to refuse.
+printf '#!/bin/sh\nexit 0\n' >/usr/local/sbin/vps-release-bind-check; chmod 0755 /usr/local/sbin/vps-release-bind-check
 mkdir -p /etc/vps-scaffold
 : >/etc/vps-scaffold/deploy-key; chmod 600 /etc/vps-scaffold/deploy-key
 : >/etc/vps-scaffold/known_hosts
@@ -19,7 +21,14 @@ mkdir -p /opt/deploy && echo legacy >/opt/deploy/marker
 
 tip="$(vps-release fetch)"
 [[ "$tip" =~ ^[0-9a-f]{40}$ ]] || fail "fetch printed '$tip'"
-ok "fetch returns the tip $tip"
+ok "fetch returns the tip"
+
+# A failed fetch fails, rather than falling back to the cached tip.
+cp /etc/vps-scaffold/release.env /tmp/release.env
+sed -i 's#^REPO_URL=.*#REPO_URL=https://github.com/uppertoe/does-not-exist-xyz#' /etc/vps-scaffold/release.env
+if out="$(vps-release prepare 2>/dev/null)"; then fail "prepare succeeded on a failed fetch ($out)"; fi
+cp /tmp/release.env /etc/vps-scaffold/release.env
+ok "a failed fetch fails prepare"
 
 rel="$(vps-release prepare)"
 [[ "$rel" == "/opt/deploy-releases/$tip" ]] || fail "prepare printed '$rel'"
@@ -28,43 +37,64 @@ sc="$(sed -n 's/^scaffold=//p' "$rel/.release")"
 [[ "$sc" =~ ^[0-9a-f]{40}$ ]] || fail ".release scaffold '$sc'"
 [[ -f "$rel/scaffold/ansible/site-quick.yml" ]] || fail "scaffold not exported"
 [[ -z "$(find "$rel" ! -user root -print -quit)" ]] || fail "a file is not root-owned"
-[[ -z "$(find "$rel" -type f -perm /022 -print -quit)" ]] || fail "a file is group- or world-writable"
-[[ -z "$(find "$rel" -type d -perm /022 -print -quit)" ]] || fail "a directory is group- or world-writable"
+[[ -z "$(find "$rel" -perm /022 ! -type l -print -quit)" ]] || fail "something is group- or world-writable"
 x="$(find "$rel/scaffold" -name 'render-caddy-routes.sh' -print -quit)"
 [[ -x "$x" ]] || fail "an executable lost its mode"
 ok "prepare exports the tip and its scaffold, root-owned, no writable bits"
-
 [[ "$(vps-release prepare)" == "$rel" ]] || fail "prepare is not idempotent"
 ok "a second prepare reuses the release"
 
+# The secrets render step's progress lines must not reach prepare's stdout.
+rm -rf "$rel"
+cat >/usr/local/sbin/vps-secrets-render <<'R'
+#!/bin/sh
+echo "vps-secrets-render: .env written"
+R
+chmod 0755 /usr/local/sbin/vps-secrets-render
+# Give this export a secrets/ directory: check_links runs on the partial tree
+# just before the render step, so a test override of it can add one.
+# shellcheck source=/dev/null
+source /usr/local/sbin/vps-release
+out="$( check_links() { mkdir -p "$1/secrets"; }; do_prepare )"
+[[ "$out" == "$rel" ]] || fail "prepare's stdout carried render output: '$out'"
+ok "the render step's output stays off prepare's stdout"
+
 [[ "$(vps-release current)" == none ]] || fail "current before the switch"
+
+# The first switch refuses env files the release would lose.
+mkdir -p /opt/deploy/apps/x && echo A=1 >/opt/deploy/apps/x/.env
+vps-release switch "$rel" 2>/dev/null && fail "switch accepted a checkout env file missing from the release"
+rm -rf /opt/deploy/apps
+ok "the first switch refuses env files missing from the release"
+
 vps-release switch "$rel"
 [[ -L /opt/deploy && "$(readlink -f /opt/deploy)" == "$rel" ]] || fail "switch did not link"
 [[ -f /opt/deploy-legacy/marker ]] || fail "the legacy checkout was not kept"
 [[ "$(vps-release current)" == "$tip" ]] || fail "current after the switch"
 ok "the first switch keeps the legacy checkout and links /opt/deploy"
 
-# Older releases, for previous and prune.
-for n in 1 2 3; do
-  d="/opt/deploy-releases/old$n"; mkdir -p "$d"
-  printf 'commit=old%s\nscaffold=none\nexported=2026-01-0%sT00:00:00Z\n' "$n" "$n" >"$d/.release"
-done
-[[ "$(vps-release previous)" == /opt/deploy-releases/old3 ]] || fail "previous is '$(vps-release previous)'"
-ok "previous is the newest release that is not current"
+# Three more releases, deployed in order A B C after the tip, by switching.
+mk() { local d="/opt/deploy-releases/$1"; mkdir -p "$d"; printf 'commit=%s\nscaffold=none\nexported=2020-01-01T00:00:00Z\n' "$1" >"$d/.release"; echo "$d"; }
+A=$(mk "$(printf 'a%.0s' {1..40})"); B=$(mk "$(printf 'b%.0s' {1..40})"); C=$(mk "$(printf 'c%.0s' {1..40})")
+vps-release switch "$A"; vps-release switch "$B"; vps-release switch "$A"; vps-release switch "$C"
+[[ "$(vps-release previous)" == "$A" ]] || fail "previous after A B A C is '$(vps-release previous)', expected A"
+ok "previous follows the switch history, not export times"
 vps-release prune
-[[ -d /opt/deploy-releases/old3 && -d /opt/deploy-releases/old2 && ! -d /opt/deploy-releases/old1 ]] || fail "prune kept the wrong set"
-[[ -d "$rel" ]] || fail "prune removed the current release"
-ok "prune keeps three including the current one"
-
-vps-release switch /opt/deploy-releases/old3
-[[ "$(vps-release current)" == old3 ]] || fail "switch back"
-ok "switching back (the rollback path) works"
+[[ -d "$C" && -d "$A" && -d "$B" && ! -d "$rel" ]] || fail "prune kept the wrong set"
+ok "prune keeps the current release and the two most recently deployed"
 vps-release switch /tmp 2>/dev/null && fail "switch accepted a non-release"
 ok "switch refuses a directory that is not a prepared release"
 
-# A symlink leaving the release is refused.
-# shellcheck source=/dev/null
-source /usr/local/sbin/vps-release
+vps-release hold "$tip"; [[ "$(vps-release held)" == "$tip" ]] || fail "hold"
+vps-release unhold; [[ -z "$(vps-release held)" ]] || fail "unhold"
+ok "hold and unhold"
+
+# Two runs are serialised by the lock.
+( exec 8>/run/vps-release.lock; flock 8; sleep 3 ) &
+sleep 0.5; t0=$(date +%s); vps-release current >/dev/null; t1=$(date +%s); wait
+(( t1 - t0 >= 2 )) || fail "a second run did not wait for the lock"
+ok "runs are serialised by the lock"
+
 t="$(mktemp -d)"; ln -s /etc/shadow "$t/x"
 check_links "$t" 2>/dev/null && fail "check_links accepted a link out of the release"
 rm "$t/x"; mkdir -p "$t/a" "$t/c"; ln -s a "$t/b"; ln -s ../a "$t/c/d"
@@ -72,5 +102,8 @@ check_links "$t" || fail "check_links refused a link inside the release"
 ln -s ../.. "$t/c/up"
 check_links "$t" 2>/dev/null && fail "check_links accepted a relative link above the release"
 ok "symlinks must stay inside the release"
+normalise_scaffold_url git@github.com:o/r.git | grep -qx https://github.com/o/r.git || fail "ssh form"
+normalise_scaffold_url https://evil.example/o/r 2>/dev/null && fail "accepted a non-GitHub URL"
+ok "scaffold URLs are normalised to https://github.com and others refused"
 
 echo "all vps-release tests passed"

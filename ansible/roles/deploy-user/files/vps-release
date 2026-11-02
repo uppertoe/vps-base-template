@@ -2,16 +2,22 @@
 # vps-release — root-owned release tree (docs/15-release-tree.md).
 # Managed by Ansible (deploy-user role). Runs as root only.
 #
-#   vps-release fetch      fetch the server repo into the root mirror; print the tip
-#   vps-release prepare    fetch, verify, export and render the tip; print its path
-#   vps-release switch DIR point /opt/deploy at a prepared release
-#   vps-release previous   print the release before the current one
-#   vps-release current    print the commit /opt/deploy points at
-#   vps-release prune      keep the newest $KEEP releases
+#   vps-release fetch          fetch the server repo into the root mirror; print the tip
+#   vps-release prepare        fetch, verify, export and render the tip; print its path
+#   vps-release switch DIR     point /opt/deploy at a prepared release
+#   vps-release recheck DIR    re-verify a kept release's commit (before a rollback)
+#   vps-release previous       print the release deployed before the current one
+#   vps-release current        print the commit /opt/deploy points at
+#   vps-release prune          keep the newest $KEEP releases
+#   vps-release hold COMMIT    auto-deploy skips COMMIT (set by a rollback)
+#   vps-release held           print the held commit, if any
+#   vps-release unhold         clear the hold
+#   vps-release scaffold-behind  commits the deployed scaffold is behind upstream main
 #
 # Nothing here reads a file the deploy account can write: the mirror, the
 # deploy key, the known_hosts, the trust stores and the releases are root's.
 set -euo pipefail
+shopt -s inherit_errexit
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 umask 022
 
@@ -35,21 +41,29 @@ done < <(grep -E '^[A-Z_]+=' "$CONF")
 STATE=/var/lib/vps-deploy
 MIRROR="$STATE/repo.git"
 SCAFFOLD_MIRROR="$STATE/scaffold.git"
+HISTORY="$STATE/history"
+HOLD="$STATE/hold"
 RELEASES=/opt/deploy-releases
 LINK=/opt/deploy
+LEGACY=/opt/deploy-legacy
 KEY=/etc/vps-scaffold/deploy-key
 KNOWN=/etc/vps-scaffold/known_hosts
+SHA_RE='^[0-9a-f]{40}$'
+
+install -d -m 0700 -o root -g root "$STATE"
 
 # git as root with nothing but what is on this command line: no system or
-# global configuration, no hooks, no fsmonitor, no replacement objects, no
-# prompts, and only the https and ssh transports. The ssh command is root's,
-# with the root-owned key and pinned host keys, never ~/.ssh of anyone.
+# global configuration or attributes, no hooks, no fsmonitor, no replacement
+# objects, no prompts, objects checked on fetch, and only the https and ssh
+# transports. The ssh command is root's, with the root-owned key and pinned
+# host keys, never ~/.ssh of anyone.
 rgit() {
   env -i PATH="$PATH" HOME=/root LANG=C GNUPGHOME=/etc/vps-scaffold/gnupg \
-      GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 \
+      GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1 GIT_NO_REPLACE_OBJECTS=1 \
       GIT_TERMINAL_PROMPT=0 GIT_OPTIONAL_LOCKS=0 \
       GIT_SSH_COMMAND="ssh -F /dev/null -i $KEY -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$KNOWN -o GlobalKnownHostsFile=/dev/null" \
-    git -c core.hooksPath=/dev/null -c core.fsmonitor=false \
+    git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.attributesFile=/dev/null \
+        -c transfer.fsckObjects=true \
         -c protocol.allow=never -c protocol.https.allow=always -c protocol.ssh.allow=always \
         -c gpg.program=/usr/bin/gpg -c gpg.openpgp.program=/usr/bin/gpg \
         -c gpg.ssh.program=/usr/bin/ssh-keygen -c gpg.x509.program=/usr/bin/gpgsm \
@@ -58,15 +72,12 @@ rgit() {
 }
 
 init_mirror() {
-  local dir="$1"
-  if [[ ! -d "$dir" ]]; then
-    install -d -m 0700 -o root -g root "$STATE"
-    rgit init --quiet --bare "$dir"
-  fi
+  [[ -d "$1" ]] || rgit init --quiet --bare "$1"
 }
 
 do_fetch() {
   init_mirror "$MIRROR"
+  # A failed fetch must fail the run, never fall back to the cached tip.
   rgit --git-dir="$MIRROR" fetch --quiet --prune --no-tags "$REPO_URL" \
     "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
   rgit --git-dir="$MIRROR" rev-parse --verify --quiet "refs/remotes/origin/$BRANCH^{commit}"
@@ -80,6 +91,7 @@ verify() {
     exit 1
   fi
 }
+
 # The scaffold commit is the gitlink the verified commit records, and its URL
 # the one in that commit's .gitmodules. Both are therefore reviewed content.
 scaffold_of() {
@@ -87,23 +99,31 @@ scaffold_of() {
   line="$(rgit --git-dir="$MIRROR" ls-tree "$commit" -- scaffold)"
   [[ -n "$line" ]] || return 0
   read -r mode type sha _path <<<"$line"
-  [[ "$mode" == 160000 && "$type" == commit && "$sha" =~ ^[0-9a-f]{40}$ ]] || {
+  [[ "$mode" == 160000 && "$type" == commit && "$sha" =~ $SHA_RE ]] || {
     echo "vps-release: scaffold in $commit is not a submodule entry" >&2; exit 1; }
   echo "$sha"
+}
+# The scaffold is public, so it is always fetched anonymously over https,
+# whichever form .gitmodules records; the deploy key is never offered to it.
+normalise_scaffold_url() {
+  local url="$1"
+  if [[ "$url" =~ ^(git@github\.com:|ssh://git@github\.com/|https://github\.com/)([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)$ ]]; then
+    echo "https://github.com/${BASH_REMATCH[2]}"
+  else
+    echo "vps-release: scaffold URL '$url' is not a github.com repository" >&2; return 1
+  fi
+}
+gitmodules_url() {
+  local file="$1"
+  rgit config --file "$file" --get submodule.scaffold.url || true
 }
 scaffold_url_of() {
   local commit="$1" tmp url
   tmp="$(mktemp)"
   rgit --git-dir="$MIRROR" show "$commit:.gitmodules" >"$tmp"
-  url="$(rgit config --file "$tmp" --get submodule.scaffold.url || true)"
+  url="$(gitmodules_url "$tmp")"
   rm -f "$tmp"
-  # The scaffold is public, so it is always fetched anonymously over https,
-  # whichever form .gitmodules records; the deploy key is never offered to it.
-  if [[ "$url" =~ ^(git@github\.com:|ssh://git@github\.com/|https://github\.com/)([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)$ ]]; then
-    echo "https://github.com/${BASH_REMATCH[2]}"
-  else
-    echo "vps-release: scaffold URL '$url' in $commit is not a github.com repository" >&2; exit 1
-  fi
+  normalise_scaffold_url "$url"
 }
 
 # A symlink in the export must stay inside the release.
@@ -118,18 +138,21 @@ check_links() {
   done < <(find "$root" -type l -print0)
 }
 
+is_release() { [[ "$1" =~ ^/opt/deploy-releases/[0-9a-f]{40}$ && -f "$1/.release" ]]; }
+release_field() { sed -n "s/^$2=//p" "$1/.release"; }
+
 do_prepare() {
   local commit scaffold url dest tmp
   commit="$(do_fetch)"
+  [[ "$commit" =~ $SHA_RE ]] || { echo "vps-release: fetch returned '$commit'" >&2; exit 1; }
   verify "$commit"
   dest="$RELEASES/$commit"
-  if [[ -f "$dest/.release" ]]; then
+  if is_release "$dest"; then
     echo "$dest"; return 0
   fi
   install -d -m 0755 -o root -g root "$RELEASES"
-  tmp="$RELEASES/.$commit.partial"
-  rm -rf -- "$tmp"
-  install -d -m 0755 -o root -g root "$tmp"
+  tmp="$(mktemp -d "$RELEASES/.$commit.XXXXXX.partial")"
+  chmod 0755 "$tmp"
   rgit --git-dir="$MIRROR" archive --format=tar "$commit" | tar -x --no-same-owner -C "$tmp"
   scaffold="$(scaffold_of "$commit")"
   if [[ -n "$scaffold" ]]; then
@@ -146,63 +169,135 @@ do_prepare() {
   check_links "$tmp"
   chown -R root:root "$tmp"
   if [[ -d "$tmp/secrets" ]]; then
-    /usr/local/sbin/vps-secrets-render --repo "$tmp" --owner root
+    # Its progress lines go to stderr: this function's stdout is the path.
+    /usr/local/sbin/vps-secrets-render --repo "$tmp" --owner root >&2
   fi
   printf 'commit=%s\nscaffold=%s\nexported=%s\n' "$commit" "${scaffold:-none}" "$(date -u +%FT%TZ)" >"$tmp/.release"
   chmod 0644 "$tmp/.release"
+  rm -rf -- "$dest"
   mv -T -- "$tmp" "$dest"
   echo "$dest"
 }
 
-do_switch() {
-  local dest="$1" new
-  [[ "$dest" == "$RELEASES"/* && -f "$dest/.release" ]] || {
-    echo "vps-release: $dest is not a prepared release" >&2; exit 1; }
-  # First switch on a server that still has a checkout at /opt/deploy.
-  if [[ -d "$LINK" && ! -L "$LINK" ]]; then
-    mv -T -- "$LINK" /opt/deploy-legacy
-  fi
-  new="/opt/.deploy-link.$$"
-  ln -s -- "$dest" "$new"
-  mv -T -- "$new" "$LINK"
+do_recheck() {
+  local dest="$1" commit
+  is_release "$dest" || { echo "vps-release: $dest is not a prepared release" >&2; exit 1; }
+  commit="$(release_field "$dest" commit)"
+  verify "$commit"
 }
 
-current_dir() { [[ -L "$LINK" ]] && readlink -f -- "$LINK" || true; }
+# The env files the running stack reads. Before the first switch, every one
+# the checkout has must also be in the release (rendered from secrets/), or
+# containers would start with blank settings.
+ENV_GLOBS=(.env apps/*/.env apps/*/*/.env backup/config.env backup/services/*.env)
+first_switch_checks() {
+  local dest="$1" g f missing=()
+  if [[ -e "$LEGACY" ]]; then
+    echo "vps-release: $LEGACY already exists; remove or rename it before the first switch" >&2; exit 1
+  fi
+  /usr/local/sbin/vps-release-bind-check >&2 || {
+    echo "vps-release: a container binds an untracked or writable path in the checkout — refusing the first switch" >&2; exit 1; }
+  shopt -s nullglob
+  for g in "${ENV_GLOBS[@]}"; do
+    # shellcheck disable=SC2206  # the glob is meant to expand here
+    for f in $LINK/$g; do
+      [[ -f "$f" ]] || continue
+      [[ -f "$dest/${f#"$LINK"/}" ]] || missing+=("${f#"$LINK"/}")
+    done
+  done
+  shopt -u nullglob
+  if (( ${#missing[@]} )); then
+    echo "vps-release: these env files exist in the checkout but not in the release (add them to secrets/ first):" >&2
+    printf '  %s\n' "${missing[@]}" >&2
+    exit 1
+  fi
+}
+
+do_switch() {
+  local dest="$1" new
+  is_release "$dest" || { echo "vps-release: $dest is not a prepared release" >&2; exit 1; }
+  if [[ -d "$LINK" && ! -L "$LINK" ]]; then
+    first_switch_checks "$dest"
+    mv -T -- "$LINK" "$LEGACY"
+  elif [[ -e "$LINK" && ! -L "$LINK" ]]; then
+    echo "vps-release: $LINK is neither a release link nor a checkout" >&2; exit 1
+  fi
+  new="/opt/.deploy-link.$$"
+  rm -f -- "$new"
+  ln -s -- "$dest" "$new"
+  mv -T -- "$new" "$LINK"
+  printf '%s %s\n' "$(date -u +%FT%TZ)" "$dest" >>"$HISTORY"
+}
+
+current_dir() { if [[ -L "$LINK" ]]; then readlink -f -- "$LINK"; fi; }
 do_current() {
   local d; d="$(current_dir)"
-  [[ -n "$d" && -f "$d/.release" ]] && sed -n 's/^commit=//p' "$d/.release" || echo none
+  if [[ -n "$d" ]] && is_release "$d"; then release_field "$d" commit; else echo none; fi
 }
-# Releases, newest first, by export time.
-releases_newest_first() {
-  local d
-  for d in "$RELEASES"/*/; do
-    d="${d%/}"; [[ -f "$d/.release" ]] || continue
-    printf '%s %s\n' "$(sed -n 's/^exported=//p' "$d/.release")" "$d"
-  done | sort -r | cut -d' ' -f2-
-}
+# The release deployed before the current one, from the switch history (not
+# export times, which a reused release keeps from its first export).
 do_previous() {
-  local cur; cur="$(current_dir)"
-  releases_newest_first | grep -vxF -- "$cur" | head -1
+  local cur d; cur="$(current_dir)"
+  [[ -f "$HISTORY" ]] || return 0
+  while read -r _ d; do
+    [[ "$d" != "$cur" ]] && is_release "$d" && { echo "$d"; return 0; }
+  done < <(tac "$HISTORY")
 }
+# Keep the current release and the most recently switched-to others, $KEEP in all.
 do_prune() {
-  local cur n=0 d; cur="$(current_dir)"
-  while IFS= read -r d; do
-    n=$((n + 1))
-    [[ "$d" == "$cur" ]] && continue
-    (( n > KEEP )) && rm -rf -- "$d"
-  done < <(releases_newest_first)
+  local cur d keep=() n=0
+  cur="$(current_dir)"
+  [[ -n "$cur" ]] && keep+=("$cur") && n=1
+  if [[ -f "$HISTORY" ]]; then
+    while read -r _ d; do
+      (( n >= KEEP )) && break
+      [[ " ${keep[*]} " == *" $d "* ]] && continue
+      is_release "$d" || continue
+      keep+=("$d"); n=$((n + 1))
+    done < <(tac "$HISTORY")
+  fi
+  for d in "$RELEASES"/*/; do
+    d="${d%/}"
+    [[ " ${keep[*]} " == *" $d "* ]] || rm -rf -- "$d"
+  done
   find "$RELEASES" -maxdepth 1 -name '.*.partial' -mmin +60 -exec rm -rf -- {} + 2>/dev/null || true
+  if [[ -f "$HISTORY" ]]; then
+    tail -n 50 "$HISTORY" >"$HISTORY.tmp" && mv -f "$HISTORY.tmp" "$HISTORY"
+  fi
+}
+
+do_scaffold_behind() {
+  local cur scaffold url
+  cur="$(current_dir)"
+  is_release "${cur:-/nonexistent}" || { echo 0; return 0; }
+  scaffold="$(release_field "$cur" scaffold)"
+  [[ "$scaffold" =~ $SHA_RE ]] || { echo 0; return 0; }
+  url="$(normalise_scaffold_url "$(gitmodules_url "$cur/.gitmodules")")"
+  init_mirror "$SCAFFOLD_MIRROR"
+  rgit --git-dir="$SCAFFOLD_MIRROR" fetch --quiet --no-tags "$url" '+refs/heads/*:refs/heads/*'
+  rgit --git-dir="$SCAFFOLD_MIRROR" rev-list --count "$scaffold..refs/heads/main"
 }
 
 # Sourced (by the tests): define the functions only.
 [[ "${BASH_SOURCE[0]}" == "$0" ]] || return 0
 
+# One run at a time: a manual deploy and auto-deploy must never export into,
+# switch or prune the same tree together.
+exec 8>/run/vps-release.lock
+flock -w 1800 8 || { echo "vps-release: another release run holds the lock" >&2; exit 1; }
+
 case "${1:-}" in
   fetch) do_fetch ;;
   prepare) do_prepare ;;
   switch) do_switch "${2:?release directory}" ;;
+  recheck) do_recheck "${2:?release directory}" ;;
   current) do_current ;;
   previous) do_previous ;;
   prune) do_prune ;;
-  *) echo "usage: vps-release fetch|prepare|switch DIR|current|previous|prune" >&2; exit 2 ;;
+  hold) [[ "${2:-}" =~ $SHA_RE ]] || { echo "vps-release: hold needs a commit" >&2; exit 2; }
+        printf '%s\n' "$2" >"$HOLD" ;;
+  held) [[ -f "$HOLD" ]] && cat "$HOLD" || true ;;
+  unhold) rm -f -- "$HOLD" ;;
+  scaffold-behind) do_scaffold_behind ;;
+  *) echo "usage: vps-release fetch|prepare|switch DIR|recheck DIR|current|previous|prune|hold COMMIT|held|unhold|scaffold-behind" >&2; exit 2 ;;
 esac

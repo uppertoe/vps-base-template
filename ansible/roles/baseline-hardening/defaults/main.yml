@@ -170,9 +170,10 @@ baseline_aide_rule_overrides:
   - '=/etc/ld\.so\.cache VarFile'
   - "DeployConf = InodeData+Checksums"
   - "/opt/deploy DeployConf"
-  # The release tree (docs/15): each release is exported once and never changes,
-  # so any change inside one alerts; the rebaseline after a deploy covers the new one.
-  - "/opt/deploy-releases DeployConf"
+  # AIDE selection lines are prefix regexes, so the line above also covers the
+  # release tree's /opt/deploy-releases and /opt/deploy-legacy (docs/15): each
+  # release is exported once and never changes, and the rebaseline after every
+  # release deploy covers the new or pruned ones.
 
 # Re-baseline AIDE after apt package operations (unattended-upgrades, manual
 # installs). Package upgrades legitimately change /usr/bin, /usr/lib, etc. -- the

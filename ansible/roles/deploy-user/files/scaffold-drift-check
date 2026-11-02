@@ -14,7 +14,7 @@ SCAFFOLD=/opt/deploy/scaffold
 
 if [[ -L /opt/deploy ]]; then
   # Release tree (docs/15-release-tree.md): the scaffold commit is recorded in
-  # the release, and upstream is read with a throwaway root fetch.
+  # the release, and upstream is read through root's scaffold mirror.
   checked_out="$(sed -n 's/^scaffold=//p' /opt/deploy/.release)"
   applied="$(cat /var/lib/vps-site-applied 2>/dev/null || echo none)"
   if [[ "$applied" != "$checked_out" ]]; then
@@ -22,13 +22,7 @@ if [[ -L /opt/deploy ]]; then
       "Run site-quick.yml so roles, timers and scripts match the deployed scaffold (scaffold/docs/04-server-repo.md)." \
       default package || true
   fi
-  mgit() {
-    env -i PATH="$PATH" HOME=/root GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 \
-      git --git-dir=/var/lib/vps-deploy/scaffold.git -c core.hooksPath=/dev/null -c protocol.allow=never -c protocol.https.allow=always "$@"
-  }
-  url="$(env -i PATH="$PATH" git config --file /opt/deploy/.gitmodules --get submodule.scaffold.url)"
-  mgit fetch --quiet --no-tags "$url" '+refs/heads/main:refs/heads/main'
-  behind="$(mgit rev-list --count "${checked_out}..refs/heads/main")"
+  behind="$(/usr/local/sbin/vps-release scaffold-behind)"
   [[ "$behind" -eq 0 ]] && exit 0
   /usr/local/bin/vps-notify "Scaffold ${behind} commit(s) behind upstream" \
     "Review UPGRADING.md entries newer than your pointer, bump the submodule, and re-run site-quick." || true

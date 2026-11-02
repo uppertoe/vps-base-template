@@ -279,21 +279,29 @@ done
 # file bind-mounted from the repo (a Caddy bundle, sites.yaml, custom terms):
 # those services are recreated explicitly, chosen from the paths this deploy
 # changed and each service's bind mounts in the resolved config.
-changed_paths="$(rootgit diff --name-only "$old_head" "$new_head" -- 2>/dev/null || true)"
+# changed_paths OLD NEW prints the repo-relative paths that differ between two
+# commits, one per line. Kept as a function so another deploy mode (a release
+# tree without a checkout) can supply its own source for the same answer.
+changed_paths() {
+  rootgit diff --name-only "$1" "$2" -- 2>/dev/null || true
+}
+changed="$(changed_paths "$old_head" "$new_head")"
 if [[ "$old_scaffold" != "$new_scaffold" ]]; then
-  changed_paths="${changed_paths}"$'\n'"scaffold"
+  changed="${changed}"$'\n'"scaffold"
 fi
 recreate=()
-if [[ -n "${changed_paths//[[:space:]]/}" ]]; then
+if [[ -n "${changed//[[:space:]]/}" ]]; then
   while IFS=$'\t' read -r svc rel; do
     [[ -n "$svc" ]] || continue
-    while IFS= read -r changed; do
-      [[ -n "$changed" ]] || continue
-      if [[ "$changed" == "$rel" || "$changed" == "$rel"/* || "$rel" == "$changed"/* ]]; then
+    while IFS= read -r path; do
+      [[ -n "$path" ]] || continue
+      if [[ "$path" == "$rel" || "$path" == "$rel"/* || "$rel" == "$path"/* ]]; then
         recreate+=("$svc")
         break
       fi
-    done <<< "$changed_paths"
+    done <<< "$changed"
+  # Bind sources are read from the stack's own directory (the cwd), as compose
+  # resolved them, never from a repository path.
   done < <(docker compose config --format json 2>/dev/null | python3 -c '
 import json, os, sys
 root = os.getcwd().rstrip("/") + "/"

@@ -77,6 +77,7 @@ of the actions, once.
    can replace that line with the `open-path` marker, which carries the paths
    as well as the reason.
 ## 2026-11-02 — zram swap tier
+## 2026-11-02 — zram swap tier; a data tier and one ceiling for the whole estate
 
 **What lands automatically on the next `site-quick.yml`:**
 
@@ -87,12 +88,34 @@ of the actions, once.
   role never swaps a live device off). `swapon --show` should list both.
   Turn it off with `host_swap_zram_enabled: false`; size it with
   `host_swap_zram_size: 768M`.
+- The docker role installs `vps.slice` (`MemoryMax=1600M`,
+  `MemorySwapMax=1024M`) as the parent of the tiers, a new `vps-data.slice`
+  (`900M`, swap allowed) for databases and the apps excepted from the no-swap
+  tier, and lowers `vps-noswap.slice` from 1400M to 1100M. The five values
+  are `docker_slice_memory_max`, `docker_slice_swap_max`,
+  `docker_noswap_memory_max`, `docker_batch_memory_max` and
+  `docker_data_memory_max`; the arithmetic is in the role defaults and in
+  docs/04 ("Memory tiers").
+- `audit-compose.yml` gains `memory_tier`: every long-running container must
+  name some `vps*.slice` in `cgroup_parent`, or it is a WARN. Containers that
+  sat in `system.slice` until now will fail the audit until the server repo
+  places them.
 
 **Operator actions:**
 
-1. None required. After the play, confirm with `swapon --show` that zram has
-   the higher priority, and expect `zramctl` to show pages moving there in
-   preference to the file over the following days.
+1. In the server repo, give every container that has no `cgroup_parent` one:
+   `cgroup_parent: vps-data.slice` for Postgres, Redis and the apps the
+   register excepts from `web_no_swap`. Deploy, then run `audit-compose.yml`
+   and expect zero `memory_tier` warnings.
+2. After the play, confirm the parent cap took effect on the running slice:
+   `systemctl show vps.slice -p MemoryMax -p MemorySwapMax` should print the
+   configured bytes, not `infinity`. If it still reads `infinity`, apply it
+   to the running slice without a reboot with `systemctl set-property
+   --runtime vps.slice MemoryMax=1600M MemorySwapMax=1024M`; the unit file
+   governs from the next boot regardless.
+3. Confirm with `swapon --show` that zram has the higher priority, and expect
+   `zramctl` to show pages moving there in preference to the file over the
+   following days.
 
 ---
 

@@ -1,0 +1,24 @@
+# vps-data.slice — the data tier: databases, caches, and the apps a deployment
+# keeps out of the no-swap tier on purpose.
+# Installed by the docker role (vps-base-template). Managed by Ansible.
+#
+# A container with no cgroup_parent lands in system.slice beside dockerd and
+# sshd, beneath no collective cap, and its mem_limit is then the only thing
+# between a database vacuum or a backup dump and the host. Five containers sat
+# there on a live host (planka-db, roster-db, roster-redis, air-db and
+# neverdrugs: 1696 MiB of ceilings) while the two existing tiers were capped.
+# This slice gives them one ceiling of their own. Swap stays allowed: a
+# database page faulted back in is a slow query, not a visitor waiting at a
+# login page, and Postgres and Redis manage their own memory better than an
+# OOM kill would. The parent vps.slice bounds how much the tier may swap.
+#
+# Put a service here with `cgroup_parent: vps-data.slice`. A database that is
+# also excepted from web_no_swap in the audit register belongs here rather
+# than nowhere.
+
+[Unit]
+Description=Data-tier containers sharing one memory ceiling
+Before=slices.target
+
+[Slice]
+MemoryMax={{ docker_data_memory_max }}

@@ -24,7 +24,8 @@
     # Containers allowed to skip specific §5 controls, with the reason documented
     # in docs/08-security-model.md. Map of container name -> list of control keys:
     #   privileged, cap_drop_all, no_new_privileges, read_only, mem_limit,
-    #   pids_limit, non_root, healthcheck
+    #   pids_limit, non_root, healthcheck, memory_tier (any vps*.slice),
+    #   web_no_swap (vps-noswap.slice for Caddy-reachable containers)
     # The default stack (caddy, auth) passes every control, so this is empty.
     audit_compose_exceptions: {}
     # uids no container may run as, e.g. [1000] where 1000 is the deploy user;

@@ -1,4 +1,5 @@
 # vps-noswap.slice — containers that must never be paged out.
+# Installed by the docker role (vps-base-template). Managed by Ansible.
 #
 # `memswap_limit` in compose is recorded by Docker but NOT applied by the
 # systemd cgroup driver (seen on 29.8.1): the container's scope ends up with
@@ -8,9 +9,9 @@
 # one has an effective swap ceiling of zero whatever its own scope says.
 #
 # Put a service here with `cgroup_parent: vps-noswap.slice` when a visitor
-# would notice it being faulted back in from this host's dm-crypt swap. Only do
-# that where measured usage sits well under mem_limit: a container that cannot
-# swap is OOM-killed rather than borrowing.
+# would notice it being faulted back in from swap. Only do that where measured
+# usage sits well under mem_limit: a container that cannot swap is OOM-killed
+# rather than borrowing.
 
 [Unit]
 Description=Containers that must never swap
@@ -18,7 +19,8 @@ Before=slices.target
 
 [Slice]
 MemorySwapMax=0
-# The tier as a whole stays below physical memory (2 GB hosts), so a burst
-# across several no-swap containers is answered by an OOM kill inside this
-# slice rather than by the host running out and wedging.
-MemoryMax=1400M
+# This tier cannot be reclaimed, so its cap must leave room beneath the parent
+# (vps.slice) for the batch and data tiers' resident minimum; a burst across
+# several no-swap containers is answered by an OOM kill inside this slice
+# rather than by the host running out. See roles/docker/defaults/main.yml.
+MemoryMax={{ docker_noswap_memory_max }}

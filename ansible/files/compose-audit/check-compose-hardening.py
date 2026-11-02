@@ -17,6 +17,7 @@ playbook fails loudly on a regression.
 import argparse
 import os
 import json
+import re
 import subprocess
 import sys
 
@@ -147,6 +148,20 @@ INTERNAL_NET_CONTROLS = [
     ("scaffold app: sole app on its internal networks", "internal_network_isolated"),
 ]
 
+# Every long-running container must sit in one of the memory tiers the docker
+# role installs (vps-noswap.slice, vps-batch.slice, vps-data.slice, all children
+# of vps.slice). A container with no cgroup_parent lands in system.slice beside
+# dockerd and sshd, beneath no collective cap, and its mem_limit is then the
+# only thing between it and the host. web_no_swap asks this only of the
+# Caddy-reachable tier, so five containers (two Postgres, a Redis and two apps
+# excepted from web_no_swap, 1696 MiB of ceilings) sat outside every tier on a
+# live host without a finding (2026-11-02). One-shot init containers are
+# exempt: they run for seconds with network_mode none and a 64 MiB limit.
+TIER_SLICE_RE = re.compile(r"^vps(-[a-z0-9]+)?\.slice$")
+TIER_CONTROLS = [
+    ("scaffold app: placed in a memory tier (vps*.slice)", "memory_tier"),
+]
+
 
 def is_db_container(c):
     image = ((c.get("Config") or {}).get("Image") or "").lower()
@@ -168,6 +183,12 @@ def evaluate_db(c, proxy_networks):
 def evaluate_web(c):
     host = c.get("HostConfig") or {}
     return {"web_no_swap": (host.get("CgroupParent") or "") == NOSWAP_SLICE}
+
+
+def evaluate_tier(c):
+    host = c.get("HostConfig") or {}
+    parent = host.get("CgroupParent") or ""
+    return {"memory_tier": bool(TIER_SLICE_RE.match(parent))}
 
 
 def docker(args):
@@ -357,6 +378,9 @@ def main():
         c = inspected[name]
         results = evaluate(c)
         controls = list(INIT_CONTROLS if is_init_container(c) else CONTROLS)
+        if not is_init_container(c):
+            results.update(evaluate_tier(c))
+            controls += TIER_CONTROLS
         if not is_init_container(c) and compose_service(c) != "caddy":
             results.update(net_controls[name])
             controls += PROXY_CONTROLS + INTERNAL_NET_CONTROLS
@@ -395,7 +419,7 @@ def main():
             fh.write(f"{s['pass']} pass, {s['warn']} warn, {s['excepted']} excepted\n\n")
             cols = []
             for _, k in (
-                CONTROLS + INIT_CONTROLS + PROXY_CONTROLS
+                CONTROLS + INIT_CONTROLS + TIER_CONTROLS + PROXY_CONTROLS
                 + INTERNAL_NET_CONTROLS + WEB_CONTROLS + DB_CONTROLS
             ):
                 if k not in cols:

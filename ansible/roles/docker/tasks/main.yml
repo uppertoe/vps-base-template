@@ -89,22 +89,22 @@
   # Skip inside Docker containers (Molecule) — Docker-in-Docker is fragile
   when: ansible_facts['virtualization_type'] not in ['docker', 'container']
 
-- name: Install the no-swap slice for latency-sensitive containers
-  ansible.builtin.copy:
-    src: vps-noswap.slice
-    dest: /etc/systemd/system/vps-noswap.slice
+# The memory tiers: vps.slice is the parent and the estate's one ceiling; the
+# three children are what compose files name in cgroup_parent. Values and the
+# arithmetic live in defaults/main.yml. The daemon-reload re-applies a changed
+# limit to a running slice; UPGRADING.md says how to confirm it took.
+- name: Install the memory tier slices
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
     owner: root
     group: root
     mode: "0644"
-  notify: Reload systemd for slices
-
-- name: Install the batch slice that caps the batch tier's memory as a group
-  ansible.builtin.copy:
-    src: vps-batch.slice
-    dest: /etc/systemd/system/vps-batch.slice
-    owner: root
-    group: root
-    mode: "0644"
+  loop:
+    - vps.slice
+    - vps-noswap.slice
+    - vps-batch.slice
+    - vps-data.slice
   notify: Reload systemd for slices
 
 - name: Deploy docker-prune systemd service

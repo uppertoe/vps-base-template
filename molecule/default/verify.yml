@@ -782,6 +782,38 @@
         msg: "fail2ban SSH jail is not enabled"
 
     # -------------------------------------------------------------------------
+    # Memory tiers (vps.slice and its three children)
+    # -------------------------------------------------------------------------
+    - name: Read the memory tier slice units
+      ansible.builtin.slurp:
+        path: "/etc/systemd/system/{{ item }}"
+      loop:
+        - vps.slice
+        - vps-noswap.slice
+        - vps-batch.slice
+        - vps-data.slice
+      register: tier_slices
+
+    # The parent carries both limits; each child carries a MemoryMax and the
+    # no-swap tier alone forbids swap. A tier without a cap would silently
+    # fall back to the parent's, which is the whole-estate figure.
+    - name: Assert every tier slice carries its cap
+      ansible.builtin.assert:
+        that:
+          - "'MemoryMax=' in (item.content | b64decode)"
+        msg: "{{ item.item }} has no MemoryMax"
+      loop: "{{ tier_slices.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Assert the parent slice carries the swap allowance and the no-swap tier forbids swap
+      ansible.builtin.assert:
+        that:
+          - "'MemorySwapMax=' in (tier_slices.results[0].content | b64decode)"
+          - "'MemorySwapMax=0' in (tier_slices.results[1].content | b64decode)"
+        msg: "vps.slice must set MemorySwapMax and vps-noswap.slice must set MemorySwapMax=0"
+
+    # -------------------------------------------------------------------------
     # Docker prune timer
     # -------------------------------------------------------------------------
     - name: Check docker-prune service unit exists

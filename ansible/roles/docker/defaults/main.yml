@@ -3,6 +3,42 @@
 # group_vars/all.yml is the canonical place this is set.
 deploy_restricted_mode: false
 
+# Memory tiers. Every container is placed beneath one of three slices with
+# `cgroup_parent:`, and systemd makes all three children of vps.slice by name
+# (a-b.slice is a child of a.slice), so the parent's limits bind the whole
+# estate: cgroup v2 enforces the smallest limit found along the path.
+#
+#   vps.slice           MemoryMax = RAM the containers may hold between them;
+#                       MemorySwapMax = what the swappable tiers may borrow
+#                       beyond it. Their sum is the estate's worst case.
+#   vps-noswap.slice    user-facing apps and Caddy; MemorySwapMax=0
+#   vps-batch.slice     jobs nobody is waiting on; may swap
+#   vps-data.slice      databases, caches and the apps a deployment keeps out
+#                       of the no-swap tier; may swap
+#
+# The arithmetic on a 1967 MiB host (prod-rch-vps):
+#   1600 (vps.slice) leaves 367 MiB of RAM outside the estate for dockerd,
+#   journald, auditd, the hourly restic run (125 MiB peak) and a site play;
+#   a ceiling, not a reservation, so the host can still take more under
+#   global reclaim, at the swappable tiers' expense.
+#   1100 (no-swap) + 700 (batch) + 900 (data) = 2700 MiB of tier ceilings.
+#   They exceed the parent on purpose, as mem_limits exceed the tiers: each
+#   is what one tier may take when the others are quiet. What must hold is
+#   (a) no-swap < vps.slice by enough for the other tiers' resident minimum
+#   (1600 - 1100 = 500 MiB; batch and data sit near 115 MiB and 200 MiB at
+#   rest), because the no-swap tier cannot be reclaimed; (b) vps.slice +
+#   its swap allowance (1600 + 1024 = 2624) stays below the tier sum, so no
+#   tier can reach its own ceiling while the others are full; (c) the swap
+#   allowance is about the zram device's size (983 MiB here), so in the
+#   common case the estate's swap never reaches the file. When the allowance
+#   is exhausted the kernel OOM-kills inside vps.slice and compose restarts
+#   the container, instead of the host paging itself into a wedge.
+docker_slice_memory_max: 1600M
+docker_slice_swap_max: 1024M
+docker_noswap_memory_max: 1100M
+docker_batch_memory_max: 700M
+docker_data_memory_max: 900M
+
 # Docker daemon configuration written to /etc/docker/daemon.json
 # See: https://docs.docker.com/engine/reference/commandline/dockerd/#daemon-configuration-file
 docker_daemon_config:

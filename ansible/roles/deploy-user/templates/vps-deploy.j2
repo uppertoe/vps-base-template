@@ -82,6 +82,9 @@ action=deploy
 case "${1:-}" in
   "") ;;
   --rollback) action=rollback ;;
+  # auto-deploy: the hold is re-checked here, under the lock, so a rollback
+  # that finished while this run waited is not undone. Exit 3 means held.
+  --auto) action=auto ;;
   *) echo "usage: vps-deploy [--rollback]" >&2; exit 2 ;;
 esac
 release_field() { sed -n "s/^$2=//p" "$1/.release" 2>/dev/null; }
@@ -108,7 +111,11 @@ if [[ ! "$release" =~ ^/opt/deploy-releases/[0-9a-f]{40}$ || ! -f "$release/.rel
 fi
 new_head="$(release_field "$release" commit)"
 new_scaffold="$(release_field "$release" scaffold)"
-if [[ "$action" == deploy && "$new_head" == "$old_head" ]]; then
+if [[ "$action" == auto && "$new_head" == "$(/usr/local/sbin/vps-release held)" ]]; then
+  echo "vps-deploy: ${new_head:0:7} is held after a rollback; not deploying it."
+  exit 3
+fi
+if [[ "$action" != rollback && "$new_head" == "$old_head" ]]; then
   echo "vps-deploy: ${new_head:0:7} is already deployed; recreating its containers."
 fi
 # Compose reads COMPOSE_FILE and friends from the project's .env; even from
@@ -349,7 +356,7 @@ find ./apps ./scaffold ./.generated ./Caddyfile \
 for hook in ./apps/*/deploy.sh; do
   if [[ -x "$hook" ]]; then
     echo "Running app deploy hook: ${hook#./}"
-    "$hook"
+    "$hook" 9>&-
   fi
 done
 

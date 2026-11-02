@@ -152,6 +152,8 @@ do_prepare() {
   fi
   install -d -m 0755 -o root -g root "$RELEASES"
   tmp="$(mktemp -d "$RELEASES/.$commit.XXXXXX.partial")"
+  # A failed export, rendered secrets included, is removed at once.
+  trap 'rm -rf -- "$tmp"' ERR
   chmod 0755 "$tmp"
   rgit --git-dir="$MIRROR" archive --format=tar "$commit" | tar -x --no-same-owner -C "$tmp"
   scaffold="$(scaffold_of "$commit")"
@@ -176,6 +178,7 @@ do_prepare() {
   chmod 0644 "$tmp/.release"
   rm -rf -- "$dest"
   mv -T -- "$tmp" "$dest"
+  trap - ERR
   echo "$dest"
 }
 

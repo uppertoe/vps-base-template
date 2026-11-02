@@ -91,7 +91,10 @@ not fetch, so it works with GitHub unreachable, but it verifies the kept
 release's signature again in case a signer has been removed since. The
 commit rolled back from is then held: auto-deploy skips it until a new
 commit reaches the branch, so the rollback is not undone within minutes. A
-rollback is announced over ntfy, and any ordinary deploy clears the hold. Because every
+rollback is announced over ntfy, and any ordinary deploy clears the hold. The hold is re-checked under the deploy lock, so a
+rollback that finishes while auto-deploy is waiting is not undone. A second
+`--rollback` returns to the release just rolled back from; to go further
+back, deploy an earlier commit through git instead. Because every
 deploy recreates every container (docs/04), a rollback that changes an app's
 settings carries the same risk as a deploy that does: check before running it
 on an app whose key change is irreversible (p.stonn's `DATA_ENCRYPTION_KEY`).
@@ -169,6 +172,11 @@ docker run --rm -v "$PWD":/t:ro ubuntu:24.04 bash /t/test_vps_release.sh
 ```
 
 ## 9. Open items
+
+- Git LFS is not supported: a release would contain LFS pointer files.
+- `transfer.fsckObjects` refuses malformed objects on fetch. A server repo
+  whose old history carries fsck warnings needs `fetch.fsck.<msg-id>=ignore`
+  for that warning, not the check turned off.
 
 - markbot needs SOPS support for two non-dotenv files (Authelia's key and
   user list) before it can adopt; `vps-secrets-render` gains a binary mode

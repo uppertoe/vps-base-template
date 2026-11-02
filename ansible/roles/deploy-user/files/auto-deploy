@@ -21,7 +21,9 @@ if [[ -f /etc/vps-scaffold/release.env && -x /usr/local/sbin/vps-release ]]; the
   # After `vps-deploy --rollback`, the commit rolled back from is held until a
   # new commit reaches the branch; the rollback message said so.
   [[ "$(/usr/local/sbin/vps-release held)" == "$remote_head" ]] && exit 0
-  /usr/local/sbin/vps-deploy
+  rc=0; /usr/local/sbin/vps-deploy --auto || rc=$?
+  [[ $rc -eq 3 ]] && exit 0
+  [[ $rc -eq 0 ]] || exit "$rc"
   mgit() {
     env -i PATH="$PATH" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
       git --git-dir=/var/lib/vps-deploy/repo.git -c core.hooksPath=/dev/null "$@"

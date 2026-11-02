@@ -150,14 +150,6 @@
     group: root
     mode: "0750"
 
-- name: Install root-owned deploy wrapper
-  ansible.builtin.template:
-    src: vps-deploy.j2
-    dest: /usr/local/sbin/vps-deploy
-    owner: root
-    group: root
-    mode: "0750"
-
 # --- Release tree (docs/15-release-tree.md) ---------------------------------
 # Root fetches, verifies and exports each commit itself; the deploy account's
 # checkout is no longer read or executed by root.
@@ -272,6 +264,24 @@
         group: root
         mode: "0600"
 
+
+# Installed after the release block, so a refused release-tree check leaves
+# the previous wrapper in place rather than one that expects vps-release.
+- name: Install root-owned deploy wrapper
+  ansible.builtin.template:
+    src: vps-deploy.j2
+    dest: /usr/local/sbin/vps-deploy
+    owner: root
+    group: root
+    mode: "0750"
+
+# Switched off before the first switch: auto-deploy must not keep taking the
+# release path (the play refuses switching off after it, above).
+- name: Retire the release configuration while the release tree is off
+  ansible.builtin.file:
+    path: /etc/vps-scaffold/release.env
+    state: absent
+  when: not deploy_release_tree | bool
 
 # vps-git-heal hands back anything under the checkout's .git that a hand-run
 # root git has taken (auto-deploy and vps-deploy call it first); vps-git is the
@@ -411,7 +421,7 @@
       {%- set out = {} -%}
       {%- set auths = ((deploy_docker_config_raw.content | b64decode | from_json).auths | default({})) -%}
       {%- for registry, entry in auths.items()
-            if registry is match('^[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._/-]*)?$')
+            if registry is match('^(https?://)?[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._/-]*)?$')
             and entry is mapping and entry.auth is defined and entry.auth is string
             and entry.auth is match('^[A-Za-z0-9+/=]+$') -%}
         {%- set _ = out.update({registry: {'auth': entry.auth}}) -%}
@@ -433,6 +443,8 @@
     - deploy_restricted_mode | bool or deploy_release_tree | bool
     - deploy_docker_config.stat.exists
 
+# Skipped when nothing passes the filter, so a login an administrator made as
+# root is not wiped by an empty file.
 - name: Give root the registry logins only
   ansible.builtin.copy:
     content: "{{ {'auths': root_docker_auths} | to_nice_json }}\n"
@@ -444,6 +456,7 @@
   when:
     - deploy_restricted_mode | bool or deploy_release_tree | bool
     - deploy_docker_config.stat.exists
+    - root_docker_auths | length > 0
 
 - name: Install root-owned app-manage and app-logs wrappers
   ansible.builtin.copy:

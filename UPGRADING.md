@@ -23,7 +23,27 @@ of the actions, once.
 
 ---
 
-## 2026-11-03 — Deploy checks run as root against a copied index; checkout self-heal; web-flow key allow-list
+## 2026-11-02 — The renderer sorts in one collation; the deploy wrapper waits for AIDE
+
+**What lands automatically on the next `site-quick.yml`:**
+
+- `vps-deploy` waits for `dailyaidecheck.service` and `aide-rebaseline.service`
+  as it already waits for apt and the backup, because containers recreated
+  while the AIDE scan holds the CPU miss their health deadline and fail the
+  deploy for no fault of their own.
+- The "Containers not Up" listing after a failed deploy no longer names
+  one-shot init containers that exited cleanly.
+
+**What to do in each server repo:**
+
+- `render-caddy-routes.sh` now sets `LC_ALL=C`, so a render made on a Mac
+  matches the one CI makes. Re-render once after bumping the pointer and
+  commit `.generated/` if it changes; from then on no `LC_ALL` prefix is
+  needed on either machine.
+
+---
+
+## 2026-11-02 — Deploy checks run as root against a copied index; checkout self-heal; web-flow key allow-list
 
 **What lands automatically on the next `site-quick.yml`:**
 

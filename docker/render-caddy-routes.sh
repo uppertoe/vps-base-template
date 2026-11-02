@@ -39,6 +39,12 @@
 # (apps/myapp/ -> service "myapp"); this script fails loudly otherwise.
 set -euo pipefail
 
+# The generated files are sorted, and the sort order must not depend on the
+# machine that rendered them: a Mac's locale orders the access table
+# differently from the CI runner's, and the drift check then fails. Render in
+# the C collation everywhere.
+export LC_ALL=C
+
 repo_root="${1:-$(pwd)}"
 out_dir="${2:-$repo_root/.generated/caddy}"
 routes_file="$out_dir/apps.caddy"

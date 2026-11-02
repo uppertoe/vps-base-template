@@ -1,7 +1,7 @@
 # Secrets: SOPS-encrypted in git, Docker secrets at runtime
 
-**Status: proposed (2026-11-02).** Nothing here is built yet. The owner has
-made both decisions below; building waits for this document to be merged.
+**Status (2026-11-02): phase 1 is built in the scaffold; no server has adopted
+it yet.** The owner has made both decisions below. Phase 2 is not built.
 
 ## The problem this solves
 
@@ -71,40 +71,61 @@ signed commit before doing anything else. Decryption is a new step after that
 check and before `docker compose pull`:
 
 1. Verify the signed commit (existing).
-2. For each `secrets/*.sops` file, decrypt it with the server key into a
-   temporary file. If the decrypted content differs from the current output,
-   replace the output atomically. Unchanged files are left untouched, so their
-   ctime does not move and AIDE stays quiet.
-   - `secrets/root.env.sops` becomes `/opt/deploy/.env`.
-   - `secrets/<app>.env.sops` becomes `apps/<app>/.env`.
-3. If any file fails to decrypt, stop before touching any container and leave
-   the existing outputs in place. A failed decrypt cannot take an app down.
-4. Apply the existing guards to the outputs: mode `600`, and the refusal of
-   `COMPOSE_*` variables.
+2. Refuse any file under `secrets/` that git does not track. An untracked file
+   is not part of the reviewed commit, so it is never decrypted.
+3. Run `vps-secrets-render`, which decrypts every `secrets/**/*.sops` file
+   with the server key. Each encrypted file mirrors the path of the file it
+   becomes, with `.sops` appended:
+   - `secrets/.env.sops` becomes `.env`;
+   - `secrets/apps/<app>/.env.sops` becomes `apps/<app>/.env`;
+   - `secrets/backup/services/<name>.env.sops` becomes
+     `backup/services/<name>.env`.
+
+   Only the env files that the wrapper already locks to `600` may be targets.
+   `secrets/recovery.sops` is never rendered.
+4. If any file fails to decrypt or validate, nothing is written and the deploy
+   stops before touching any container. A failed decrypt cannot take an app
+   down. A file whose content has not changed is left untouched, so its ctime
+   does not move and AIDE stays quiet.
 5. Continue as today (`compose pull`, the app hooks, `compose up`).
 
-The outputs stay gitignored and are owned by root. The deploy user no longer
-writes them. That suits restricted mode, where the deploy user should not hold
-secrets in the first place.
+In default mode, `./deploy` runs the same render step through `sudo`, since
+only root can read the server key. The automatic deploy always uses the root
+wrapper.
+
+The outputs stay gitignored and keep today's owner (the deploy user, mode
+`600`), because default-mode deploys and some app hooks read them as that
+user. The render step runs as root inside a checkout the deploy user owns, so
+it never follows a symlink and creates each file with `O_EXCL | O_NOFOLLOW`
+before renaming it into place. Root is never steered into writing elsewhere.
+It also refuses decrypted content that sets a `COMPOSE_*` variable, as the
+wrapper refuses such a `.env`.
 
 ## Guards
 
-- **CI:** a `check-secrets-encrypted.sh` job fails if any file under `secrets/`
-  lacks SOPS metadata, or if any tracked `.env` file holds a value. It runs in
-  `static-checks`, so it adds no minutes.
-- **Pre-commit:** the same check runs as an optional hook for the owner's
-  laptop.
-- **Smoke test:** `post-provision-smoke-test.sh` checks that the server key
-  exists with mode `0400`, that every `secrets/*.sops` file decrypts with it,
-  and that no stray `.env.bak` or `*-env.bak-*` files remain.
+- **CI (built):** `scaffold/docker/check-secrets-encrypted.sh` fails if a file
+  under `secrets/` is not SOPS-encrypted or holds an unencrypted value, if
+  `secrets/` exists without `.sops.yaml`, or if git tracks a plain env file.
+  A server repo adds it to `static-checks`, so it adds no minutes.
+- **Tracked files only (built):** the wrapper refuses an untracked file under
+  `secrets/`.
+- **Pre-commit (not built):** the same check as an optional hook for the
+  owner's laptop.
+- **Smoke test (not built; server-repo layer):** `post-provision-smoke-test.sh`
+  should check that the server key exists with mode `0400`, that
+  `vps-secrets-render --check` passes, and that no stray `.env.bak` or
+  `*-env.bak-*` files remain.
 
 ## Phase 1: SOPS with the apps unchanged
 
-1. **Scaffold** (`vps-base-template`):
-   - an Ansible task that installs pinned `sops` and `age` binaries
-     (checksum-verified) and creates the server key on first run;
-   - the decrypt step in `vps-deploy.j2`;
-   - the CI check, the smoke-test additions, and this document.
+1. **Scaffold** (`vps-base-template`), built:
+   - deploy-user role tasks that install `age` from the Ubuntu archive and the
+     pinned, checksum-verified `sops` release, and create the server key on
+     first run (printing its public half, also kept in
+     `/etc/vps-scaffold/age/key.pub`);
+   - `vps-secrets-render` and the decrypt step in `vps-deploy.j2` and
+     `deploy.j2`;
+   - the CI check and its tests, and this document.
 2. **Pilot on MCH:**
    - generate the keys and write `.sops.yaml`;
    - encrypt the current `.env` files, removing dead values (such as the
@@ -128,6 +149,74 @@ the server key: the server already holds the restic password in
 the repo and the recovery key, and the recovery bundle is retired. The price
 is the backup password living in git as ciphertext, under the key-retirement
 rule above.
+
+## Adopting on a server
+
+Plaintext never leaves the server during adoption. Encrypting needs only
+public keys, so the server encrypts its own current files, and only
+ciphertext travels to the laptop to be committed.
+
+1. **Keys.** Bump the scaffold and run `site-quick`; it prints the server's
+   public key, which is also kept in `/etc/vps-scaffold/age/key.pub`. On the
+   laptop, `brew install sops age`, then create the owner key with
+   `age-keygen -o ~/.config/sops/age/keys.txt` and set
+   `SOPS_AGE_KEY_FILE` to that path in the shell profile. Create the recovery
+   key with `age-keygen -o recovery-key.txt`, store the whole file in the
+   password manager, note its public key, and delete the file. The owner and
+   recovery keys are the same for every server.
+2. **Recipients.** Commit `.sops.yaml` at the server repo root:
+
+   ```yaml
+   creation_rules:
+     - path_regex: ^secrets/recovery\.sops$
+       age: <owner public key>,<recovery public key>
+     - path_regex: ^secrets/.*\.sops$
+       age: <server public key>,<owner public key>,<recovery public key>
+   ```
+
+   Pull it on the server (`./deploy` or the next automatic deploy) before
+   step 3, so the server encrypts to the same recipients.
+3. **Encrypt on the server, outside the checkout.** The wrapper refuses
+   untracked files under `secrets/`, so a deploy during adoption would stop if
+   the ciphertext were written into the checkout. For each current env file,
+   as root in `/opt/deploy`:
+
+   ```bash
+   f=apps/planka/.env
+   out=/root/secrets-import/secrets/$f.sops
+   mkdir -p "$(dirname "$out")"
+   sops --encrypt --filename-override "secrets/$f.sops" \
+     --input-type dotenv --output-type dotenv "$f" > "$out"
+   ```
+
+   `--filename-override` makes SOPS choose the recipients from `.sops.yaml`
+   for the file's final path. Remove dead values first (edit the plaintext
+   file, or decrypt, edit and re-encrypt afterwards). Copy
+   `/root/secrets-import/secrets/` to the laptop (it is ciphertext), commit it
+   signed into the server repo as `secrets/`, then delete
+   `/root/secrets-import`.
+4. **Check before the switch.** After the commit reaches the server, run
+   `sudo vps-secrets-render --check`. Then compare each file without
+   printing values; SOPS drops blank lines and ends the file with a newline,
+   so the comparison ignores blank lines:
+
+   ```bash
+   for e in $(cd secrets && find . -name '*.sops' ! -name recovery.sops | sed 's#^\./##; s#\.sops$##'); do
+     if cmp -s <(grep -v '^[[:space:]]*$' "$e") \
+         <(SOPS_AGE_KEY_FILE=/etc/vps-scaffold/age/key.txt sops -d --input-type dotenv --output-type dotenv "secrets/$e.sops" | grep -v '^[[:space:]]*$'); then
+       echo "same: $e"; else echo "DIFFERENT: $e"; fi
+   done
+   ```
+
+   Every line should read `same`, apart from files where dead values were
+   removed on purpose.
+5. **Switch.** Add `bash scaffold/docker/check-secrets-encrypted.sh` to the
+   server repo's `static-checks`, then deploy. The first deploy reports each
+   file as `written` (the blank-line normalisation); later deploys report
+   `unchanged`.
+6. **From then on,** change a secret with `sops secrets/apps/<app>/.env.sops`
+   on the laptop, commit signed and push. Never edit `.env` on the server: the
+   next deploy overwrites it.
 
 ## Phase 2: Docker secrets for the valuable ones
 

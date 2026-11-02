@@ -17,6 +17,11 @@ cd /opt/deploy
 old_head="$(git rev-parse HEAD)"
 git pull --recurse-submodules
 new_head="$(git rev-parse HEAD)"
+# Secrets (docs/13-secrets.md): the render step runs as root, because only root
+# reads the server's age key; in default mode the deploy user may sudo.
+if [[ -d secrets ]]; then
+  sudo -n /usr/local/sbin/vps-secrets-render --repo /opt/deploy
+fi
 docker compose pull --policy always
 
 # Keep server and app env files readable only by the deploy user. Only chmod

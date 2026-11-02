@@ -32,6 +32,7 @@ jobs:
         run: |
           python3 -m py_compile ansible/files/compose-audit/check-compose-hardening.py
           python3 -m py_compile ansible/roles/notify/files/audit-notify
+          python3 -m py_compile ansible/roles/deploy-user/files/vps-secrets-render
 
       - name: Compose-audit control unit checks
         run: python3 ansible/files/compose-audit/test_check_compose_hardening.py
@@ -41,6 +42,25 @@ jobs:
       # shapes in use) and the route lint fixtures.
       - name: Renderer checks
         run: bash docker/tests/test-render-caddy-routes.sh
+
+      # The secrets render step and the server-repo CI guard (docs/13-secrets.md).
+      # The real-encryption tests need sops and age-keygen: sops is the pinned,
+      # checksum-verified release the deploy-user role installs (version and
+      # checksum read from the role's defaults, so the two cannot drift), and
+      # age comes from the Ubuntu archive as on the servers.
+      - name: Secrets checks
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y -qq age >/dev/null
+          defaults=ansible/roles/deploy-user/defaults/main.yml
+          v="$(sed -n 's/^deploy_secrets_sops_version: "\(.*\)"$/\1/p' "$defaults")"
+          sum="$(grep -A3 "\"$v\":" "$defaults" | sed -n 's/.*amd64: "sha256:\([0-9a-f]*\)"$/\1/p')"
+          [ -n "$v" ] && [ -n "$sum" ]
+          curl -fsSL -o /tmp/sops "https://github.com/getsops/sops/releases/download/v${v}/sops-v${v}.linux.amd64"
+          echo "${sum}  /tmp/sops" | sha256sum -c -
+          sudo install -m 0755 /tmp/sops /usr/local/bin/sops
+          python3 ansible/roles/deploy-user/files/test_vps_secrets_render.py
+          bash docker/tests/test-check-secrets-encrypted.sh
 
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0

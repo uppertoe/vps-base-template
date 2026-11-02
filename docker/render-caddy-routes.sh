@@ -135,14 +135,21 @@ if [[ -d "$repo_root/apps" ]]; then
           # Bearer tokens in URLs stay out of the access log. A magic link, an
           # unsubscribe link, a guest pass: any run of 16+ URL-safe base64
           # characters standing as a whole path segment or a query value is
-          # replaced, in the request line and in the two headers that carry the
-          # referring page (Referer, and Hx-Current-Url from htmx). A token that
-          # carries a file extension (a per-user calendar feed, a signed file
-          # URL) is caught by the second alternative, which asks for 32+
-          # characters so ordinary long file names stay readable. Fingerprinted
-          # asset names have a dot before the hash, short parameters are short,
-          # so neither matches. The same filter is on the default logger
-          # (run-caddy.sh), which the request dumps in the error log go through.
+          # replaced, in the request line, in the two headers that carry the
+          # referring page (Referer, and Hx-Current-Url from htmx) and in the
+          # Location header of a redirect, which carries the gated URL a
+          # signed-out person asked for and, after sign-in, where they were
+          # sent. A token that carries a file extension (a per-user calendar
+          # feed, a signed file URL) is caught by the second alternative, which
+          # asks for 32+ characters so ordinary long file names stay readable.
+          # The delimiters are accepted percent-encoded as well (%2F %3D before,
+          # %2F %3F %26 after), because the login redirect carries the asked-for
+          # URL encoded inside its rd= value. Fingerprinted asset names have a
+          # dot before the hash, short parameters are short, so neither
+          # matches. The same filter is on the default logger (run-caddy.sh),
+          # which the request dumps in the error log go through; the offline
+          # test in docker/tests/test-render-caddy-routes.sh keeps the two
+          # identical and checks the token shapes above.
           print "    log {" >> target
           print "        output file /var/log/caddy/access.log {" >> target
           print "            roll_size 20MiB" >> target
@@ -152,9 +159,10 @@ if [[ -d "$repo_root/apps" ]]; then
           print "        format filter {" >> target
           print "            wrap json" >> target
           print "            fields {" >> target
-          print "                request>uri regexp ([/=])(?:[A-Za-z0-9_-]{16,}([/?&]|$)|[A-Za-z0-9_-]{32,}(\\.[A-Za-z0-9]{1,8}(?:[/?&]|$))) ${1}REDACTED${2}${3}" >> target
-          print "                request>headers>Referer regexp ([/=])(?:[A-Za-z0-9_-]{16,}([/?&]|$)|[A-Za-z0-9_-]{32,}(\\.[A-Za-z0-9]{1,8}(?:[/?&]|$))) ${1}REDACTED${2}${3}" >> target
-          print "                request>headers>Hx-Current-Url regexp ([/=])(?:[A-Za-z0-9_-]{16,}([/?&]|$)|[A-Za-z0-9_-]{32,}(\\.[A-Za-z0-9]{1,8}(?:[/?&]|$))) ${1}REDACTED${2}${3}" >> target
+          print "                request>uri regexp ([/=]|%2[Ff]|%3[Dd])(?:[A-Za-z0-9_-]{16,}([/?&]|%2[Ff]|%3[Ff]|%26|$)|[A-Za-z0-9_-]{32,}(\\.[A-Za-z0-9]{1,8}(?:[/?&]|%2[Ff]|%3[Ff]|%26|$))) ${1}REDACTED${2}${3}" >> target
+          print "                request>headers>Referer regexp ([/=]|%2[Ff]|%3[Dd])(?:[A-Za-z0-9_-]{16,}([/?&]|%2[Ff]|%3[Ff]|%26|$)|[A-Za-z0-9_-]{32,}(\\.[A-Za-z0-9]{1,8}(?:[/?&]|%2[Ff]|%3[Ff]|%26|$))) ${1}REDACTED${2}${3}" >> target
+          print "                request>headers>Hx-Current-Url regexp ([/=]|%2[Ff]|%3[Dd])(?:[A-Za-z0-9_-]{16,}([/?&]|%2[Ff]|%3[Ff]|%26|$)|[A-Za-z0-9_-]{32,}(\\.[A-Za-z0-9]{1,8}(?:[/?&]|%2[Ff]|%3[Ff]|%26|$))) ${1}REDACTED${2}${3}" >> target
+          print "                resp_headers>Location regexp ([/=]|%2[Ff]|%3[Dd])(?:[A-Za-z0-9_-]{16,}([/?&]|%2[Ff]|%3[Ff]|%26|$)|[A-Za-z0-9_-]{32,}(\\.[A-Za-z0-9]{1,8}(?:[/?&]|%2[Ff]|%3[Ff]|%26|$))) ${1}REDACTED${2}${3}" >> target
           print "            }" >> target
           print "        }" >> target
           print "    }" >> target

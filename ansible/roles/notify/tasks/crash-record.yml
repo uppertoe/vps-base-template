@@ -1,0 +1,387 @@
+---
+# Crash record: ramoops (pstore in reserved RAM) so a panic leaves a readable
+# record after the panic guard's reboot. See defaults/main.yml for the design
+# and docs/09-recovery.md for the verification recipe.
+#
+# Nothing here reboots. A change to the kernel command line or the module
+# options is recorded as a pending reboot and alerted once; the next patch
+# window or an operator applies it.
+
+- name: Check the crash record sizes fit the region
+  ansible.builtin.assert:
+    that:
+      - (notify_crash_record_size_mib | int) >= 1
+      - (notify_crash_record_record_size_kib | int) >= 16
+      - (notify_crash_record_record_size_kib | int) + (notify_crash_record_console_size_kib | int)
+        <= (notify_crash_record_size_mib | int) * 1024
+      - ((notify_crash_record_record_size_kib | int) % 4) == 0
+      - ((notify_crash_record_console_size_kib | int) % 4) == 0
+    msg: >-
+      notify_crash_record_record_size_kib plus notify_crash_record_console_size_kib
+      must fit inside notify_crash_record_size_mib (in 4 KiB units), and the region
+      must be at least 1 MiB because the memmap= reservation is expressed in MiB.
+  when: notify_crash_record_enabled | bool
+
+- name: Install crash record scripts
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "/usr/local/bin/{{ item }}"
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - vps-crash-record-address
+    - vps-crash-record-check
+
+- name: Install vps-crash-record-check.service
+  ansible.builtin.copy:
+    src: vps-crash-record-check.service
+    dest: /etc/systemd/system/vps-crash-record-check.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd
+
+# systemd-pstore's compiled defaults on noble are already Storage=external and
+# Unlink=yes; stating them pins the behaviour the boot check relies on
+# (records copied to /var/lib/systemd/pstore and cleared from /sys/fs/pstore).
+- name: Create pstore.conf drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/pstore.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Pin systemd-pstore to archive records to /var/lib/systemd/pstore
+  ansible.builtin.copy:
+    dest: /etc/systemd/pstore.conf.d/vps-scaffold.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Managed by Ansible (notify role). Archive crash records to
+      # /var/lib/systemd/pstore (shipped by the hourly log export) and clear
+      # them from /sys/fs/pstore so the next boot starts clean.
+      [PStore]
+      Storage=external
+      Unlink=yes
+
+# ---------------------------------------------------------------------------
+# Real hosts only from here: the memory map, GRUB and kernel modules do not
+# exist inside the Molecule container.
+# ---------------------------------------------------------------------------
+
+- name: Configure the ramoops reservation
+  when:
+    - notify_crash_record_enabled | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+  tags:
+    - molecule-notest
+  block:
+    - name: Read the previously chosen crash record address
+      ansible.builtin.slurp:
+        src: /etc/vps-scaffold/crash-record.env
+      register: notify_crash_record_prev
+      failed_when: false
+
+    - name: Extract the previously chosen address
+      ansible.builtin.set_fact:
+        notify_crash_record_prev_addr: >-
+          {{ (((notify_crash_record_prev.content | default('') | b64decode)
+              | regex_findall('(?m)^CRASH_RECORD_MEM_ADDRESS=(0x[0-9a-fA-F]+)$')) or ['']) | first }}
+
+    # Reads /proc/iomem as root (unprivileged readers see zeros) and applies
+    # the selection rule; keeps the previous address while it remains valid.
+    - name: Choose the reserved region from the memory map
+      ansible.builtin.command:
+        argv: >-
+          {{ ['/usr/local/bin/vps-crash-record-address',
+              '--size', (notify_crash_record_size_mib | int * 1024 * 1024) | string]
+             + (['--keep', notify_crash_record_prev_addr] if notify_crash_record_prev_addr | length > 0 else []) }}
+      register: notify_crash_record_pick
+      changed_when: false
+      failed_when: false
+
+    - name: Refuse when no suitable RAM region exists
+      ansible.builtin.fail:
+        msg: >-
+          vps-crash-record-address could not choose a region for the crash record:
+          {{ notify_crash_record_pick.stderr | default('') | trim }}.
+          Set notify_crash_record_enabled: false to provision without a crash record,
+          or lower notify_crash_record_size_mib.
+      when: notify_crash_record_pick.rc != 0
+
+    - name: Set the crash record facts
+      ansible.builtin.set_fact:
+        notify_crash_record_addr: "{{ notify_crash_record_pick.stdout | trim }}"
+        notify_crash_record_mem_size_hex: "0x{{ '%x' | format(notify_crash_record_size_mib | int * 1024 * 1024) }}"
+        notify_crash_record_record_bytes: "{{ notify_crash_record_record_size_kib | int * 1024 }}"
+        notify_crash_record_console_bytes: "{{ notify_crash_record_console_size_kib | int * 1024 }}"
+
+    - name: Record the chosen region so later runs keep it
+      ansible.builtin.copy:
+        dest: /etc/vps-scaffold/crash-record.env
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Managed by Ansible (notify role). The RAM region ramoops keeps the
+          # kernel crash record in, chosen from this host's /proc/iomem. Read by
+          # vps-crash-record-check; kept stable across runs while it stays valid.
+          CRASH_RECORD_MEM_ADDRESS={{ notify_crash_record_addr }}
+          CRASH_RECORD_MEM_SIZE={{ notify_crash_record_mem_size_hex }}
+          CRASH_RECORD_RECORD_SIZE={{ notify_crash_record_record_bytes }}
+          CRASH_RECORD_CONSOLE_SIZE={{ notify_crash_record_console_bytes }}
+
+    - name: Load ramoops at boot
+      ansible.builtin.copy:
+        dest: /etc/modules-load.d/vps-scaffold-ramoops.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Managed by Ansible (notify role). Crash record backend for pstore.
+          ramoops
+
+    # systemd-pstore checks /sys/fs/pstore for records when it starts and is
+    # skipped if the directory is empty, so it must start after the backend is
+    # loaded or the records sit unarchived until the following boot. This is
+    # the same wiring systemd ships for efi_pstore.
+    - name: Create systemd-pstore drop-in directory
+      ansible.builtin.file:
+        path: /etc/systemd/system/systemd-pstore.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Start systemd-pstore after ramoops is loaded
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/systemd-pstore.service.d/vps-scaffold-ramoops.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Managed by Ansible (notify role). The ramoops backend must be loaded
+          # before systemd-pstore looks in /sys/fs/pstore.
+          [Unit]
+          Wants=modprobe@ramoops.service
+          After=modprobe@ramoops.service
+      notify: Reload systemd
+
+    - name: Create grub drop-in directory
+      ansible.builtin.file:
+        path: /etc/default/grub.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    # The module options and the kernel command line are written together and
+    # read back together. If any step fails, the rescue removes both files,
+    # regenerates grub.cfg and confirms memmap= is gone, so a malformed command
+    # line can never survive to a reboot.
+    - name: Write and verify the reservation, backing it out on any failure
+      block:
+        # ramoops is a module on Ubuntu's generic kernel (CONFIG_PSTORE_RAM=m),
+        # so its parameters go through modprobe.d and only the reservation is on
+        # the command line. max_reason=2 dumps oopses as well as panics (the
+        # documented replacement for dump_oops=1). dyndbg=+p turns on the
+        # module's debug lines, which is how the probe says whether it found its
+        # own header from the previous boot; that is the persistence proof the
+        # boot check reads, and it costs a handful of lines per boot.
+        - name: Compose the ramoops module options
+          ansible.builtin.set_fact:
+            notify_crash_record_modprobe_options: >-
+              mem_address={{ notify_crash_record_addr }}
+              mem_size={{ notify_crash_record_mem_size_hex }}
+              record_size={{ notify_crash_record_record_bytes }}
+              console_size={{ notify_crash_record_console_bytes }}
+              ftrace_size=0 pmsg_size=0 max_reason=2 dyndbg=+p
+
+        - name: Set ramoops module options
+          ansible.builtin.copy:
+            dest: /etc/modprobe.d/vps-scaffold-ramoops.conf
+            owner: root
+            group: root
+            mode: "0644"
+            content: |
+              # Managed by Ansible (notify role). Matches the memmap= reservation in
+              # /etc/default/grub.d/99-vps-scaffold-crash-record.cfg.
+              options ramoops {{ notify_crash_record_modprobe_options }}
+          register: notify_crash_record_modprobe
+
+        - name: Read the module options back
+          ansible.builtin.command:
+            argv:
+              - grep
+              - -c
+              - -F
+              - "options ramoops mem_address={{ notify_crash_record_addr }} mem_size={{ notify_crash_record_mem_size_hex }} "
+              - /etc/modprobe.d/vps-scaffold-ramoops.conf
+          register: notify_crash_record_modprobe_check
+          changed_when: false
+          failed_when: false
+
+        - name: Assert the module options name the chosen region
+          ansible.builtin.assert:
+            that:
+              - notify_crash_record_modprobe_check.rc == 0
+              - (notify_crash_record_modprobe_check.stdout | trim | int) == 1
+            msg: >-
+              /etc/modprobe.d/vps-scaffold-ramoops.conf does not carry
+              mem_address={{ notify_crash_record_addr }} mem_size={{ notify_crash_record_mem_size_hex }}.
+
+        # The $ in memmap=nn$ss must reach the kernel. The fragment is sourced by
+        # grub-mkconfig (a shell), which turns \\\$ inside double quotes into \$;
+        # grub.cfg then holds memmap=1M\$0x..., which GRUB's own parser reads as
+        # a literal $ (unescaped, GRUB would expand $0 as a positional parameter
+        # and pass memmap=1Mx... to the kernel). The read-back below proves it.
+        - name: Compose the kernel command line additions
+          ansible.builtin.set_fact:
+            notify_crash_record_memmap: "memmap={{ notify_crash_record_size_mib | int }}M\\${{ notify_crash_record_addr }}"
+            notify_crash_record_cmdline: >-
+              memmap={{ notify_crash_record_size_mib | int }}M\\\${{ notify_crash_record_addr }}
+              pstore.kmsg_bytes={{ notify_crash_record_kmsg_bytes | int }}{{
+              (' log_buf_len=' ~ notify_crash_record_log_buf_len)
+              if (notify_crash_record_log_buf_len | default('') | length > 0) else '' }}
+
+        - name: Reserve the crash record region on the kernel command line
+          ansible.builtin.copy:
+            dest: /etc/default/grub.d/99-vps-scaffold-crash-record.cfg
+            owner: root
+            group: root
+            mode: "0644"
+            content: |
+              GRUB_CMDLINE_LINUX="$GRUB_CMDLINE_LINUX {{ notify_crash_record_cmdline }}"
+          register: notify_crash_record_grub
+
+        # A task, not a handler: the read-back assertion below must see the
+        # fresh grub.cfg in this same pass, and flushing handlers here would
+        # also fire every other role's pending handler mid-role.
+        - name: Regenerate grub.cfg for the crash record reservation  # noqa: no-handler
+          ansible.builtin.command: update-grub
+          when: notify_crash_record_grub.changed
+          changed_when: true
+
+        # The exact token GRUB must hold: the escaped $, the configured size
+        # and the chosen address, followed by a space so a longer address
+        # cannot match a shorter one.
+        - name: Read the reservation back from grub.cfg
+          ansible.builtin.command:
+            argv:
+              - grep
+              - -c
+              - -F
+              - "{{ notify_crash_record_memmap }} pstore.kmsg_bytes={{ notify_crash_record_kmsg_bytes | int }}"
+              - "{{ notify_crash_record_grub_cfg }}"
+          register: notify_crash_record_grub_check
+          changed_when: false
+          failed_when: false
+
+        - name: Assert GRUB kept the memmap= reservation quoted for the kernel
+          ansible.builtin.assert:
+            that:
+              - notify_crash_record_grub_check.rc == 0
+              - (notify_crash_record_grub_check.stdout | trim | int) > 0
+            msg: >-
+              {{ notify_crash_record_grub_cfg }} does not contain the literal
+              {{ notify_crash_record_memmap }} that GRUB needs to pass
+              memmap={{ notify_crash_record_size_mib | int }}M${{ notify_crash_record_addr }}
+              to the kernel.
+
+        # Handlers fire even after a failed play (force_handlers), so the
+        # pending-reboot alert is raised only once everything above has passed.
+        - name: Flag the pending reboot when the reservation changed
+          ansible.builtin.debug:
+            msg: "The crash record reservation changed; a reboot applies it."
+          changed_when: notify_crash_record_grub.changed or notify_crash_record_modprobe.changed
+          notify: Record that the crash record needs a reboot
+
+      rescue:
+        - name: Back out the crash record files
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - /etc/default/grub.d/99-vps-scaffold-crash-record.cfg
+            - /etc/modprobe.d/vps-scaffold-ramoops.conf
+
+        - name: Regenerate grub.cfg without the reservation (backout)
+          ansible.builtin.command: update-grub
+          register: notify_crash_record_backout_grub
+          changed_when: true
+          failed_when: false
+
+        - name: Confirm grub.cfg no longer mentions memmap=
+          ansible.builtin.command:
+            argv:
+              - grep
+              - -c
+              - memmap=
+              - "{{ notify_crash_record_grub_cfg }}"
+          register: notify_crash_record_backout_check
+          changed_when: false
+          failed_when: false
+
+        - name: Fail the play because the reservation was backed out
+          ansible.builtin.fail:
+            msg: >-
+              The crash record reservation could not be written and verified
+              ({{ ansible_failed_task.name | default('unknown task') }}:
+              {{ ansible_failed_result.msg | default('no message') }}). It has
+              been backed out: the GRUB fragment and the ramoops module options
+              were removed and grub.cfg was regenerated
+              ({{ 'update-grub succeeded' if (notify_crash_record_backout_grub.rc | default(1)) == 0
+                  else 'update-grub FAILED: ' ~ (notify_crash_record_backout_grub.stderr | default('')) }}).
+              {{ notify_crash_record_grub_cfg }} now contains
+              {{ notify_crash_record_backout_check.stdout | default('?') | trim }} line(s) with memmap=
+              {{ '(clean; the next reboot is unaffected)' if (notify_crash_record_backout_check.rc | default(0)) == 1
+                 else '(NOT clean: inspect the linux lines in grub.cfg before any reboot)' }}.
+              No reboot has been scheduled.
+
+    - name: Enable systemd-pstore and the crash record boot check
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        enabled: true
+        daemon_reload: true
+      loop:
+        - systemd-pstore.service
+        - vps-crash-record-check.service
+
+# ---------------------------------------------------------------------------
+# Opting out removes the reservation again (effective at the next reboot).
+# ---------------------------------------------------------------------------
+
+- name: Remove the ramoops reservation
+  when:
+    - not (notify_crash_record_enabled | bool)
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+  tags:
+    - molecule-notest
+  block:
+    - name: Remove crash record configuration files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/default/grub.d/99-vps-scaffold-crash-record.cfg
+        - /etc/modprobe.d/vps-scaffold-ramoops.conf
+        - /etc/modules-load.d/vps-scaffold-ramoops.conf
+        - /etc/systemd/system/systemd-pstore.service.d/vps-scaffold-ramoops.conf
+        - /etc/vps-scaffold/crash-record.env
+      register: notify_crash_record_removed
+      notify: Reload systemd
+
+    - name: Regenerate grub.cfg without the reservation  # noqa: no-handler
+      ansible.builtin.command: update-grub
+      when: notify_crash_record_removed.changed
+      changed_when: true
+
+    - name: Disable the crash record boot check
+      ansible.builtin.systemd:
+        name: vps-crash-record-check.service
+        enabled: false
+        daemon_reload: true
+      failed_when: false

@@ -33,9 +33,13 @@ log_export_state_dir: /var/lib/log-export
 # by volume name suffix (compose prefixes volumes with the project name, so
 # caddy_logs is really <project>_caddy_logs); a path that still cannot be
 # found is reported in the export log and in the archive's EXTRA_PATHS.txt.
+# /var/lib/systemd/pstore holds the kernel crash records systemd-pstore
+# archives at boot (ramoops, notify role): the one record a panic leaves, so
+# it ships within the hour rather than waiting for someone to read the box.
 log_export_extra_paths:
   - /var/log/audit
   - /var/lib/docker/volumes/caddy_logs/_data
+  - /var/lib/systemd/pstore
 
 # Credentials for the dedicated write-only IAM user. Set in the (gitignored)
 # inventory; written to /etc/vps-scaffold/log-export.env mode 0600.

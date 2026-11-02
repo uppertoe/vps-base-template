@@ -43,13 +43,20 @@ your detection layer is broken.
 ### When the box stopped without explaining itself
 
 A hard wedge or kernel panic writes nothing to disk: the journal simply ends
-mid-sentence, and pstore has no backend on a BIOS KVM guest. Two places still
-hold evidence, and both are read before rebooting, because a reboot loses them.
+mid-sentence. Three places hold evidence.
 
+- **The crash record.** The notify role reserves a region of RAM for
+  `ramoops`, so a panic (including the hung-task panic the panic guard raises
+  on purpose) is kept across the guest's own reboot and archived to
+  `/var/lib/systemd/pstore` at the next boot, from where the hourly log export
+  ships it. The boot sends "Crash record captured" over ntfy when there is one.
+  See docs/09 §"The crash record" for reading it and for what the record
+  cannot survive (a power cycle or a provider-side reset).
 - **The provider's console viewer.** The scaffold puts the kernel console on
-  the serial port (`baseline_enable_serial_console`), so a panic message
-  survives on the console even when the filesystem is unreachable. Open it in
-  the provider panel and screenshot whatever is on screen.
+  the serial port (`baseline_enable_serial_console`), so while the box is still
+  sitting at the panic the message is on the console even when the filesystem
+  is unreachable. Open it in the provider panel and screenshot whatever is on
+  screen before rebooting, because the reboot clears the screen.
 - **Anything that samples independently of journald** — `atop` records every
   ten minutes under `/var/log/atop/`, `sar` under `/var/log/sysstat/`, and the
   Caddy access log lives in its own volume. Comparing the last entry in each

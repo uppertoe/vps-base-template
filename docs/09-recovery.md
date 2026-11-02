@@ -144,8 +144,10 @@ crash. Both transitions announce themselves over ntfy.
 
 So a single "Auto-reboot disarmed" alert means the host crashed, came back by
 itself, and is now deliberately unprotected — treat it as a summons, not as an
-all-clear. **Read the console in the provider panel before rebooting**: the
-serial console is the only place a panic message survives.
+all-clear. If the box is still down, **read the console in the provider panel
+before rebooting**: while the machine sits at the panic, the console is where
+the panic text is. If the box has come back, the crash record below is where
+the same text has been kept.
 
     systemctl status vps-panic-guard           # armed this boot?
     sysctl kernel.panic kernel.panic_on_oops   # 0 means disarmed
@@ -156,9 +158,94 @@ the failure actually seen here. On 2026-09-22 prod-rch-vps kept serving cached
 pages while every disk write blocked for three and a half hours: nothing
 panicked, nothing was logged, and the box had to be reset from the panel.
 Tasks stuck in D state past `hung_task_timeout_secs` is precisely that
-condition, and it raises a real panic — which the serial console captures and
+condition, and it raises a real panic, which the crash record captures and
 the guard reboots out of, once. Turn it off only if legitimate I/O on the host
 regularly blocks that long.
+
+### The crash record
+
+The panic guard's reboot has a cost: the panic text goes to the console, and
+nothing records the console, so ten seconds later the cause is gone. Three
+stops between September and November 2026 left no evidence for that reason.
+The notify role therefore keeps the record on the box itself. `ramoops` is the
+pstore backend that writes the kernel's last messages into a region of RAM
+reserved from the kernel's own use (`memmap=` on the command line). A guest's
+own reboot does not normally clear its RAM, so the region is still there when
+the next kernel starts; `systemd-pstore` copies the records to
+`/var/lib/systemd/pstore` early in that boot, the hourly log export ships that
+directory to the log bucket, and `vps-crash-record-check` sends "Crash record
+captured" over ntfy with the file names and the lines that name the fault.
+`kernel.panic_print=31` makes the kernel append the task list and the memory
+state to the panic text, so the record is enough to act on.
+
+The region is chosen on the target from `/proc/iomem` (the top 1 MiB of the
+highest System RAM range below 4 GiB, aligned to 1 MiB and clear of the kernel
+image), written to `/etc/vps-scaffold/crash-record.env`, and kept on later
+runs. The reservation only takes effect when the kernel boots with it, and the
+play never reboots: it writes the GRUB fragment, runs `update-grub`, reads
+the exact `memmap=1M\$0x...` token back from `grub.cfg` (and, if that or the
+module options fail to verify, removes both files, regenerates `grub.cfg`,
+confirms `memmap=` is gone and fails the play, so a malformed command line
+never reaches a reboot), records the pending reboot under `/var/lib/vps-notify/crash-record/` and alerts once
+("Reboot required for crash record"). The weekly digest repeats the reminder
+until the next patch-window or operator reboot applies it.
+
+**Confirming it after the next reboot.** Three things to check on the box:
+
+    cat /proc/cmdline | tr ' ' '\n' | grep -E 'memmap|pstore|log_buf'
+    cat /sys/module/ramoops/parameters/mem_address      # decimal; matches crash-record.env
+    cat /sys/module/pstore/parameters/backend           # ramoops
+    journalctl -b -k -g ramoops                         # "using 0x100000@0x..." plus the header verdict
+    sudo ls -la /sys/fs/pstore /var/lib/systemd/pstore  # empty until a panic
+
+The first boot with the reservation can only report that the region is live
+(`vps-crash-record-check` sends "Crash record active" and clears the pending
+marker). Whether the region survives a reboot on this hypervisor is proven at
+the second boot: the module says `found existing empty buffer` when it finds
+the header it wrote last time, and `no valid data in buffer` when the region
+came up blank. The check sends one message either way ("Crash record survives
+a reboot", or "did NOT survive"), and the second is the signal to stop relying
+on the record and reconsider a network console.
+
+**Testing a real panic.** Not on the production box. `kernel.sysrq` is 0
+here, and even a controlled panic takes the services down for the reboot and
+spends the panic guard's one strike. Test on a throwaway VM instead: a noble
+guest under QEMU/KVM or libvirt on a laptop, with the notify role applied (or
+the GRUB fragment and `/etc/modprobe.d/vps-scaffold-ramoops.conf` copied in by
+hand), rebooted twice so the second boot reports `found existing empty buffer`,
+then
+
+    sudo sysctl -w kernel.sysrq=1
+    echo c | sudo tee /proc/sysrq-trigger
+
+After the guest comes back, `/var/lib/systemd/pstore/<timestamp>/dmesg.txt`
+holds the panic, its backtrace and the task list, and the ntfy message (if the
+VM has a token) reads as it would from production. That proves the mechanism;
+it does not prove the provider's hypervisor preserves the region, which only
+the second-boot verdict above can.
+
+**Reading a captured record.** The alert names the files. On the box:
+
+    sudo ls -R /var/lib/systemd/pstore
+    sudo less /var/lib/systemd/pstore/*/dmesg.txt     # or the dmesg-ramoops-N parts
+
+The same files are in the log bucket within the hour under
+`<host>/<year>/logs-<host>-<stamp>.tar.zst` (`files/var/lib/systemd/pstore/`),
+so the record is readable even if the box is rebuilt. Copy the record off the
+box before analysing it at length; parsing on a 2 GB host has wedged it before.
+The record is the newest part of the kernel log, so the panic banner and the
+`Call Trace` sit before the task list that `panic_print` appends, and a
+hung-task panic shows the blocked task twice: once in the watchdog's own report
+and again, in D state, in the task list.
+
+**What it cannot do.** A power cycle, a provider-side reset or a host failure
+never preserves guest RAM, so those stops still leave only the console. A
+hypervisor may also clear guest memory on every reboot; the second-boot
+verdict tells you whether this one does. The kernel log buffer is raised to
+1 MiB (`log_buf_len=1M`) so the task list does not push the panic message out
+of the buffer before it is dumped, and the whole 1 MiB region is dump space
+(`pstore.kmsg_bytes` matches it); a panic that needs more than one 256 KiB
+record takes several slots, newest first.
 
 ## Failure modes this covers
 

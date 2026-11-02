@@ -97,8 +97,15 @@ notify_onfailure_units:
 # See /usr/local/bin/vps-panic-guard and notify.env for the tunables.
 notify_panic_guard_enabled: true
 # Seconds the kernel waits before rebooting itself. Not 1: the panic text has
-# to clear the serial console first, and that is the only record of the cause.
+# to clear the serial console first, and until the crash record below is live
+# that console is the only record of the cause.
 notify_panic_guard_reboot_secs: 10
+# Bitmask of what the kernel prints on top of the panic message: 1 all tasks
+# with their stacks, 2 memory information, 4 timers, 8 lock state, 16 ftrace.
+# 31 is everything short of replaying the whole log (bit 32), which would
+# overflow the record. Applied by vps-panic-guard whether armed or disarmed:
+# the information is wanted in both cases.
+notify_panic_guard_panic_print: 31
 # Automatic reboots allowed per fault before the box is left down for
 # inspection. 1 means a crash loop can never happen.
 notify_panic_guard_max_reboots: 1
@@ -110,7 +117,52 @@ notify_panic_guard_on_softlockup: true
 # (prod-rch-vps 2026-09-22 — the host kept serving cached pages while every
 # disk write blocked for 3.5 h, so nothing panicked and nothing was logged).
 # Tasks stuck in D state past hung_task_timeout_secs is exactly that, and it
-# raises a real panic, so the serial console captures it and the guard reboots
+# raises a real panic, so the crash record captures it and the guard reboots
 # once. The cost is a spurious reboot if legitimate I/O ever blocks that long,
 # which on a small VPS is itself worth knowing about.
 notify_panic_guard_on_hung_task: true
+
+# Crash record: the panic guard's missing half. A panic writes to the console
+# and nothing records the console, so the ten-second reboot erased the cause
+# of every stop so far. ramoops keeps the kernel's last messages (the panic,
+# the backtrace, and with panic_print the task list and memory state) in a
+# region of RAM reserved from the kernel's own use; on a KVM guest that region
+# normally survives the guest's reboot, and systemd-pstore archives it to
+# /var/lib/systemd/pstore early in the next boot, where the hourly log export
+# picks it up. vps-crash-record-check reports over ntfy.
+#
+# The region's address is chosen on the target from /proc/iomem (the top of
+# the highest System RAM range below 4 GiB, 1 MiB aligned, clear of the kernel
+# image) and recorded in /etc/vps-scaffold/crash-record.env so it is stable
+# across runs. The reservation goes on the kernel command line through a GRUB
+# fragment and takes effect at the NEXT reboot; the role never reboots, it
+# records the requirement and alerts once.
+#
+# Limits, stated plainly: a power cycle or a provider-side reset never
+# preserves RAM, and a hypervisor may clear guest memory on reboot. The first
+# scheduled reboot after rollout shows which ("Crash record survives a
+# reboot" or "did NOT survive" over ntfy).
+notify_crash_record_enabled: true
+# Reserved region in MiB. Everything in it is dump space: the record slots.
+notify_crash_record_size_mib: 1
+# Size of one dump record. The region holds size / record_size records; a
+# panic that needs more than one record (the task list is long) takes several
+# slots, newest first, and overwrites the oldest when the region is full.
+notify_crash_record_record_size_kib: 256
+# Console slice. Ubuntu's generic kernel is built without CONFIG_PSTORE_CONSOLE,
+# so a console slice would be reserved and never written; it stays 0 unless
+# the kernel is built with it. The dump record already holds the console text,
+# because the console text IS the kernel log.
+notify_crash_record_console_size_kib: 0
+# How much of the kernel log a panic dumps into the record (pstore.kmsg_bytes;
+# the kernel's default is 10 KiB, which would lose the backtrace under the
+# task list). The whole region by default.
+notify_crash_record_kmsg_bytes: "{{ notify_crash_record_size_mib | int * 1024 * 1024 }}"
+# Kernel log buffer size on the command line (log_buf_len=). The default
+# 256 KiB cannot hold the panic message plus the task list of a host running
+# twenty containers, and the dump can only save what the buffer still holds.
+# Empty leaves the kernel's default.
+notify_crash_record_log_buf_len: 1M
+# Where update-grub writes the menu; the play reads it back to prove the
+# memmap= reservation came through GRUB's $ quoting intact.
+notify_crash_record_grub_cfg: /boot/grub/grub.cfg

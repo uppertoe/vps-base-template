@@ -351,6 +351,26 @@ app.{$DOMAIN} {
 }
 EOF
 
+# route-groups.tsv: a guard group is two columns, a scaffold-groups marker
+# group carries "declared" as a third; a group that is both appears in both
+# forms.
+render_case groups-declared pass <<'EOF'
+# scaffold-groups: insights-admins editors -- the app's admin pages
+app.{$DOMAIN} {
+	import protected_groups "editors" app:8080
+}
+EOF
+for row in $'editors\tapp.{$DOMAIN}' $'editors\tapp.{$DOMAIN}\tdeclared' $'insights-admins\tapp.{$DOMAIN}\tdeclared'; do
+  if grep -qxF -- "$row" "$work/groups-declared-out/route-groups.tsv"; then
+    pass "groups: lists $(printf '%s' "$row" | tr '\t' ' ')"
+  else
+    fail "groups: lacks the row '$row'; table is:"; cat "$work/groups-declared-out/route-groups.tsv" >&2
+  fi
+done
+if grep -qxF -- $'insights-admins\tapp.{$DOMAIN}' "$work/groups-declared-out/route-groups.tsv"; then
+  fail "groups: a marker-only group must not appear in the two-column guard form"
+fi
+
 # The marker belongs inside a site.
 render_case marker-outside-site fail 'belongs inside a site block' <<'EOF'
 # scaffold-lint: open-path -- /healthz: the health check

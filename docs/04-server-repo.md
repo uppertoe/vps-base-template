@@ -201,7 +201,11 @@ not report them as unused:
 roster.{$DOMAIN} {
 ```
 
-They are listed in `.generated/caddy/route-groups.tsv` against the site.
+They are listed in `.generated/caddy/route-groups.tsv` against the site with
+`declared` as a third tab-separated field, where a group a guard requires has
+two fields only. The auth service uses the third field to tell an app's own
+admin group from a route gate, and refuses a declared group as the target of a
+break-glass card. A group that is both is listed twice, once in each form.
 
 ### Static-asset caching (fingerprint to cache forever)
 

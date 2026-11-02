@@ -77,10 +77,14 @@ deploy_allowed_signers: []
 # repo by any account or app with write access. It compensates for missing
 # branch protection; it does not replace GitHub account security.
 deploy_trust_github_merges: true
-# Fingerprint the downloaded web-flow key must carry, so a tampered download
-# cannot plant a different trust anchor. GitHub's published key:
-# https://docs.github.com/en/authentication/managing-commit-signature-verification/about-commit-signature-verification
-deploy_github_webflow_fingerprint: "5DE3E0509C47EA3CF04A42D34AEE18F83AFDEB23"
+# Primary fingerprints the downloaded web-flow key file may contribute to the
+# trust anchor. Only these are imported; any other key in the file is ignored
+# and any other key already in the root keyring is removed. GitHub's published
+# keys: https://docs.github.com/en/authentication/managing-commit-signature-verification/about-commit-signature-verification
+# The 2017 key (5DE3 ... DEB23) expired on 2024-01-16 and is deliberately not
+# listed; the key below has signed every web-flow commit since then.
+deploy_github_webflow_fingerprints:
+  - "968479A1AFF927E37D1A566BB5690EEEBB952194"
 # Weekly awareness alert when the scaffold submodule is behind upstream main.
 scaffold_drift_check: true
 scaffold_drift_schedule: "Mon *-*-* 07:05:00"

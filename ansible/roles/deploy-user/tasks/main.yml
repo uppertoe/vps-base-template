@@ -138,6 +138,20 @@
     group: root
     mode: "0750"
 
+# vps-git-heal hands back anything under the checkout's .git that a hand-run
+# root git has taken (auto-deploy and vps-deploy call it first); vps-git is the
+# administrator's way to run git in the checkout as the deploy account.
+- name: Install the checkout repair helper and the administrator git wrapper
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/usr/local/sbin/{{ item }}"
+    owner: root
+    group: root
+    mode: "0750"
+  loop:
+    - vps-git-heal
+    - vps-git
+
 # In restricted mode docker (and so `compose pull`) runs as root inside
 # vps-deploy, but private-registry credentials were logged in as the deploy
 # user (bootstrap flow) and live in ~deploy/.docker/config.json — root's pull
@@ -251,30 +265,37 @@
     - deploy_verify_signature | bool
     - deploy_trust_github_merges | bool
 
-# Pin the downloaded trust anchor to GitHub's published fingerprint before it
-# is imported anywhere; a tampered download must fail the play, not widen trust.
-- name: Read the primary fingerprint of the downloaded web-flow key
+# Pin the downloaded trust anchor to GitHub's published fingerprints before any
+# of it is imported: a tampered download must fail the play, not widen trust.
+# The file GitHub serves carries more than one key (its 2017 key, expired in
+# January 2024, and the key that signs merges today), and an earlier version of
+# this check compared only the first fingerprint in the file, so a second key
+# was imported unexamined. Now every primary fingerprint is read, at least one
+# must be on the allow-list, and only allow-listed keys are imported; anything
+# else already in the root keyring is removed.
+- name: Read every primary fingerprint in the downloaded web-flow key file
   ansible.builtin.shell:
     cmd: >-
       set -o pipefail;
       gpg --batch --with-colons --show-keys /etc/vps-scaffold/github-web-flow.gpg
-      | awk -F: '/^fpr:/ { print $10; exit }'
+      | awk -F: '/^pub:/ { want = 1; next } /^fpr:/ && want { print $10; want = 0 }'
     executable: /bin/bash
-  register: webflow_fpr
+  register: webflow_fprs
   changed_when: false
   when:
     - deploy_verify_signature | bool
     - deploy_trust_github_merges | bool
 
-- name: Refuse a web-flow key with an unexpected fingerprint
+- name: Refuse a web-flow key file that carries none of the allow-listed keys
   ansible.builtin.assert:
     that:
-      - webflow_fpr.stdout | trim == deploy_github_webflow_fingerprint
+      - (webflow_fprs.stdout_lines | intersect(deploy_github_webflow_fingerprints)) | length > 0
     fail_msg: >-
-      /etc/vps-scaffold/github-web-flow.gpg does not carry fingerprint
-      {{ deploy_github_webflow_fingerprint }}. Refusing to import it as a deploy
-      trust anchor; compare with GitHub's published key and update
-      deploy_github_webflow_fingerprint only if GitHub has rotated it.
+      /etc/vps-scaffold/github-web-flow.gpg carries {{ webflow_fprs.stdout_lines | join(', ') }},
+      none of which is in deploy_github_webflow_fingerprints
+      ({{ deploy_github_webflow_fingerprints | join(', ') }}). Refusing to import it as a
+      deploy trust anchor; compare with GitHub's published keys and update the
+      allow-list only if GitHub has rotated them.
     quiet: true
   when:
     - deploy_verify_signature | bool
@@ -291,13 +312,39 @@
     - deploy_verify_signature | bool
     - deploy_trust_github_merges | bool
 
-- name: Import GitHub web-flow key into the root-owned keyring
-  ansible.builtin.command:
-    cmd: gpg --batch --import /etc/vps-scaffold/github-web-flow.gpg
-  environment:
-    GNUPGHOME: /etc/vps-scaffold/gnupg
+# Import ONLY the allow-listed keys: the whole file goes into a throwaway
+# keyring, the allowed fingerprints are exported from there into the root
+# keyring, and any primary key in the root keyring that is not allow-listed is
+# deleted (this retires the expired 2017 key on hosts that imported it).
+- name: Import the allow-listed web-flow keys and retire any other
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      tmp="$(mktemp -d)"
+      trap 'rm -rf "$tmp"' EXIT
+      chmod 700 "$tmp"
+      GNUPGHOME="$tmp" gpg --batch --quiet --import /etc/vps-scaffold/github-web-flow.gpg 2>/dev/null
+      changed=0
+      for fpr in {{ deploy_github_webflow_fingerprints | join(' ') }}; do
+        if GNUPGHOME="$tmp" gpg --batch --with-colons --list-keys "$fpr" >/dev/null 2>&1; then
+          if ! GNUPGHOME=/etc/vps-scaffold/gnupg gpg --batch --with-colons --list-keys "$fpr" >/dev/null 2>&1; then
+            GNUPGHOME="$tmp" gpg --batch --export "$fpr" | GNUPGHOME=/etc/vps-scaffold/gnupg gpg --batch --quiet --import 2>/dev/null
+            echo "imported $fpr"; changed=1
+          fi
+        fi
+      done
+      GNUPGHOME=/etc/vps-scaffold/gnupg gpg --batch --with-colons --list-keys 2>/dev/null \
+        | awk -F: '/^pub:/ { want = 1; next } /^fpr:/ && want { print $10; want = 0 }' \
+        | while read -r present; do
+            case " {{ deploy_github_webflow_fingerprints | join(' ') }} " in
+              *" $present "*) ;;
+              *) GNUPGHOME=/etc/vps-scaffold/gnupg gpg --batch --yes --delete-keys "$present" 2>/dev/null && echo "deleted $present" ;;
+            esac
+          done
+      exit 0
+    executable: /bin/bash
   register: webflow_import
-  changed_when: "'imported:' in webflow_import.stderr"
+  changed_when: "'imported ' in webflow_import.stdout or 'deleted ' in webflow_import.stdout"
   when:
     - deploy_verify_signature | bool
     - deploy_trust_github_merges | bool

@@ -126,6 +126,8 @@
         - /usr/local/sbin/vps-deploy
         - /usr/local/sbin/vps-app-manage
         - /usr/local/sbin/vps-app-logs
+        - /usr/local/sbin/vps-git
+        - /usr/local/sbin/vps-git-heal
         - /etc/vps-scaffold/app-manage.allow
 
     - name: Assert wrappers are installed root-owned and non-writable
@@ -171,6 +173,15 @@
           # depend on a container uid matching the deploy user's).
           - "'chmod o+r' in (vps_deploy_raw.content | b64decode)"
         msg: "vps-deploy is missing the checkout permission-normalisation passes"
+
+    - name: Assert wrapper compares the tree as root against a private index copy
+      ansible.builtin.assert:
+        that:
+          - "'vps-git-heal' in (vps_deploy_raw.content | b64decode)"
+          - "'GIT_INDEX_FILE=\"$root_tmp/index\"' in (vps_deploy_raw.content | b64decode)"
+          - "'diff-index --name-status HEAD' in (vps_deploy_raw.content | b64decode)"
+          - "'git status --porcelain' not in (vps_deploy_raw.content | b64decode)"
+        msg: "vps-deploy must run its clean-tree test as root against a copied index, never as the deploy user"
 
     # -------------------------------------------------------------------------
     # SSH hardening

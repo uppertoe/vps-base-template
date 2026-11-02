@@ -11,3 +11,10 @@ paths = [
   '''.*\.env\.example$''',
   '''ansible/inventory/production\.example$''',
 ]
+# GitHub's published web-flow signing key fingerprints: public key material,
+# named in the deploy-user defaults and UPGRADING.md as the trust anchor's
+# allow-list. The generic-api-key rule otherwise flags the 40 hex characters.
+regexes = [
+  '''968479A1AFF927E37D1A566BB5690EEEBB952194''',
+  '''5DE3E0509C47EA3CF04A42D34AEE18F83AFDEB23''',
+]

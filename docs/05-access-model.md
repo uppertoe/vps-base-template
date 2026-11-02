@@ -119,6 +119,21 @@ Install root-owned, audited entrypoints such as:
 These wrappers become the only supported way for `deploy` to trigger app-level
 container operations.
 
+Two further root-owned helpers serve the administrator rather than the deploy
+account:
+
+- `/usr/local/sbin/vps-git` runs git in `/opt/deploy` as the deploy account,
+  with optional locks off, so `vps-git status --short` or `vps-git log` never
+  leaves a root-owned file behind. Plain `sudo git` in the checkout is the one
+  known way to break the next deploy: git refreshes the index and rewrites it
+  as root, and the deploy account can no longer open it (seen on 2026-11-01 and
+  again on 2026-11-02).
+- `/usr/local/sbin/vps-git-heal` hands back to the deploy account anything
+  under `/opt/deploy/.git` that root has taken, removes a stale root-owned lock
+  file, logs the repair and announces it over ntfy. `auto-deploy` and
+  `vps-deploy` run it first, so a hand-run mistake no longer stops the next
+  deploy; the alert still tells the operator it happened.
+
 ### Deploy entrypoint
 
 `~/deploy` would remain the human-facing command, but instead of relying on
@@ -375,17 +390,25 @@ config and keyring are not read, and the verifier programs, hooks path and
 replace-ref handling are pinned on the command line so the deploy-owned
 repository config cannot choose them), and refuses to deploy a HEAD it cannot
 verify. Around that gate the wrapper also requires HEAD to equal the fetched
-`origin/<branch>`, reads the index flags as root so a skip-worktree bit cannot
-hide an edited file from the clean-tree check, and refuses a project `.env`
-that sets any `COMPOSE_*` variable (the 2026-10-31 review). The role
+`origin/<branch>`, refuses a project `.env` that sets any `COMPOSE_*` variable
+(the 2026-10-31 review), and makes every comparison with the checkout as root:
+the working tree is compared with HEAD, the scaffold submodule's checkout with
+the commit HEAD records and its own tree with that commit, the index flags are
+read so a skip-worktree bit cannot hide an edited file, and each hook is
+checked for being tracked, all with an isolated git configuration and a
+private copy of the index that absorbs the stat refresh (the 2026-11-02
+review: the deploy account's own git configuration can no longer change the
+answer, and no root-side read writes to the deploy-owned repository). The role
 provisions two root-owned trust anchors:
 
 - `/etc/ssh/allowed_signers` from `deploy_allowed_signers` — the
   operator's SSH signing key(s), for direct pushes to main.
 - GitHub's web-flow GPG key (`deploy_trust_github_merges`, default true),
-  downloaded at provision time, checked against its published fingerprint
-  (`deploy_github_webflow_fingerprint`) and imported into
-  `/etc/vps-scaffold/gnupg` — covers every commit GitHub's own merge
+  downloaded at provision time. Only the keys whose primary fingerprints are
+  on the allow-list `deploy_github_webflow_fingerprints` are imported into
+  `/etc/vps-scaffold/gnupg`, and any other key found there is removed; the
+  file GitHub serves also carries its 2017 key, expired in January 2024, which
+  is deliberately not listed. This covers every commit GitHub's own merge
   machinery creates: web-UI merges and API merges, which is what Renovate
   automerge produces.
 

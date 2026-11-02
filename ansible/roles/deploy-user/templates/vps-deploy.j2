@@ -15,6 +15,10 @@ umask 022
 
 cd /opt/deploy
 
+# Hand back anything under .git that a hand-run root git has taken (a root-owned
+# index stops the deploy account's pull). Logged and announced by the helper.
+/usr/local/sbin/vps-git-heal || true
+
 # Never deploy while apt is mid-flight. On prod-rch-vps (2026-09-05) an
 # auto-deploy started during a docker-ce/containerd upgrade: containerd refused
 # the freshly created Authelia container ("failed to start shim") and it sat
@@ -67,6 +71,41 @@ runuser -u {{ deploy_user }} -- git pull --recurse-submodules
 new_head="$(runuser -u {{ deploy_user }} -- git rev-parse HEAD)"
 new_scaffold="$(runuser -u {{ deploy_user }} -- git -C scaffold rev-parse HEAD 2>/dev/null || echo none)"
 
+# Root-side git reads. Every check that decides what root is about to execute
+# runs as root with an isolated configuration: no system or global config, the
+# deploy-owned repository config outranked on the command line for the keys
+# that select programs or hide changes, replacement objects ignored, and a
+# PRIVATE COPY of the index so the stat refresh the comparison needs is written
+# to a root-owned temporary file and never to the deploy-owned index. The
+# deploy account's own git configuration therefore cannot change the answer
+# (the 2026-11-02 review: fsmonitor and submodule-ignore settings in a config
+# that account writes would otherwise have been consulted).
+root_tmp="$(mktemp -d /run/vps-deploy.XXXXXX)"
+trap 'rm -rf "$root_tmp"' EXIT
+cp /opt/deploy/.git/index "$root_tmp/index"
+rootgit() {
+  env -i PATH="$PATH" HOME=/root GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+      GIT_NO_REPLACE_OBJECTS=1 GIT_OPTIONAL_LOCKS=0 GIT_INDEX_FILE="$root_tmp/index" \
+    git -C /opt/deploy -c safe.directory=/opt/deploy -c core.hooksPath=/dev/null \
+      -c core.fsmonitor=false -c diff.ignoreSubmodules=none -c submodule.scaffold.ignore=none "$@"
+}
+# The scaffold submodule has its own index under .git/modules; copy it too.
+scaffold_gitdir="$(runuser -u {{ deploy_user }} -- git -C scaffold rev-parse --git-dir 2>/dev/null || true)"
+case "$scaffold_gitdir" in
+  /*) ;;
+  "") ;;
+  *) scaffold_gitdir="/opt/deploy/scaffold/$scaffold_gitdir" ;;
+esac
+if [[ -n "$scaffold_gitdir" && -f "$scaffold_gitdir/index" ]]; then
+  cp "$scaffold_gitdir/index" "$root_tmp/scaffold-index"
+fi
+rootgit_scaffold() {
+  env -i PATH="$PATH" HOME=/root GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+      GIT_NO_REPLACE_OBJECTS=1 GIT_OPTIONAL_LOCKS=0 GIT_INDEX_FILE="$root_tmp/scaffold-index" \
+    git -C /opt/deploy/scaffold -c safe.directory=/opt/deploy/scaffold -c safe.directory=/opt/deploy \
+      -c core.hooksPath=/dev/null -c core.fsmonitor=false "$@"
+}
+
 # What root executes below must be exactly the commit at HEAD, on the deployed
 # branch. The deploy user owns this checkout, so an edited hook, compose file
 # or Caddy snippet that never went through git would otherwise run as root on
@@ -92,18 +131,39 @@ if [[ "$new_head" != "$remote_head" ]]; then
   echo "vps-deploy: HEAD $new_head is not origin/{{ deploy_branch }} ($remote_head) — refusing to deploy." >&2
   exit 1
 fi
-dirty="$(runuser -u {{ deploy_user }} -- git status --porcelain --untracked-files=no)"
+# The working tree must equal HEAD: compared as root, against the private
+# index copy (refreshed first so a touched-but-identical file does not count),
+# with submodule changes included. Untracked files are not consulted here;
+# the hook and override checks below cover the untracked paths that matter.
+rootgit update-index -q --refresh >/dev/null 2>&1 || true
+dirty="$(rootgit diff-index --name-status HEAD -- || true)"
 if [[ -n "$dirty" ]]; then
   echo "vps-deploy: working tree differs from HEAD — refusing to deploy. Changes must arrive through git:" >&2
   printf '  %s\n' "$dirty" >&2
   exit 1
 fi
-# `git status` above trusts the index, and the index is deploy-owned: a
-# skip-worktree or assume-unchanged bit hides an edited tracked file from it.
-# Read the index flags as root (plumbing only, nothing is written) and accept
-# only plain tracked entries ("H").
-flagged="$(env -i PATH="$PATH" HOME=/root GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 GIT_OPTIONAL_LOCKS=0 \
-  git -C /opt/deploy -c safe.directory=/opt/deploy -c core.fsmonitor=false ls-files -v | grep -v '^H ' || true)"
+# The scaffold submodule is executed too (compose base, run-caddy.sh, hooks'
+# helpers): its checked-out commit must be the one HEAD records, and its own
+# working tree must be clean.
+if [[ -f "$root_tmp/scaffold-index" ]]; then
+  recorded="$(rootgit rev-parse HEAD:scaffold)"
+  actual="$(rootgit_scaffold rev-parse HEAD)"
+  if [[ "$recorded" != "$actual" ]]; then
+    echo "vps-deploy: scaffold is checked out at $actual but HEAD records $recorded — refusing to deploy." >&2
+    exit 1
+  fi
+  rootgit_scaffold update-index -q --refresh >/dev/null 2>&1 || true
+  scaffold_dirty="$(rootgit_scaffold diff-index --name-status HEAD -- || true)"
+  if [[ -n "$scaffold_dirty" ]]; then
+    echo "vps-deploy: scaffold working tree differs from its commit — refusing to deploy:" >&2
+    printf '  %s\n' "$scaffold_dirty" >&2
+    exit 1
+  fi
+fi
+# The index copy must be an honest one: a skip-worktree or assume-unchanged bit
+# would hide an edited tracked file from the comparison above. Accept only
+# plain tracked entries ("H").
+flagged="$(rootgit ls-files -v | grep -v '^H ' || true)"
 if [[ -n "$flagged" ]]; then
   echo "vps-deploy: index entries carry non-default flags (skip-worktree/assume-unchanged); the clean-tree check cannot be trusted — refusing to deploy:" >&2
   printf '  %s\n' "$flagged" >&2
@@ -125,7 +185,7 @@ for f in docker-compose.override.yml docker-compose.override.yaml compose.overri
 done
 for hook in ./apps/*/deploy.sh; do
   [[ -e "$hook" ]] || continue
-  if ! runuser -u {{ deploy_user }} -- git ls-files --error-unmatch "$hook" >/dev/null 2>&1; then
+  if ! rootgit ls-files --error-unmatch "$hook" >/dev/null 2>&1; then
     echo "vps-deploy: ${hook#./} is not tracked by git — refusing to run an unreviewed hook as root." >&2
     exit 1
   fi

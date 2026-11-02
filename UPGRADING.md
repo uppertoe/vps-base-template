@@ -23,6 +23,32 @@ of the actions, once.
 
 ---
 
+## 2026-11-03 — Deploy checks run as root against a copied index; checkout self-heal; web-flow key allow-list
+
+**What lands automatically on the next `site-quick.yml`:**
+
+- `vps-deploy` compares the working tree with HEAD, the `scaffold` submodule
+  with the commit HEAD records, and each hook's trackedness, all as root under
+  an isolated git configuration and a private copy of the index. The deploy
+  account's own git configuration is no longer consulted for any decision, and
+  no root-side read writes to the deploy-owned repository.
+- `auto-deploy` and `vps-deploy` first run `vps-git-heal`, which hands back to
+  the deploy account anything under `/opt/deploy/.git` that a hand-run root git
+  left root-owned, and announces the repair over ntfy. A `sudo git status` in
+  the checkout therefore no longer blocks the next deploy.
+- `vps-git` is installed for administrators: `vps-git <args>` runs git in the
+  checkout as the deploy account. Use it instead of `sudo git -C /opt/deploy`.
+- The GitHub web-flow trust anchor is now an allow-list of primary
+  fingerprints. Only allow-listed keys are imported and any other key already
+  in `/etc/vps-scaffold/gnupg` is deleted, which retires GitHub's expired 2017
+  key on existing hosts.
+
+**Operator actions:**
+
+- If your inventory sets `deploy_github_webflow_fingerprint` (singular), replace
+  it with the list `deploy_github_webflow_fingerprints`. The default lists only
+  the fingerprint GitHub publishes for its current web-flow signature,
+  `968479A1AFF927E37D1A566BB5690EEEBB952194`.
 ## 2026-11-02: Open paths beside a gate must be declared; the access-log filter covers percent-encoded tokens and Location
 
 **What lands automatically on the next render and deploy:**

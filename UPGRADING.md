@@ -23,6 +23,32 @@ of the actions, once.
 
 ---
 
+## 2026-11-02 — Server tooling moves into the scaffold; servers keep shims and call reusable workflows
+
+**What to do in each server repo (one-off, after bumping the pointer):**
+
+1. `bash scaffold/scripts/server/check-server-files.sh --fix`. This writes the
+   `scripts/` shims over the old script copies, the three workflow callers
+   (`ci.yml`, `container-security.yml`, `secret-scan.yml`) pointing at this
+   commit, the identical shared files, and seeds `.scaffold-server.yml`.
+2. Edit `.scaffold-server.yml`: `gateway_chain`, `gateway_ref`,
+   `image_provenance`, `secrets_sops` for this server.
+3. Delete `scripts/lib/` (it now lives in `scaffold/scripts/server/lib/`) and
+   any server-only copy of a script the manifest names. Keep server-only
+   scripts that are not in the manifest.
+4. Review `.gitignore`: the canonical block is prepended if it was not present
+   verbatim; keep this server's own lines (for example whether `compliance/`
+   is tracked) below it.
+5. `git add -A && git commit`. CI now runs `check-server-files.sh` first and
+   fails on drift.
+
+**What this changes:** `docs/14-server-tooling.md`. The checks themselves are
+the union of what the server repos ran: the template's `concurrency` blocks,
+the RCH server's gateway suite, provenance step and private-registry login,
+and the SOPS encryption check, each switched by `.scaffold-server.yml`.
+
+---
+
 ## 2026-11-02 — The renderer sorts in one collation; the deploy wrapper waits for AIDE
 
 **What lands automatically on the next `site-quick.yml`:**

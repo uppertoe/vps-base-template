@@ -1,0 +1,41 @@
+# What a server repo must carry, and how closely. One entry per line:
+#   exact <path>        byte-for-byte the canonical copy
+#   ref   <path>        canonical copy, except that "@<40 hex>" after
+#                       "uppertoe/vps-base-template" must be the commit the
+#                       scaffold submodule is checked out at
+#   block <path>        the canonical text must appear verbatim as a contiguous
+#                       block; the server may add lines around it
+#   optional <path>     if present, byte-for-byte the canonical copy
+#   seed  <path>        copied once by --fix if absent, never compared
+ref      .github/workflows/ci.yml
+ref      .github/workflows/container-security.yml
+ref      .github/workflows/secret-scan.yml
+exact    .github/workflows/deploy-ping.yml
+exact    .github/workflows/digest-freshness.yml
+exact    .github/workflows/maintenance-day.yml
+optional .github/workflows/codeql.yml
+optional .github/workflows/scorecard.yml
+optional .github/workflows/update-pipeline-freshness.yml
+exact    scripts/check-image-pins.sh
+exact    scripts/check-template-consistency.sh
+exact    scripts/check-generated-sync.sh
+exact    scripts/ci-compose-smoke-test.sh
+exact    scripts/ci-forward-auth-test.sh
+exact    scripts/check-digest-freshness.sh
+exact    scripts/check-update-pipeline.sh
+exact    scripts/check-image-provenance.sh
+exact    scripts/make-recovery-bundle.sh
+exact    scripts/post-provision-smoke-test.sh
+exact    scripts/provision.sh
+exact    scripts/restore.sh
+exact    scripts/aws-backup-setup.py
+exact    scripts/aws-logs-setup.py
+exact    scripts/aws-ses-setup.py
+exact    scripts/fleet-app-setup.py
+exact    scripts/check-server-files.sh
+exact    ansible.cfg
+exact    docker-compose.override.yml.example
+exact    Caddyfile.local
+block    .gitignore
+seed     .scaffold-server.yml
+optional .github/codeql/codeql-config.yml

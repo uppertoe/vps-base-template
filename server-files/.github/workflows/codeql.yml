@@ -1,0 +1,37 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "41 21 * * 2"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze Python
+    # CodeQL code scanning needs GitHub Advanced Security on private repos.
+    # Deployments created from this template are private (and typically on the
+    # free plan without GHAS), where this job cannot run and fails on every
+    # push/PR. Gate it to the public template repo so it scans here and is
+    # skipped (neutral, not failed) in every private fork — no per-repo cleanup.
+    if: github.repository == 'uppertoe/server-instance-template'
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
+        with:
+          languages: python
+          config-file: ./.github/codeql/codeql-config.yml
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4

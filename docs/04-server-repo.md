@@ -1,7 +1,12 @@
 # Server Repo Structure
 
-Each VPS has its own git repo. The `server-template/` directory in this
-scaffold is the reference schema — copy it to start a new server repo.
+Each VPS has its own git repo, created from
+[server-instance-template](https://github.com/uppertoe/server-instance-template),
+which has this scaffold wired in as the `scaffold/` submodule. The files a
+server repo must carry outside `scaffold/` (its CI workflows, the `scripts/`
+shims, the ignore rules) are the scaffold's canonical set under
+`server-files/`, kept in step by `scripts/check-server-files.sh`; see
+[14-server-tooling.md](14-server-tooling.md).
 
 ## Creating a server repo
 

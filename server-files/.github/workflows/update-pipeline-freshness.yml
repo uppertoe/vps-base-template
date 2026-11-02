@@ -1,0 +1,75 @@
+name: Update Pipeline Freshness
+
+# Weekly truth-check on the hands-off update pipeline's OUT-OF-REPO state
+# (Renovate app installs, Mend settings, app-repo rebuild workflows), asserted
+# via observable GitHub reality against scripts/update-pipeline-state.json.
+# Catches the silent failure modes: cron workflows auto-disabled after 60 days
+# of inactivity, Renovate uninstalled / repo deselected / flipped to Silent
+# mode, and the registry-secret hostRule being dropped. Raises/updates an
+# issue on drift, like digest-freshness.
+#
+# GITHUB_TOKEN can't read the private fleet repos (reported as SKIP);
+# per-owner tokens minted from the fleet GitHub App (created once with
+# scripts/fleet-app-setup.py; secrets FLEET_APP_ID/FLEET_APP_PRIVATE_KEY)
+# make it authoritative — same identity the Renovate runner uses, no
+# stored PATs, no rotation.
+
+on:
+  schedule:
+    - cron: "7 20 * * 0"   # weekly, Sun 20:07 UTC — after the rebuild window
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  actions: read   # list THIS repo's workflows for the auto-disable check
+
+jobs:
+  update-pipeline-freshness:
+    name: Verify pipeline state vs record
+    # The template has no fleet app secrets and no servers of its own to
+    # verify, so the check only means something in a stamped instance.
+    if: github.repository != 'uppertoe/server-instance-template'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # Per-owner tokens minted from the fleet app (1-hour lifetime, no
+      # rotation). >>> EDIT: one mint step per owner holding private fleet
+      # repos, and one matching FLEET_READ_TOKEN_<OWNER> env line below
+      # (owner uppercased, '-' -> '_'). <<<
+      - name: Mint fleet token (<owner>)
+        id: app-owner1
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: <owner>
+
+      - name: Check pipeline freshness
+        env:
+          # Ambient auth: reads this repo + public fleet repos.
+          GH_TOKEN: ${{ github.token }}
+          FLEET_READ_TOKEN_OWNER1: ${{ steps.app-owner1.outputs.token }}
+        run: |
+          set -o pipefail
+          bash scripts/check-update-pipeline.sh | tee freshness.txt
+
+      - name: Raise or update drift issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="Update pipeline has drifted from its recorded state"
+          body="$(printf 'Weekly update-pipeline check found drift:\n\n```\n%s\n```\n\nReconcile reality with scripts/update-pipeline-state.json (or update the record if the change was intended).\n' "$(cat freshness.txt)")"
+          existing="$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number' || true)"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            # gh refuses unknown labels, which would swallow the alert on a
+            # fresh repo — ensure the label exists first (idempotent).
+            gh label create security --color B60205 \
+              --description "Automated security/drift alerts" --force || true
+            gh issue create --title "$title" --body "$body" --label security
+          fi

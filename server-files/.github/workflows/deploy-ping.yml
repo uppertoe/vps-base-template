@@ -1,0 +1,40 @@
+name: Deploy Ping
+
+# Event-driven half of push-to-deploy: on every push to main, publish an
+# authority-free ping to the box's ntfy deploy topic. The box's
+# deploy-trigger.service starts auto-deploy, which fetches and verifies the
+# signed HEAD exactly as the hourly timer does — the ping only says "check
+# now", never what to deploy. With the secrets unset this is a no-op, so the
+# workflow is safe on main before the box side is wired.
+#
+# Secrets: NTFY_DEPLOY_URL (https://ntfy.<domain>/<unguessable-topic>) and
+# NTFY_DEPLOY_TOKEN (write token for that topic). Both minted by the
+# apps/ntfy deploy hook bootstrap — see apps/ntfy/deploy.sh.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  ping:
+    name: Ping the deploy topic
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish ping
+        env:
+          URL: ${{ secrets.NTFY_DEPLOY_URL }}
+          TOKEN: ${{ secrets.NTFY_DEPLOY_TOKEN }}
+        run: |
+          if [ -z "$URL" ] || [ -z "$TOKEN" ]; then
+            echo "NTFY_DEPLOY_URL/NTFY_DEPLOY_TOKEN unset — skipping (push-to-deploy not wired)"
+            exit 0
+          fi
+          curl -fsS -m 15 --retry 3 \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Title: deploy ping" \
+            -d "${GITHUB_SHA} pushed to ${GITHUB_REF_NAME}" \
+            "$URL" >/dev/null
+          echo "pinged"

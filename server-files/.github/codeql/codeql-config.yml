@@ -1,0 +1,14 @@
+name: "CodeQL config"
+
+# The scripts/aws-*-setup.py helpers are LOCAL operator credential-provisioning
+# tools: they run on the admin's laptop with an AWS admin profile and their whole
+# job is to mint IAM access keys and write them into the gitignored, mode-600
+# operator secret stores (backup/config.env, ansible/hosts) — the same model as
+# .env. CodeQL's "clear-text storage/logging of sensitive information" rules
+# treat that intended behaviour as a vulnerability, which is noise for this class
+# of tool (not shipped, not runtime, not processing untrusted input). Exclude
+# them from analysis rather than accumulate accepted-by-design alerts.
+paths-ignore:
+  - scripts/aws-backup-setup.py
+  - scripts/aws-logs-setup.py
+  - scripts/aws-ses-setup.py

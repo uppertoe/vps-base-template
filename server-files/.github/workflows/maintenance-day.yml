@@ -1,0 +1,56 @@
+name: Maintenance Day
+
+# Set-and-forget needs a scheduled "look at the box" ritual or drift wins:
+# Renovate automerges digests, but MAJOR version bumps, the OS EOL clock,
+# recovery-bundle freshness and the rebuild drill all need a human quarterly.
+# This opens one issue with the checklist; close it when done.
+
+on:
+  schedule:
+    - cron: "0 8 1 1,4,7,10 *" # 1st of Jan/Apr/Jul/Oct, 08:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  open-issue:
+    name: Open quarterly maintenance issue
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create the maintenance issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          quarter="Q$((($(date +%-m) - 1) / 3 + 1)) $(date +%Y)"
+
+          pending="$(gh pr list --state open --label dependencies \
+            --json number,title \
+            --template '{{range .}}- [ ] #{{.number}} {{.title}}{{"\n"}}{{end}}')"
+          [ -n "$pending" ] || pending="- [x] none open"
+
+          eol_days=$(( ($(date -d 2029-04-25 +%s) - $(date +%s)) / 86400 ))
+
+          gh issue create \
+            --title "Maintenance day — ${quarter}" \
+            --body "$(cat <<EOF
+          Quarterly hands-on pass for this VPS. Everything else is automated;
+          these are the things automation deliberately leaves to a human.
+
+          ## Pending dependency PRs (majors need manual review)
+          ${pending}
+
+          ## Checklist
+          - [ ] Merge or consciously defer the major-version bumps above
+          - [ ] Ubuntu 24.04 LTS standard support ends **2029-04-25** (~${eol_days} days) — when under a year, start \`scaffold/docs/10-lts-migration.md\`
+          - [ ] Recovery bundle: re-run \`scripts/make-recovery-bundle.sh\` if any credential changed; verify the offsite copy decrypts
+          - [ ] Rebuild drill (annual): if none logged this year, walk \`scaffold/docs/09-recovery.md\` and record the RTO
+          - [ ] Skim the accepted-exceptions register (\`scaffold/docs/08-security-model.md\`) — still true?
+          - [ ] Access review (quarterly, keep the dated record): \`authorized_keys\` on the box, admin emails in the auth tier, S3/SMTP/ntfy credentials still needed and least-privilege, GitHub collaborators + branch-protection settings intact
+          - [ ] Incident-response contacts in the instance runbook still current (DH eHealth IMT, health-service CISO)
+          - [ ] Run the cloud-side Prowler review (README → "Cloud-side security review")
+          - [ ] Check the ntfy monthly self-test actually arrived on your phone this month
+          EOF
+          )"

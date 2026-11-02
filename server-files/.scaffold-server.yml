@@ -1,0 +1,19 @@
+# Per-server choices read by the scaffold's shared CI workflows
+# (scaffold/.github/workflows/server-*.yml). Everything else about CI is the
+# same on every server; this file is the one place a server differs.
+# See scaffold/docs/14-server-tooling.md.
+
+# Run the sign-in gateway's end-to-end suite against this server's guard
+# snippets (apps/auth/auth.caddy). Needs apps/auth enabled.
+gateway_chain: true
+# The commit of uppertoe/vps-scaffold-auth whose suite is run. Bump it when
+# the gateway image is bumped.
+gateway_ref: 241ea8960a2e798ac53858f59daf6cc001fd2df3
+
+# Check that every first-party image digest was built from a commit on its
+# source repository's main branch (scripts/check-image-provenance.sh).
+image_provenance: true
+
+# Secrets are SOPS-encrypted under secrets/ (docs/13-secrets.md): fail CI if
+# any plaintext secret or env file is tracked.
+secrets_sops: false

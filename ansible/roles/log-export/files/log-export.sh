@@ -8,7 +8,8 @@
 #   1. journalctl --cursor-file  → everything new in the journal since the
 #      last export (auditd, auth, sshd, sudo, app units — the lot).
 #   2. Files under EXTRA_PATHS modified since the last run (raw audit.log
-#      rotations, Caddy JSON access logs).
+#      rotations, Caddy JSON access logs, kernel crash records archived by
+#      systemd-pstore).
 #   3. tar --zstd → archive; SHA-256 chained onto the previous archive's
 #      hash in hash-chain.log (GENESIS for the first link).
 #   4. upload (boto3) to $LOG_EXPORT_S3_URI/<host>/<year>/ — an Object-Locked,
@@ -27,7 +28,7 @@ ENV_FILE="${LOG_EXPORT_ENV:-/etc/vps-scaffold/log-export.env}"
 
 S3_URI="${LOG_EXPORT_S3_URI:-}"
 STATE_DIR="${STATE_DIR:-/var/lib/log-export}"
-EXTRA_PATHS="${EXTRA_PATHS:-/var/log/audit:/var/lib/docker/volumes/caddy_logs/_data}"
+EXTRA_PATHS="${EXTRA_PATHS:-/var/log/audit:/var/lib/docker/volumes/caddy_logs/_data:/var/lib/systemd/pstore}"
 
 log() { echo "[$(date -u +%H:%M:%SZ)] $*"; }
 

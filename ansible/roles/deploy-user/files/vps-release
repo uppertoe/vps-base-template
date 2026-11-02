@@ -299,7 +299,7 @@ case "${1:-}" in
   prune) do_prune ;;
   hold) [[ "${2:-}" =~ $SHA_RE ]] || { echo "vps-release: hold needs a commit" >&2; exit 2; }
         printf '%s\n' "$2" >"$HOLD" ;;
-  held) [[ -f "$HOLD" ]] && cat "$HOLD" || true ;;
+  held) if [[ -f "$HOLD" ]]; then cat "$HOLD"; fi ;;
   unhold) rm -f -- "$HOLD" ;;
   scaffold-behind) do_scaffold_behind ;;
   *) echo "usage: vps-release fetch|prepare|switch DIR|recheck DIR|current|previous|prune|hold COMMIT|held|unhold|scaffold-behind" >&2; exit 2 ;;

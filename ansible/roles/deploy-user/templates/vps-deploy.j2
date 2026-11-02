@@ -332,7 +332,8 @@ compose_up() {
   fi
 }
 compose_up
-if (( ${#recreate[@]} > 0 )); then
+# (Not "${{ '#' }}recreate[@]": that opens a Jinja comment in this template.)
+if [[ -n "${recreate[*]:-}" ]]; then
   mapfile -t recreate < <(printf '%s\n' "${recreate[@]}" | sort -u)
   echo "vps-deploy: recreating services whose mounted files changed: ${recreate[*]}"
   compose_up --force-recreate "${recreate[@]}"

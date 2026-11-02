@@ -32,8 +32,12 @@ cd /opt/deploy
 # mean apt is actually working.
 # backup.service dumps every database; recreating a DB container under it
 # fails the dump (roster-insights, 2026-09-06 04:08 UTC). Wait for that too.
+# The AIDE scan and rebaseline hold the single vCPU for a quarter of an hour,
+# and containers recreated under them miss their health deadline and fail the
+# deploy (prod-rch-vps, 2026-11-02 02:29 UTC). Wait for those as well.
 apt_busy() {
-  for u in apt-daily.service apt-daily-upgrade.service backup.service backup-verify.service; do
+  for u in apt-daily.service apt-daily-upgrade.service backup.service backup-verify.service \
+           dailyaidecheck.service aide-rebaseline.service; do
     case "$(systemctl show -p ActiveState --value "$u" 2>/dev/null)" in
       active|activating|deactivating) return 0 ;;
     esac
@@ -48,7 +52,7 @@ while apt_busy; do
     echo "vps-deploy: apt still busy after 30 min — proceeding anyway." >&2
     break
   fi
-  echo "vps-deploy: apt or backup in progress; waiting…"
+  echo "vps-deploy: apt, backup or AIDE in progress; waiting…"
   sleep 20
 done
 
@@ -276,7 +280,8 @@ if ! docker compose up -d --remove-orphans --wait --force-recreate; then
   sleep 30
   if ! docker compose up -d --remove-orphans --wait; then
     echo "vps-deploy: compose up --wait failed again. Containers not Up:" >&2
-    docker ps -a --format '  {% raw %}{{.Names}}: {{.Status}}{% endraw %}' | grep -vE ': Up ' >&2 || true
+    # A one-shot init container that has exited cleanly is not a failure.
+    docker ps -a --format '  {% raw %}{{.Names}}: {{.Status}}{% endraw %}' | grep -vE ': (Up |Exited \(0\))' >&2 || true
     exit 1
   fi
 fi

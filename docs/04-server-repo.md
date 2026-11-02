@@ -135,11 +135,12 @@ git add .generated
 The renderer regenerates `.generated/caddy/apps.caddy` (every app's routes —
 Caddy mounts this file instead of the deploy repo, keeping `.env` and backup
 secrets off the reverse proxy), `.generated/caddy/networks.yml` (the per-app
-proxy networks) and `.generated/caddy/route-groups.tsv` (each gateway group a
+proxy networks), `.generated/caddy/route-groups.tsv` (each gateway group a
 site's guard requires, which the auth service mounts so its Groups page can
-list the groups the routes use). All three are committed like lockfiles; CI
-fails if they drift from the sources, and `audit-compose.yml` fails at runtime
-if two apps ever share a proxy network.
+list the groups the routes use) and `.generated/caddy/route-access.tsv` (who
+can reach each site, described below). All four are committed like lockfiles;
+CI fails if they drift from the sources, and `audit-compose.yml` fails at
+runtime if two apps ever share a proxy network.
 
 The renderer also refuses a site that does not declare who may reach it.
 Every site block must import a gateway guard (`protected*`, `auth_gate*`) or
@@ -152,11 +153,44 @@ rvg.{$DOMAIN} {
 ```
 
 A forgotten gate on a new app therefore fails the render, and CI with it,
-instead of reaching the server. A partly open site (a public homepage with
-gated paths) can carry the marker inside its block to say which part is open.
-The markers, guards and `import <name>_network` hooks are collected into
-`.generated/caddy/route-access.tsv`, which the auth service shows to
-administrators as a "who can reach what" table.
+instead of reaching the server. The markers, guards and `import <name>_network`
+hooks are collected into `.generated/caddy/route-access.tsv`, which the auth
+service shows to administrators as a "who can reach what" table. Each row is
+`host`, a kind (`groups`, `domains`, `signed-in`, `guests`, `network` or
+`public`) and a value.
+
+A site that has a gate may still serve some paths without one: a public QR
+view beside a gated editor, a webhook that checks its own signature, a
+calendar feed that a calendar app fetches with a token in the URL, an app that
+is open on the office network and gated from anywhere else. The renderer
+requires each such path to be declared, so the table shows the open paths of
+a gated site and not only its gate. Inside a site that has a guard, every
+`handle`, `handle_path` or `route` block that serves something itself (a
+`reverse_proxy`, `file_server` or `respond` line) must either be guarded or
+carry this marker, written inside the block or on the comment line just above
+it (a named matcher may sit between):
+
+```caddyfile
+	@public path / /Q/* /files/* /healthz /static/*
+	handle @public {
+		# scaffold-lint: open-path -- / /Q/* /files/* /healthz /static/*: the emergency view, read without signing in
+		route {
+			import strip_client_identity
+			reverse_proxy air-db:8000 {
+				import strip_auth_cookie
+			}
+		}
+	}
+```
+
+The marker is listed in `route-access.tsv` as a `public` row whose value is
+the text after `--`, so it must name the paths, then a colon, then the reason.
+A block counts as guarded when a guard import or `forward_auth` appears inside
+it, inside a `route` block nested in it, or in an enclosing block; a guard in
+a sibling `handle` block covers only that block. A comment line never counts
+as code, a `handle_errors` block is not a door, and a site without any guard
+is governed by the `public` marker alone. A block that serves without a guard
+and without the marker fails the render with the file and line of the block.
 
 An app that reads `Remote-Groups` itself, to decide what a person may do
 inside it, declares those groups in its `.caddy` file so the auth service does

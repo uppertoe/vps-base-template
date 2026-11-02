@@ -14,6 +14,17 @@
 #    percent-encoded rd= value) and against ordinary URLs that must stay
 #    readable.
 #
+# 2. The route lint. Fixture snippets exercise the open-path rule: in a site
+#    that has a guard, a handle, handle_path or route block that serves
+#    without a guard must carry "# scaffold-lint: open-path -- <paths>:
+#    <reason>", which route-access.tsv then lists as a public row. Cases:
+#    an undeclared open handle fails; the marker inside the handle, above it
+#    and above its named matcher passes and lands in the table; a nested
+#    route under a marked handle passes; a guard in a nested route covers the
+#    enclosing handle; a guard in a sibling handle covers nothing; a site
+#    with no guard is not checked; handle_errors is not a door; a malformed
+#    marker and a marker outside a site fail.
+#
 # Go is needed for part 1 (it is on every GitHub-hosted runner); the test
 # fails plainly if it is missing rather than pretending to pass.
 set -euo pipefail
@@ -155,6 +166,198 @@ EOF
     fail "token filter regex cases"
   fi
 fi
+
+# --- 2. the open-path rule ------------------------------------------------------
+# render_case <name> <expect: pass|fail> [<grep pattern required on stderr>]
+# with the snippet on stdin. On a pass, the rendered route-access.tsv is left
+# at $work/<name>-out/route-access.tsv for the row checks below.
+render_case() {
+  local name="$1" expect="$2" want="${3:-}" rc=0
+  local root="$work/$name"
+  mkdir -p "$root/apps/app"
+  cat > "$root/apps/app/app.caddy"
+  bash "$renderer" "$root" "$root-out" >/dev/null 2> "$root.err" || rc=$?
+  if [[ "$expect" == pass ]]; then
+    if [[ $rc -eq 0 ]]; then pass "lint: $name renders"; else fail "lint: $name should render; stderr:"; cat "$root.err" >&2; fi
+  else
+    if [[ $rc -ne 0 ]] && grep -q -- "$want" "$root.err"; then
+      pass "lint: $name is refused ($want)"
+    else
+      fail "lint: $name should be refused with '$want'; rc=$rc stderr:"; cat "$root.err" >&2
+    fi
+  fi
+}
+# expect_row <name> <tab-separated row>
+expect_row() {
+  if grep -qxF -- "$2" "$work/$1-out/route-access.tsv"; then
+    pass "table: $1 lists $(printf '%s' "$2" | cut -f2-)"
+  else
+    fail "table: $1 lacks the row '$2'; table is:"; cat "$work/$1-out/route-access.tsv" >&2
+  fi
+}
+open_err='has a gate, but this block serves without one'
+
+# An open handle beside a gate, with nothing to say it is meant.
+render_case undeclared fail "$open_err" <<'EOF'
+app.{$DOMAIN} {
+	@public path /healthz /static/*
+	handle @public {
+		reverse_proxy app:8080 {
+			import strip_public
+		}
+	}
+	handle {
+		import protected_domains "example.org" app:8080
+	}
+}
+EOF
+
+# The marker inside the handle.
+render_case marker-inside pass <<'EOF'
+app.{$DOMAIN} {
+	@public path /healthz /static/*
+	handle @public {
+		# scaffold-lint: open-path -- /healthz /static/*: the health check and the assets
+		reverse_proxy app:8080 {
+			import strip_public
+		}
+	}
+	handle {
+		import protected_domains "example.org" app:8080
+	}
+}
+EOF
+expect_row marker-inside $'app.{$DOMAIN}\tpublic\t/healthz /static/*: the health check and the assets'
+expect_row marker-inside $'app.{$DOMAIN}\tdomains\texample.org'
+
+# The marker above the handle, with the named matcher between.
+render_case marker-above-matcher pass <<'EOF'
+app.{$DOMAIN} {
+	# scaffold-lint: open-path -- /feeds/*.json: the feed checks its own bearer token
+	@feed path /feeds/*.json
+	handle @feed {
+		reverse_proxy app:8080 {
+			import strip_public
+		}
+	}
+	handle {
+		import protected_domains "example.org" app:8080
+	}
+}
+EOF
+expect_row marker-above-matcher $'app.{$DOMAIN}\tpublic\t/feeds/*.json: the feed checks its own bearer token'
+
+# A marked handle whose proxy sits in a nested route (the strip-then-proxy
+# shape), and the marker written directly above the handle line.
+render_case nested-route-under-marked-handle pass <<'EOF'
+app.{$DOMAIN} {
+	@public path / /Q/*
+	# scaffold-lint: open-path -- / /Q/*: the public view
+	handle @public {
+		route {
+			import strip_client_identity
+			reverse_proxy app:8080 {
+				import strip_auth_cookie
+			}
+		}
+	}
+	handle {
+		import protected_groups "editors" app:8080
+	}
+}
+EOF
+expect_row nested-route-under-marked-handle $'app.{$DOMAIN}\tpublic\t/ /Q/*: the public view'
+
+# A guard inside a nested route covers the file_server that follows it in the
+# enclosing handle (the hand-written forward_auth shape).
+render_case guard-in-nested-route pass <<'EOF'
+app.{$DOMAIN} {
+	root * /srv/www/app
+	handle /staff/* {
+		route {
+			import strip_client_identity
+			forward_auth auth:8080 {
+				uri /verify
+				copy_headers Remote-User Remote-Email Remote-Groups
+				header_up X-Auth-Policy "domains=example.org"
+			}
+		}
+		file_server
+	}
+	handle {
+		# scaffold-lint: open-path -- /*: the public pages
+		file_server
+	}
+}
+EOF
+
+# A guard inside a sibling handle says nothing about the open one.
+render_case guard-in-sibling-handle fail "$open_err" <<'EOF'
+app.{$DOMAIN} {
+	route {
+		handle /admin/* {
+			import protected_admin app:8080
+		}
+		handle {
+			reverse_proxy app:8080 {
+				import strip_public
+			}
+		}
+	}
+}
+EOF
+
+# A site with no guard is governed by the public marker alone.
+render_case no-guard-not-checked pass <<'EOF'
+# scaffold-lint: public -- the feed checks its own token
+app.{$DOMAIN} {
+	@feed path /feed.json
+	handle @feed {
+		reverse_proxy app:8080 {
+			import strip_public
+		}
+	}
+	handle {
+		respond 404
+	}
+}
+EOF
+
+# Error pages are not a door.
+render_case handle-errors-exempt pass <<'EOF'
+app.{$DOMAIN} {
+	handle_errors {
+		@missing expression {err.status_code} == 404
+		handle @missing {
+			root * /srv/www/app
+			rewrite * /404.html
+			file_server
+		}
+	}
+	import protected_domains "example.org" app:8080
+}
+EOF
+
+# The marker must name the paths and give a reason.
+render_case marker-without-reason fail 'the marker must read' <<'EOF'
+app.{$DOMAIN} {
+	handle /healthz {
+		# scaffold-lint: open-path -- /healthz
+		respond 200
+	}
+	handle {
+		import protected_domains "example.org" app:8080
+	}
+}
+EOF
+
+# The marker belongs inside a site.
+render_case marker-outside-site fail 'belongs inside a site block' <<'EOF'
+# scaffold-lint: open-path -- /healthz: the health check
+app.{$DOMAIN} {
+	import protected_domains "example.org" app:8080
+}
+EOF
 
 echo
 if [[ $failures -gt 0 ]]; then

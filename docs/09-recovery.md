@@ -182,8 +182,11 @@ The region is chosen on the target from `/proc/iomem` (the top 1 MiB of the
 highest System RAM range below 4 GiB, aligned to 1 MiB and clear of the kernel
 image), written to `/etc/vps-scaffold/crash-record.env`, and kept on later
 runs. The reservation only takes effect when the kernel boots with it, and the
-play never reboots: it writes the GRUB fragment, runs `update-grub`, records
-the pending reboot under `/var/lib/vps-notify/crash-record/` and alerts once
+play never reboots: it writes the GRUB fragment, runs `update-grub`, reads
+the exact `memmap=1M\$0x...` token back from `grub.cfg` (and, if that or the
+module options fail to verify, removes both files, regenerates `grub.cfg`,
+confirms `memmap=` is gone and fails the play, so a malformed command line
+never reaches a reboot), records the pending reboot under `/var/lib/vps-notify/crash-record/` and alerts once
 ("Reboot required for crash record"). The weekly digest repeats the reminder
 until the next patch-window or operator reboot applies it.
 

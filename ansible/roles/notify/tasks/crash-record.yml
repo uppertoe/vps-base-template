@@ -134,35 +134,6 @@
           CRASH_RECORD_RECORD_SIZE={{ notify_crash_record_record_bytes }}
           CRASH_RECORD_CONSOLE_SIZE={{ notify_crash_record_console_bytes }}
 
-    # ramoops is a module on Ubuntu's generic kernel (CONFIG_PSTORE_RAM=m), so
-    # its parameters go through modprobe.d and only the reservation itself is
-    # on the command line. max_reason=2 dumps oopses as well as panics (the
-    # documented replacement for dump_oops=1). dyndbg=+p turns on the module's
-    # debug lines, which is how the probe says whether it found its own header
-    # from the previous boot; that is the persistence proof the boot check
-    # reads, and it costs a handful of lines per boot.
-    - name: Compose the ramoops module options
-      ansible.builtin.set_fact:
-        notify_crash_record_modprobe_options: >-
-          mem_address={{ notify_crash_record_addr }}
-          mem_size={{ notify_crash_record_mem_size_hex }}
-          record_size={{ notify_crash_record_record_bytes }}
-          console_size={{ notify_crash_record_console_bytes }}
-          ftrace_size=0 pmsg_size=0 max_reason=2 dyndbg=+p
-
-    - name: Set ramoops module options
-      ansible.builtin.copy:
-        dest: /etc/modprobe.d/vps-scaffold-ramoops.conf
-        owner: root
-        group: root
-        mode: "0644"
-        content: |
-          # Managed by Ansible (notify role). Matches the memmap= reservation in
-          # /etc/default/grub.d/99-vps-scaffold-crash-record.cfg.
-          options ramoops {{ notify_crash_record_modprobe_options }}
-      register: notify_crash_record_modprobe
-      notify: Record that the crash record needs a reboot
-
     - name: Load ramoops at boot
       ansible.builtin.copy:
         dest: /etc/modules-load.d/vps-scaffold-ramoops.conf
@@ -207,61 +178,168 @@
         group: root
         mode: "0755"
 
-    # The $ in memmap=nn$ss must reach the kernel. The fragment is sourced by
-    # grub-mkconfig (a shell), which turns \\\$ inside double quotes into \$;
-    # grub.cfg then holds memmap=1M\$0x..., which GRUB's own parser reads as a
-    # literal $ (unescaped, GRUB would expand $0 as a positional parameter and
-    # pass memmap=1Mx... to the kernel). The read-back task below proves it.
-    - name: Compose the kernel command line additions
-      ansible.builtin.set_fact:
-        notify_crash_record_cmdline: >-
-          memmap={{ notify_crash_record_size_mib | int }}M\\\${{ notify_crash_record_addr }}
-          pstore.kmsg_bytes={{ notify_crash_record_kmsg_bytes | int }}{{
-          (' log_buf_len=' ~ notify_crash_record_log_buf_len)
-          if (notify_crash_record_log_buf_len | default('') | length > 0) else '' }}
+    # The module options and the kernel command line are written together and
+    # read back together. If any step fails, the rescue removes both files,
+    # regenerates grub.cfg and confirms memmap= is gone, so a malformed command
+    # line can never survive to a reboot.
+    - name: Write and verify the reservation, backing it out on any failure
+      block:
+        # ramoops is a module on Ubuntu's generic kernel (CONFIG_PSTORE_RAM=m),
+        # so its parameters go through modprobe.d and only the reservation is on
+        # the command line. max_reason=2 dumps oopses as well as panics (the
+        # documented replacement for dump_oops=1). dyndbg=+p turns on the
+        # module's debug lines, which is how the probe says whether it found its
+        # own header from the previous boot; that is the persistence proof the
+        # boot check reads, and it costs a handful of lines per boot.
+        - name: Compose the ramoops module options
+          ansible.builtin.set_fact:
+            notify_crash_record_modprobe_options: >-
+              mem_address={{ notify_crash_record_addr }}
+              mem_size={{ notify_crash_record_mem_size_hex }}
+              record_size={{ notify_crash_record_record_bytes }}
+              console_size={{ notify_crash_record_console_bytes }}
+              ftrace_size=0 pmsg_size=0 max_reason=2 dyndbg=+p
 
-    - name: Reserve the crash record region on the kernel command line
-      ansible.builtin.copy:
-        dest: /etc/default/grub.d/99-vps-scaffold-crash-record.cfg
-        owner: root
-        group: root
-        mode: "0644"
-        content: |
-          GRUB_CMDLINE_LINUX="$GRUB_CMDLINE_LINUX {{ notify_crash_record_cmdline }}"
-      register: notify_crash_record_grub
-      notify: Record that the crash record needs a reboot
+        - name: Set ramoops module options
+          ansible.builtin.copy:
+            dest: /etc/modprobe.d/vps-scaffold-ramoops.conf
+            owner: root
+            group: root
+            mode: "0644"
+            content: |
+              # Managed by Ansible (notify role). Matches the memmap= reservation in
+              # /etc/default/grub.d/99-vps-scaffold-crash-record.cfg.
+              options ramoops {{ notify_crash_record_modprobe_options }}
+          register: notify_crash_record_modprobe
 
-    # A task, not a handler: the read-back assertion below must see the fresh
-    # grub.cfg in this same pass, and flushing handlers here would also fire
-    # every other role's pending handler mid-role.
-    - name: Regenerate grub.cfg for the crash record reservation  # noqa: no-handler
-      ansible.builtin.command: update-grub
-      when: notify_crash_record_grub.changed
-      changed_when: true
+        - name: Read the module options back
+          ansible.builtin.command:
+            argv:
+              - grep
+              - -c
+              - -F
+              - "options ramoops mem_address={{ notify_crash_record_addr }} mem_size={{ notify_crash_record_mem_size_hex }} "
+              - /etc/modprobe.d/vps-scaffold-ramoops.conf
+          register: notify_crash_record_modprobe_check
+          changed_when: false
+          failed_when: false
 
-    - name: Read the reservation back from grub.cfg
-      ansible.builtin.command:
-        argv:
-          - grep
-          - -c
-          - -F
-          - "memmap={{ notify_crash_record_size_mib | int }}M\\$"
-          - "{{ notify_crash_record_grub_cfg }}"
-      register: notify_crash_record_grub_check
-      changed_when: false
-      failed_when: false
+        - name: Assert the module options name the chosen region
+          ansible.builtin.assert:
+            that:
+              - notify_crash_record_modprobe_check.rc == 0
+              - (notify_crash_record_modprobe_check.stdout | trim | int) == 1
+            msg: >-
+              /etc/modprobe.d/vps-scaffold-ramoops.conf does not carry
+              mem_address={{ notify_crash_record_addr }} mem_size={{ notify_crash_record_mem_size_hex }}.
 
-    - name: Assert GRUB kept the memmap= reservation quoted for the kernel
-      ansible.builtin.assert:
-        that:
-          - notify_crash_record_grub_check.rc == 0
-          - (notify_crash_record_grub_check.stdout | trim | int) > 0
-        msg: >-
-          {{ notify_crash_record_grub_cfg }} does not contain the literal
-          memmap={{ notify_crash_record_size_mib | int }}M\$ that GRUB needs to
-          pass memmap={{ notify_crash_record_size_mib | int }}M${{ notify_crash_record_addr }}
-          to the kernel. Inspect the linux lines in grub.cfg and
-          /etc/default/grub.d/99-vps-scaffold-crash-record.cfg before rebooting.
+        # The $ in memmap=nn$ss must reach the kernel. The fragment is sourced by
+        # grub-mkconfig (a shell), which turns \\\$ inside double quotes into \$;
+        # grub.cfg then holds memmap=1M\$0x..., which GRUB's own parser reads as
+        # a literal $ (unescaped, GRUB would expand $0 as a positional parameter
+        # and pass memmap=1Mx... to the kernel). The read-back below proves it.
+        - name: Compose the kernel command line additions
+          ansible.builtin.set_fact:
+            notify_crash_record_memmap: "memmap={{ notify_crash_record_size_mib | int }}M\\${{ notify_crash_record_addr }}"
+            notify_crash_record_cmdline: >-
+              memmap={{ notify_crash_record_size_mib | int }}M\\\${{ notify_crash_record_addr }}
+              pstore.kmsg_bytes={{ notify_crash_record_kmsg_bytes | int }}{{
+              (' log_buf_len=' ~ notify_crash_record_log_buf_len)
+              if (notify_crash_record_log_buf_len | default('') | length > 0) else '' }}
+
+        - name: Reserve the crash record region on the kernel command line
+          ansible.builtin.copy:
+            dest: /etc/default/grub.d/99-vps-scaffold-crash-record.cfg
+            owner: root
+            group: root
+            mode: "0644"
+            content: |
+              GRUB_CMDLINE_LINUX="$GRUB_CMDLINE_LINUX {{ notify_crash_record_cmdline }}"
+          register: notify_crash_record_grub
+
+        # A task, not a handler: the read-back assertion below must see the
+        # fresh grub.cfg in this same pass, and flushing handlers here would
+        # also fire every other role's pending handler mid-role.
+        - name: Regenerate grub.cfg for the crash record reservation  # noqa: no-handler
+          ansible.builtin.command: update-grub
+          when: notify_crash_record_grub.changed
+          changed_when: true
+
+        # The exact token GRUB must hold: the escaped $, the configured size
+        # and the chosen address, followed by a space so a longer address
+        # cannot match a shorter one.
+        - name: Read the reservation back from grub.cfg
+          ansible.builtin.command:
+            argv:
+              - grep
+              - -c
+              - -F
+              - "{{ notify_crash_record_memmap }} pstore.kmsg_bytes={{ notify_crash_record_kmsg_bytes | int }}"
+              - "{{ notify_crash_record_grub_cfg }}"
+          register: notify_crash_record_grub_check
+          changed_when: false
+          failed_when: false
+
+        - name: Assert GRUB kept the memmap= reservation quoted for the kernel
+          ansible.builtin.assert:
+            that:
+              - notify_crash_record_grub_check.rc == 0
+              - (notify_crash_record_grub_check.stdout | trim | int) > 0
+            msg: >-
+              {{ notify_crash_record_grub_cfg }} does not contain the literal
+              {{ notify_crash_record_memmap }} that GRUB needs to pass
+              memmap={{ notify_crash_record_size_mib | int }}M${{ notify_crash_record_addr }}
+              to the kernel.
+
+        # Handlers fire even after a failed play (force_handlers), so the
+        # pending-reboot alert is raised only once everything above has passed.
+        - name: Flag the pending reboot when the reservation changed
+          ansible.builtin.debug:
+            msg: "The crash record reservation changed; a reboot applies it."
+          changed_when: notify_crash_record_grub.changed or notify_crash_record_modprobe.changed
+          notify: Record that the crash record needs a reboot
+
+      rescue:
+        - name: Back out the crash record files
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - /etc/default/grub.d/99-vps-scaffold-crash-record.cfg
+            - /etc/modprobe.d/vps-scaffold-ramoops.conf
+
+        - name: Regenerate grub.cfg without the reservation (backout)
+          ansible.builtin.command: update-grub
+          register: notify_crash_record_backout_grub
+          changed_when: true
+          failed_when: false
+
+        - name: Confirm grub.cfg no longer mentions memmap=
+          ansible.builtin.command:
+            argv:
+              - grep
+              - -c
+              - memmap=
+              - "{{ notify_crash_record_grub_cfg }}"
+          register: notify_crash_record_backout_check
+          changed_when: false
+          failed_when: false
+
+        - name: Fail the play because the reservation was backed out
+          ansible.builtin.fail:
+            msg: >-
+              The crash record reservation could not be written and verified
+              ({{ ansible_failed_task.name | default('unknown task') }}:
+              {{ ansible_failed_result.msg | default('no message') }}). It has
+              been backed out: the GRUB fragment and the ramoops module options
+              were removed and grub.cfg was regenerated
+              ({{ 'update-grub succeeded' if (notify_crash_record_backout_grub.rc | default(1)) == 0
+                  else 'update-grub FAILED: ' ~ (notify_crash_record_backout_grub.stderr | default('')) }}).
+              {{ notify_crash_record_grub_cfg }} now contains
+              {{ notify_crash_record_backout_check.stdout | default('?') | trim }} line(s) with memmap=
+              {{ '(clean; the next reboot is unaffected)' if (notify_crash_record_backout_check.rc | default(0)) == 1
+                 else '(NOT clean: inspect the linux lines in grub.cfg before any reboot)' }}.
+              No reboot has been scheduled.
 
     - name: Enable systemd-pstore and the crash record boot check
       ansible.builtin.systemd:

@@ -141,7 +141,6 @@ of the actions, once.
 
 ---
 
-## 2026-10-11 — Deploy wrapper executes only the verified HEAD; off-host Caddy logs; audit rules load at boot
 ## 2026-11-02: Kernel crash record kept in reserved RAM (ramoops), archived and shipped
 
 **What lands automatically on the next `site-quick.yml`:**
@@ -216,6 +215,8 @@ of the actions, once.
    (`~deploy/.gnupg`) is no longer read and may be removed.
 
 ---
+
+## 2026-10-11 — Deploy wrapper executes only the verified HEAD; off-host Caddy logs; audit rules load at boot
 
 ## 2026-07-04 — Hands-off update fast path
 

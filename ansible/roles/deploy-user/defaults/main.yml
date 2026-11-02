@@ -106,3 +106,17 @@ deploy_push_trigger_url: ""
 # ntfy token with READ access to that topic (publish uses a separate token,
 # held only as a GitHub Actions secret).
 deploy_push_trigger_token: ""
+
+# --- Secrets (docs/13-secrets.md) ---
+# sops decrypts the server repo's secrets/ at deploy (vps-secrets-render), with
+# the server's own age key in /etc/vps-scaffold/age/. Opt-in per server repo:
+# nothing happens until the repo has a secrets/ directory. sops is a pinned,
+# checksum-verified release binary; age-keygen comes from the Ubuntu archive
+# (sops has age encryption built in, so the server needs only the key tool).
+# Check https://github.com/getsops/sops/releases for the latest; take the
+# checksums from its sops-vX.Y.Z.checksums.txt.
+deploy_secrets_sops_version: "3.13.3"
+deploy_secrets_sops_checksums:
+  "3.13.3":
+    amd64: "sha256:e5bec3346a873ae91d871550f3e698c1aad962aff462a080e40f25fde17fef6b"
+    arm64: "sha256:53b0abacd38ef1b12a66d6c100956691b9cefce018d91f81e73ddf7438b94d77"

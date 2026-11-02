@@ -152,6 +152,100 @@
     - vps-git-heal
     - vps-git
 
+# --- Secrets: sops, the server's age key, and the render step (docs/13-secrets.md) ---
+- name: Install age (for age-keygen)
+  ansible.builtin.apt:
+    name: age
+    state: present
+
+- name: Resolve the sops architecture and checksum
+  ansible.builtin.set_fact:
+    deploy_sops_arch: "{{ ansible_facts['architecture'] | replace('x86_64', 'amd64') | replace('aarch64', 'arm64') }}"
+    deploy_sops_checksum: >-
+      {{
+        deploy_secrets_sops_checksums
+        .get(deploy_secrets_sops_version, {})
+        .get(ansible_facts['architecture'] | replace('x86_64', 'amd64') | replace('aarch64', 'arm64'), '')
+      }}
+
+- name: Fail when no sops checksum is pinned for this platform
+  ansible.builtin.fail:
+    msg: "No pinned sops checksum for version {{ deploy_secrets_sops_version }} arch {{ deploy_sops_arch }}"
+  when: deploy_sops_checksum | length == 0
+
+# Compare the installed binary's checksum with the pinned one, not a version
+# string: it is exact, and a tampered or truncated binary is replaced.
+- name: Check the installed sops binary
+  ansible.builtin.stat:
+    path: /usr/local/bin/sops
+    checksum_algorithm: sha256
+  register: deploy_sops_installed
+
+- name: Install sops {{ deploy_secrets_sops_version }}
+  when: >-
+    not deploy_sops_installed.stat.exists or
+    ('sha256:' ~ deploy_sops_installed.stat.checksum) != (deploy_sops_checksum | trim)
+  block:
+    - name: Download sops
+      ansible.builtin.get_url:
+        url: >-
+          https://github.com/getsops/sops/releases/download/v{{ deploy_secrets_sops_version }}/sops-v{{ deploy_secrets_sops_version }}.linux.{{ deploy_sops_arch }}
+        dest: /usr/local/bin/sops
+        owner: root
+        group: root
+        mode: "0755"
+        checksum: "{{ deploy_sops_checksum }}"
+        force: true
+
+- name: Create the age key directory
+  ansible.builtin.file:
+    path: /etc/vps-scaffold/age
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+# The server's own key, made once on the box and never copied off it. Its
+# public half goes in the server repo's .sops.yaml (printed below and kept in
+# key.pub). Losing it is recoverable: the owner and recovery keys can
+# re-encrypt every file to a new server key.
+- name: Create the server's age key if it does not exist
+  ansible.builtin.command: age-keygen -o /etc/vps-scaffold/age/key.txt
+  args:
+    creates: /etc/vps-scaffold/age/key.txt
+
+- name: Restrict the server's age key to root
+  ansible.builtin.file:
+    path: /etc/vps-scaffold/age/key.txt
+    owner: root
+    group: root
+    mode: "0400"
+
+- name: Read the server's age public key
+  ansible.builtin.command: age-keygen -y /etc/vps-scaffold/age/key.txt
+  register: deploy_age_public_key
+  changed_when: false
+
+- name: Keep the server's age public key beside it, for operators
+  ansible.builtin.copy:
+    dest: /etc/vps-scaffold/age/key.pub
+    content: "{{ deploy_age_public_key.stdout }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Show the server's age public key (for the server repo's .sops.yaml)
+  ansible.builtin.debug:
+    msg: "Server age public key: {{ deploy_age_public_key.stdout }}"
+
+- name: Install the secrets render step
+  ansible.builtin.copy:
+    src: vps-secrets-render
+    dest: /usr/local/sbin/vps-secrets-render
+    owner: root
+    group: root
+    mode: "0755"
+
 # In restricted mode docker (and so `compose pull`) runs as root inside
 # vps-deploy, but private-registry credentials were logged in as the deploy
 # user (bootstrap flow) and live in ~deploy/.docker/config.json — root's pull

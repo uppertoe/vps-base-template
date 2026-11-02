@@ -219,6 +219,23 @@ if ! env -i PATH="$PATH" HOME=/root GNUPGHOME=/etc/vps-scaffold/gnupg \
 fi
 {% endif %}
 
+# Secrets (docs/13-secrets.md): decrypt the repo's secrets/ into the .env files
+# Compose reads, after the signed-commit check so that only reviewed
+# ciphertext is ever decrypted, and before anything starts. Every file must be
+# tracked, as the hooks above must be: an untracked file is not part of the
+# reviewed commit. vps-secrets-render writes nothing unless every file
+# decrypts, and leaves unchanged files untouched. No secrets/ directory, no
+# effect.
+if [[ -d secrets ]]; then
+  while IFS= read -r -d '' f; do
+    if ! rootgit --literal-pathspecs ls-files --error-unmatch -- "$f" >/dev/null 2>&1; then
+      echo "vps-deploy: ${f#./} is not tracked by git — refusing to decrypt an unreviewed secrets file." >&2
+      exit 1
+    fi
+  done < <(find ./secrets -type f -print0)
+  /usr/local/sbin/vps-secrets-render --repo /opt/deploy
+fi
+
 docker compose pull --policy always
 
 # Keep server and app env files locked down. Only chmod files that are not

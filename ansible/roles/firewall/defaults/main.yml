@@ -22,6 +22,17 @@ firewall_allowed_outbound_udp_ports:
   - "53"   # DNS
   - "123"  # NTP
 
+# ufw's own logging. "low" (the ufw default) writes a kernel line for every
+# blocked packet: 582 `[UFW BLOCK]` lines in under two hours on a live host,
+# which is journal budget spent on background internet noise and is what
+# bounds on-box retention. Off by default. The rules themselves and their hit
+# counters are unaffected (`ufw status verbose`, `iptables -nvL`), fail2ban
+# logs its own bans from sshd, and the hourly log export carries whatever the
+# journal holds. Note that with logging off, blocked connections are recorded
+# nowhere: the scaffold's auditd rules do not cover netfilter. Set "low" to
+# have them in the journal again at ufw's own rate limit.
+host_ufw_logging: "off"
+
 docker_firewall_enabled: true
 docker_firewall_bridge_interfaces:
   - docker0

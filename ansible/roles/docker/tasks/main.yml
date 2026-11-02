@@ -107,6 +107,14 @@
     - vps-data.slice
   notify: Reload systemd for slices
 
+- name: Install the unused-tagged-image prune pass
+  ansible.builtin.copy:
+    src: docker-prune-unused-tagged
+    dest: /usr/local/sbin/docker-prune-unused-tagged
+    owner: root
+    group: root
+    mode: "0755"
+
 - name: Deploy docker-prune systemd service
   ansible.builtin.copy:
     src: docker-prune.service

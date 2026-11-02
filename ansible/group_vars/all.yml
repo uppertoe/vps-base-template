@@ -222,6 +222,14 @@ baseline_host_sysctls:
   # zram sooner and spend the single vCPU on compression nobody is waiting on.
   vm.swappiness: "10"
 
+# Desktop-era apt hooks (PackageKit, update-notifier, motd-news) and the
+# Ubuntu Pro client's apt-news and esm-cache hooks run on every apt invocation
+# and load the apt cache into memory on a host that is often already in swap.
+# The common role masks them; see roles/common/defaults/main.yml. Set the Pro
+# switch false on a host attached to Ubuntu Pro.
+common_disable_desktop_apt_hooks: true
+common_disable_pro_apt_hooks: true
+
 # Services that ship enabled on a desktop-derived Ubuntu image and do nothing
 # on a headless KVM guest, while holding tens of MB resident each. Masked, not
 # just stopped, so a package upgrade cannot quietly re-enable them.
@@ -251,3 +259,8 @@ firewall_allowed_outbound_tcp_ports:
 firewall_allowed_outbound_udp_ports:
   - "53"   # DNS
   - "123"  # NTP
+# ufw's own per-packet logging. Off: 582 [UFW BLOCK] lines in two hours of
+# background internet noise were the largest single consumer of the journal
+# budget that bounds on-box retention. Rules and counters are unaffected; set
+# "low" to log blocked packets again. See roles/firewall/defaults/main.yml.
+host_ufw_logging: "off"

@@ -77,6 +77,10 @@
   community.general.ufw:
     state: enabled
 
+- name: Set ufw logging
+  community.general.ufw:
+    logging: "{{ host_ufw_logging }}"
+
 - name: Normalize Ubuntu network security sysctls for CIS-aligned rp_filter
   ansible.builtin.replace:
     path: /etc/sysctl.d/10-network-security.conf

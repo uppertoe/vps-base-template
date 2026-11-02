@@ -98,6 +98,118 @@
     state: absent
   when: not (common_automatic_reboot_enabled | bool)
 
+# --- Desktop-era apt hooks ---------------------------------------------------
+# See the role defaults for why. Masking rather than disabling: these units
+# are static (started by hooks and timers, not by an [Install] section), so
+# only a mask stops the hook from waking them. Skipped in containers, where
+# the units mostly do not exist and systemd cannot act on them anyway.
+
+- name: Mask PackageKit
+  ansible.builtin.systemd_service:
+    name: packagekit.service
+    masked: true
+  failed_when: false
+  when:
+    - common_disable_desktop_apt_hooks | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
+- name: Check for PackageKit's apt hook
+  ansible.builtin.stat:
+    path: /etc/apt/apt.conf.d/20packagekit
+  register: common_packagekit_hook
+  when: common_disable_desktop_apt_hooks | bool
+
+# The hook is a conffile of packagekit, so dpkg keeps our emptied version
+# across upgrades (--force-confold in 53unattended-upgrades-dpkg).
+- name: Neutralise PackageKit's apt hook
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20packagekit
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      // Managed by Ansible (common role, vps-base-template). PackageKit's stock
+      // hooks (DPkg::Post-Invoke and APT::Update::Post-Invoke-Success) woke the
+      // PackageKit daemon over D-Bus on every apt run, where it loaded the whole
+      // apt cache into memory to serve a desktop this host does not have. The
+      // service is masked and the hooks are removed here; the package stays
+      // because software-properties-common depends on it.
+  when:
+    - common_disable_desktop_apt_hooks | bool
+    - common_packagekit_hook.stat.exists
+
+- name: Disable the update-notifier and motd-news timers
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: false
+    state: stopped
+  loop: "{{ common_desktop_apt_timers }}"
+  failed_when: false
+  when:
+    - common_disable_desktop_apt_hooks | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
+- name: Turn off motd-news
+  ansible.builtin.lineinfile:
+    path: /etc/default/motd-news
+    regexp: '^ENABLED='
+    line: 'ENABLED=0'
+    create: true
+    owner: root
+    group: root
+    mode: "0644"
+  when: common_disable_desktop_apt_hooks | bool
+
+# --- Ubuntu Pro apt hooks ----------------------------------------------------
+
+- name: Check for the Ubuntu Pro client
+  ansible.builtin.stat:
+    path: /usr/bin/pro
+  register: common_pro_client
+
+- name: Read the apt_news setting
+  ansible.builtin.command:
+    cmd: pro config show apt_news
+  register: common_pro_apt_news
+  changed_when: false
+  failed_when: false
+  when:
+    - common_disable_pro_apt_hooks | bool
+    - common_pro_client.stat.exists
+
+- name: Disable apt news
+  ansible.builtin.command:
+    cmd: pro config set apt_news=false
+  when:
+    - common_disable_pro_apt_hooks | bool
+    - common_pro_client.stat.exists
+    - common_pro_apt_news.rc == 0
+    - "'False' not in common_pro_apt_news.stdout"
+
+- name: Mask the apt-news and esm-cache units
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    masked: true
+  loop:
+    - apt-news.service
+    - esm-cache.service
+  failed_when: false
+  when:
+    - common_disable_pro_apt_hooks | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
+- name: Unmask the apt-news and esm-cache units for an attached host
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    masked: false
+  loop:
+    - apt-news.service
+    - esm-cache.service
+  failed_when: false
+  when:
+    - not (common_disable_pro_apt_hooks | bool)
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
 - name: Install pending-security-updates check script
   ansible.builtin.copy:
     src: pending-security-updates

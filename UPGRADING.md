@@ -49,6 +49,9 @@ of the actions, once.
   it with the list `deploy_github_webflow_fingerprints`. The default lists only
   the fingerprint GitHub publishes for its current web-flow signature,
   `968479A1AFF927E37D1A566BB5690EEEBB952194`.
+
+---
+
 ## 2026-11-02: Open paths beside a gate must be declared; the access-log filter covers percent-encoded tokens and Location
 
 **What lands automatically on the next render and deploy:**
@@ -76,10 +79,29 @@ of the actions, once.
    that already carries `# scaffold-lint: public` for a path inside its block
    can replace that line with the `open-path` marker, which carries the paths
    as well as the reason.
-## 2026-11-02 — zram swap tier
-## 2026-11-02 — zram swap tier; a data tier and one ceiling for the whole estate
+
+---
+
+## 2026-11-02 — zram swap tier; a data tier and one ceiling for the whole estate; quieter apt and journal
 
 **What lands automatically on the next `site-quick.yml`:**
+
+- The common role masks `packagekit.service`, empties PackageKit's apt hook
+  (`/etc/apt/apt.conf.d/20packagekit`, a conffile dpkg now keeps), disables
+  `update-notifier-download.timer`, `update-notifier-motd.timer` and
+  `motd-news.timer`, sets `ENABLED=0` in `/etc/default/motd-news`, runs
+  `pro config set apt_news=false`, and masks `apt-news.service` and
+  `esm-cache.service`. Switches: `common_disable_desktop_apt_hooks` and
+  `common_disable_pro_apt_hooks` (set the latter false on a host attached to
+  Ubuntu Pro).
+- ufw logging is turned off (`host_ufw_logging: "off"`); the exceptions
+  register in docs/08 records what is and is not still logged.
+- `docker-prune.service` gains a third pass, `docker-prune-unused-tagged`,
+  which removes tagged images no container uses, older than the same seven
+  day window, by image ID. `docker image prune --all` keeps whatever image
+  carries `repo:latest` while a container created from
+  `repo:latest@sha256:…` runs (containerd image store), which is how four
+  pre-pinning images from June and July outlived every prune.
 
 - The common role installs `systemd-zram-generator` and a `/dev/zram0` swap
   device at priority 100 (half of RAM, capped at 2 GB, zstd). The encrypted

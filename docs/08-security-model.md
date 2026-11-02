@@ -102,6 +102,8 @@ quantity, not an open question. Verified live on the staging host 2026-07-05
 | UFW kept instead of nftables | The scaffold uses UFW + Docker-aware `DOCKER-USER` filtering deliberately. |
 | `deploy` user in the `docker` group (Docker Bench 1.1.2) | One half of a single accepted risk: **in default mode, `deploy` is root-equivalent** (docker group here + passwordless sudo, see the L2 `sudo_require_authentication` row — same risk, one entry in spirit). Compensating: key-only SSH, single operator, auditd on sudo/docker paths, quarterly access review. **Closure implemented:** `deploy_restricted_mode` (docs/05) removes both grants; flip before any second operator is added. |
 | Caddy keeps `cap_add: NET_BIND_SERVICE` | Single retained capability so Caddy binds 80/443 as a non-root user. It still `cap_drop: ALL` first. |
+| ufw logging off (`host_ufw_logging`) | Per-packet `[UFW BLOCK]` lines (582 in two hours on a live host, all background internet noise) were the largest single consumer of the journal budget that bounds on-box retention. The rules, their counters (`iptables -nvL`) and the evidence capture (`ufw status verbose`) are unaffected, and fail2ban logs its own bans from sshd. Blocked packets are then recorded nowhere: the auditd rule set does not cover netfilter. Set `"low"` on a host that wants them in the journal and the hourly export. |
+| `log_martians` lines from Docker bridges | `net.ipv4.conf.all.log_martians=1` is kept for the benchmark. Containers' gratuitous ARP on the `172.x` bridge networks at start trips it (about 400 lines per boot on a twenty-container host); these are the stack's own interfaces, not spoofed traffic, and are accepted as noise rather than silenced, since the sysctl is per-interface and the bridges are ephemeral. |
 
 ### Host OS — CIS Level 2 (deselected in the L2 tailoring profile)
 
@@ -197,6 +199,11 @@ events here:
   paths) and fixed the same day — the register had overclaimed since the
   entry was written. Lesson: re-verify "satisfied" rows after any change to
   the roles that implement them.
+- **2026-11-02** — Swap is zram first with the encrypted file as overflow;
+  `vps.slice` caps the whole container estate and `vps-data.slice` holds the
+  data tier (`memory_tier` audit control); desktop-era and Ubuntu Pro apt
+  hooks masked; ufw logging off and `log_martians` bridge noise accepted
+  (rows above); the weekly prune removes unused tagged images by ID.
 - **2026-07-03** — AIDE exceptions narrowed (blanket `/var/lib` removed),
   pre-re-baseline recording added, deploy root-equivalence closure
   (`deploy_restricted_mode`) implemented; restricted posture proven by

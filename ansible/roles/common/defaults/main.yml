@@ -54,6 +54,30 @@ host_swap_zram_priority: 100
 # swapfile that is already active changes at the next boot.
 host_swapfile_priority: 10
 
+# Ubuntu's server image carries desktop-era hooks that run on every apt
+# invocation and on timers: PackageKit (woken over D-Bus by 20packagekit after
+# every dpkg run and cache update; loads the whole apt cache into memory to
+# serve a desktop that is not there), update-notifier's download and MOTD
+# timers (another apt-cache load twice a day), and motd-news (an HTTP fetch
+# for a login banner nobody reads). On 2026-11-01 the site play's `apt-get
+# update` started PackageKit, apt-news and esm-cache on a host already deep in
+# swap, and the unexplained stop followed within fifteen seconds. None of them
+# does anything useful on an unattended host. PackageKit stays installed
+# (software-properties-common depends on it); its service is masked and its
+# conffile emptied, which dpkg keeps across upgrades (--force-confold).
+common_disable_desktop_apt_hooks: true
+common_desktop_apt_timers:
+  - update-notifier-download.timer
+  - update-notifier-motd.timer
+  - motd-news.timer
+
+# The Ubuntu Pro client hooks apt too (20apt-esm-hook.conf starts apt-news and
+# esm-cache before every cache update). apt news is advertising, and the ESM
+# cache serves only an attached subscription. Set false when a host is
+# attached to Ubuntu Pro: the units are unmasked again and apt_news is left
+# as it is.
+common_disable_pro_apt_hooks: true
+
 common_packages:
   - curl
   - git

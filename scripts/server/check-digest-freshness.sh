@@ -8,7 +8,7 @@
 # digest-freshness workflow turns drift into a GitHub issue. Either way, a
 # stale pin cannot be silent.
 #
-# Anonymous registry API only — no credentials needed for public images.
+# Anonymous registry API for public images; GHCR_TOKEN (optional) for private ones.
 set -euo pipefail
 
 # The server repo root: this file is installed at <server>/scaffold/scripts/server/,
@@ -24,7 +24,12 @@ current_digest() {
   case "$ref" in
     ghcr.io/*)
       registry="ghcr.io"; repo="${ref#ghcr.io/}"
-      token="$(curl -fsS "https://ghcr.io/token?scope=repository:${repo}:pull" \
+      # Anonymous works for public images; pass GHCR_TOKEN (a GITHUB_TOKEN or PAT
+      # with read:packages) so PRIVATE first-party images resolve too, instead of
+      # the silent WARN they used to fall to. The username is ignored by ghcr's
+      # token exchange; only the credential matters.
+      # shellcheck disable=SC2086  # the -u option is present only with a token
+      token="$(curl -fsS ${GHCR_TOKEN:+-u "${GHCR_USER:-token}:${GHCR_TOKEN}"} "https://ghcr.io/token?scope=repository:${repo}:pull" \
         | python3 -c 'import json,sys;print(json.load(sys.stdin)["token"])')" || { echo ERROR; return; }
       url="https://ghcr.io/v2/${repo}/manifests/${tag}"
       ;;

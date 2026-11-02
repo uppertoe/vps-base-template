@@ -54,6 +54,14 @@ printf '%s\nDB_PASSWORD=plaintext\n%s\n' "$enc_line" "$meta" > "$d/secrets/.env.
 expect fail "a plaintext value beside encrypted ones" "$d"
 
 d="$(case_repo)"; mkdir -p "$d/secrets"; touch "$d/.sops.yaml"
+printf '#\n%s\n#   \n%s\n' "$enc_line" "$meta" > "$d/secrets/.env.sops"
+expect pass "empty comment lines, which SOPS leaves unencrypted" "$d"
+
+d="$(case_repo)"; mkdir -p "$d/secrets"; touch "$d/.sops.yaml"
+printf '%s\n#x\n%s\n' "$enc_line" "$meta" > "$d/secrets/.env.sops"
+expect fail "an unencrypted comment with content" "$d"
+
+d="$(case_repo)"; mkdir -p "$d/secrets"; touch "$d/.sops.yaml"
 printf 'SECRET_KEY=plaintext\n' > "$d/secrets/.env"
 expect fail "a plain file under secrets/" "$d"
 

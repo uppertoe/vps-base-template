@@ -1,0 +1,18 @@
+#!/bin/bash
+# vps-release-bind-check — before the first switch to the release tree, refuse
+# when a running container binds a path under /opt/deploy that a release would
+# not contain (untracked) or that the container writes to (a release is
+# read-only once exported). docs/15-release-tree.md §6.
+set -euo pipefail
+[[ -d /opt/deploy && ! -L /opt/deploy ]] || exit 0
+bad=0
+while read -r src rw; do
+  rel="${src#/opt/deploy/}"
+  if [[ "$rw" == true ]]; then
+    echo "writable bind into the deploy tree: $rel"; bad=1; continue
+  fi
+  if ! runuser -u deploy -- git -C /opt/deploy ls-files --error-unmatch -- "$rel" >/dev/null 2>&1; then
+    echo "untracked path bound from the deploy tree: $rel"; bad=1
+  fi
+done < <(docker ps -q | xargs -r docker inspect --format '{{range .Mounts}}{{if eq .Type "bind"}}{{.Source}} {{.RW}}{{"\n"}}{{end}}{{end}}' | grep '^/opt/deploy/' | sort -u)
+exit "$bad"

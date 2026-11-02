@@ -12,5 +12,13 @@
 set -euo pipefail
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
+# Release tree (docs/15-release-tree.md): there is no checkout; read root's
+# mirror instead. `vps-git log --oneline -5` and `vps-git show <commit>` work.
+if [[ -L /opt/deploy && -d /var/lib/vps-deploy/repo.git ]]; then
+  [[ $EUID -eq 0 ]] || { echo "vps-git: run with sudo" >&2; exit 1; }
+  exec env -i PATH="$PATH" HOME=/root GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_OPTIONAL_LOCKS=0 \
+    git --git-dir=/var/lib/vps-deploy/repo.git -c core.hooksPath=/dev/null -c core.pager=cat "$@"
+fi
+
 REPO="${VPS_DEPLOY_REPO:-/opt/deploy}"
 exec runuser -u "{{ deploy_user }}" -- env GIT_OPTIONAL_LOCKS=0 git -C "$REPO" "$@"

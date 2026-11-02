@@ -1,0 +1,208 @@
+#!/bin/bash
+# vps-release — root-owned release tree (docs/15-release-tree.md).
+# Managed by Ansible (deploy-user role). Runs as root only.
+#
+#   vps-release fetch      fetch the server repo into the root mirror; print the tip
+#   vps-release prepare    fetch, verify, export and render the tip; print its path
+#   vps-release switch DIR point /opt/deploy at a prepared release
+#   vps-release previous   print the release before the current one
+#   vps-release current    print the commit /opt/deploy points at
+#   vps-release prune      keep the newest $KEEP releases
+#
+# Nothing here reads a file the deploy account can write: the mirror, the
+# deploy key, the known_hosts, the trust stores and the releases are root's.
+set -euo pipefail
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+umask 022
+
+[[ $EUID -eq 0 ]] || { echo "vps-release: must run as root" >&2; exit 1; }
+
+CONF=/etc/vps-scaffold/release.env
+# The configuration is root-owned and written by the play; read it as data.
+REPO_URL=""; BRANCH=main; KEEP=3; VERIFY_SIGNATURE=0
+while IFS='=' read -r k v; do
+  case "$k" in
+    REPO_URL) REPO_URL="$v" ;;
+    BRANCH) BRANCH="$v" ;;
+    KEEP) KEEP="$v" ;;
+    VERIFY_SIGNATURE) VERIFY_SIGNATURE="$v" ;;
+  esac
+done < <(grep -E '^[A-Z_]+=' "$CONF")
+[[ -n "$REPO_URL" ]] || { echo "vps-release: REPO_URL is not set in $CONF" >&2; exit 1; }
+[[ "$BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "vps-release: bad BRANCH" >&2; exit 1; }
+[[ "$KEEP" =~ ^[2-9]$ ]] || KEEP=3
+
+STATE=/var/lib/vps-deploy
+MIRROR="$STATE/repo.git"
+SCAFFOLD_MIRROR="$STATE/scaffold.git"
+RELEASES=/opt/deploy-releases
+LINK=/opt/deploy
+KEY=/etc/vps-scaffold/deploy-key
+KNOWN=/etc/vps-scaffold/known_hosts
+
+# git as root with nothing but what is on this command line: no system or
+# global configuration, no hooks, no fsmonitor, no replacement objects, no
+# prompts, and only the https and ssh transports. The ssh command is root's,
+# with the root-owned key and pinned host keys, never ~/.ssh of anyone.
+rgit() {
+  env -i PATH="$PATH" HOME=/root LANG=C GNUPGHOME=/etc/vps-scaffold/gnupg \
+      GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 \
+      GIT_TERMINAL_PROMPT=0 GIT_OPTIONAL_LOCKS=0 \
+      GIT_SSH_COMMAND="ssh -F /dev/null -i $KEY -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$KNOWN -o GlobalKnownHostsFile=/dev/null" \
+    git -c core.hooksPath=/dev/null -c core.fsmonitor=false \
+        -c protocol.allow=never -c protocol.https.allow=always -c protocol.ssh.allow=always \
+        -c gpg.program=/usr/bin/gpg -c gpg.openpgp.program=/usr/bin/gpg \
+        -c gpg.ssh.program=/usr/bin/ssh-keygen -c gpg.x509.program=/usr/bin/gpgsm \
+        -c gpg.ssh.allowedSignersFile=/etc/ssh/allowed_signers \
+        -c tar.umask=022 "$@"
+}
+
+init_mirror() {
+  local dir="$1"
+  if [[ ! -d "$dir" ]]; then
+    install -d -m 0700 -o root -g root "$STATE"
+    rgit init --quiet --bare "$dir"
+  fi
+}
+
+do_fetch() {
+  init_mirror "$MIRROR"
+  rgit --git-dir="$MIRROR" fetch --quiet --prune --no-tags "$REPO_URL" \
+    "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
+  rgit --git-dir="$MIRROR" rev-parse --verify --quiet "refs/remotes/origin/$BRANCH^{commit}"
+}
+
+verify() {
+  local commit="$1"
+  [[ "$VERIFY_SIGNATURE" == 1 ]] || return 0
+  if ! rgit --git-dir="$MIRROR" verify-commit "$commit" >/dev/null 2>&1; then
+    echo "vps-release: $commit is not a verified signed commit — refusing to deploy." >&2
+    exit 1
+  fi
+}
+# The scaffold commit is the gitlink the verified commit records, and its URL
+# the one in that commit's .gitmodules. Both are therefore reviewed content.
+scaffold_of() {
+  local commit="$1" line mode type sha _path
+  line="$(rgit --git-dir="$MIRROR" ls-tree "$commit" -- scaffold)"
+  [[ -n "$line" ]] || return 0
+  read -r mode type sha _path <<<"$line"
+  [[ "$mode" == 160000 && "$type" == commit && "$sha" =~ ^[0-9a-f]{40}$ ]] || {
+    echo "vps-release: scaffold in $commit is not a submodule entry" >&2; exit 1; }
+  echo "$sha"
+}
+scaffold_url_of() {
+  local commit="$1" tmp url
+  tmp="$(mktemp)"
+  rgit --git-dir="$MIRROR" show "$commit:.gitmodules" >"$tmp"
+  url="$(rgit config --file "$tmp" --get submodule.scaffold.url || true)"
+  rm -f "$tmp"
+  # The scaffold is public, so it is always fetched anonymously over https,
+  # whichever form .gitmodules records; the deploy key is never offered to it.
+  if [[ "$url" =~ ^(git@github\.com:|ssh://git@github\.com/|https://github\.com/)([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)$ ]]; then
+    echo "https://github.com/${BASH_REMATCH[2]}"
+  else
+    echo "vps-release: scaffold URL '$url' in $commit is not a github.com repository" >&2; exit 1
+  fi
+}
+
+# A symlink in the export must stay inside the release.
+check_links() {
+  local root="$1" l target
+  while IFS= read -r -d '' l; do
+    target="$(readlink -m -- "$l")"
+    case "$target" in
+      "$root"|"$root"/*) ;;
+      *) echo "vps-release: ${l#"$root"/} links outside the release ($target)" >&2; return 1 ;;
+    esac
+  done < <(find "$root" -type l -print0)
+}
+
+do_prepare() {
+  local commit scaffold url dest tmp
+  commit="$(do_fetch)"
+  verify "$commit"
+  dest="$RELEASES/$commit"
+  if [[ -f "$dest/.release" ]]; then
+    echo "$dest"; return 0
+  fi
+  install -d -m 0755 -o root -g root "$RELEASES"
+  tmp="$RELEASES/.$commit.partial"
+  rm -rf -- "$tmp"
+  install -d -m 0755 -o root -g root "$tmp"
+  rgit --git-dir="$MIRROR" archive --format=tar "$commit" | tar -x --no-same-owner -C "$tmp"
+  scaffold="$(scaffold_of "$commit")"
+  if [[ -n "$scaffold" ]]; then
+    url="$(scaffold_url_of "$commit")"
+    init_mirror "$SCAFFOLD_MIRROR"
+    if ! rgit --git-dir="$SCAFFOLD_MIRROR" cat-file -e "$scaffold^{commit}" 2>/dev/null; then
+      rgit --git-dir="$SCAFFOLD_MIRROR" fetch --quiet --no-tags "$url" '+refs/heads/*:refs/heads/*'
+    fi
+    rgit --git-dir="$SCAFFOLD_MIRROR" cat-file -e "$scaffold^{commit}" || {
+      echo "vps-release: scaffold commit $scaffold is not on any branch of $url" >&2; exit 1; }
+    install -d -m 0755 -o root -g root "$tmp/scaffold"
+    rgit --git-dir="$SCAFFOLD_MIRROR" archive --format=tar "$scaffold" | tar -x --no-same-owner -C "$tmp/scaffold"
+  fi
+  check_links "$tmp"
+  chown -R root:root "$tmp"
+  if [[ -d "$tmp/secrets" ]]; then
+    /usr/local/sbin/vps-secrets-render --repo "$tmp" --owner root
+  fi
+  printf 'commit=%s\nscaffold=%s\nexported=%s\n' "$commit" "${scaffold:-none}" "$(date -u +%FT%TZ)" >"$tmp/.release"
+  chmod 0644 "$tmp/.release"
+  mv -T -- "$tmp" "$dest"
+  echo "$dest"
+}
+
+do_switch() {
+  local dest="$1" new
+  [[ "$dest" == "$RELEASES"/* && -f "$dest/.release" ]] || {
+    echo "vps-release: $dest is not a prepared release" >&2; exit 1; }
+  # First switch on a server that still has a checkout at /opt/deploy.
+  if [[ -d "$LINK" && ! -L "$LINK" ]]; then
+    mv -T -- "$LINK" /opt/deploy-legacy
+  fi
+  new="/opt/.deploy-link.$$"
+  ln -s -- "$dest" "$new"
+  mv -T -- "$new" "$LINK"
+}
+
+current_dir() { [[ -L "$LINK" ]] && readlink -f -- "$LINK" || true; }
+do_current() {
+  local d; d="$(current_dir)"
+  [[ -n "$d" && -f "$d/.release" ]] && sed -n 's/^commit=//p' "$d/.release" || echo none
+}
+# Releases, newest first, by export time.
+releases_newest_first() {
+  local d
+  for d in "$RELEASES"/*/; do
+    d="${d%/}"; [[ -f "$d/.release" ]] || continue
+    printf '%s %s\n' "$(sed -n 's/^exported=//p' "$d/.release")" "$d"
+  done | sort -r | cut -d' ' -f2-
+}
+do_previous() {
+  local cur; cur="$(current_dir)"
+  releases_newest_first | grep -vxF -- "$cur" | head -1
+}
+do_prune() {
+  local cur n=0 d; cur="$(current_dir)"
+  while IFS= read -r d; do
+    n=$((n + 1))
+    [[ "$d" == "$cur" ]] && continue
+    (( n > KEEP )) && rm -rf -- "$d"
+  done < <(releases_newest_first)
+  find "$RELEASES" -maxdepth 1 -name '.*.partial' -mmin +60 -exec rm -rf -- {} + 2>/dev/null || true
+}
+
+# Sourced (by the tests): define the functions only.
+[[ "${BASH_SOURCE[0]}" == "$0" ]] || return 0
+
+case "${1:-}" in
+  fetch) do_fetch ;;
+  prepare) do_prepare ;;
+  switch) do_switch "${2:?release directory}" ;;
+  current) do_current ;;
+  previous) do_previous ;;
+  prune) do_prune ;;
+  *) echo "usage: vps-release fetch|prepare|switch DIR|current|previous|prune" >&2; exit 2 ;;
+esac

@@ -5,6 +5,33 @@ live VPS until you bump the pointer and re-run the site play**. The mechanics
 are always the same; what varies is the *operator actions* that accompany a
 given range of scaffold changes — that's what this file records.
 
+
+## 2026-11-03 — The release tree (opt-in): root fetches, verifies and exports each deploy
+
+**Nothing changes until you opt in.** With `deploy_release_tree: true` in the
+inventory, the next site play installs `vps-release`, copies the read-only
+deploy key to `/etc/vps-scaffold/deploy-key`, pins GitHub's host key and
+writes `/etc/vps-scaffold/release.env`. The deploy after that exports the
+verified commit into `/opt/deploy-releases/<commit>`, renames the old checkout
+to `/opt/deploy-legacy` and makes `/opt/deploy` a link to the release. See
+`docs/15-release-tree.md`.
+
+**Before opting in:**
+
+1. Every file the running stack reads from `/opt/deploy` must be tracked, and
+   no container may write into `/opt/deploy`. The play checks this and lists
+   any offending bind mount.
+2. Set `deploy_repo_url` if the checkout's `origin` is not the server repo's
+   GitHub URL.
+3. Move any hand-placed file out of `/opt/deploy` (into SOPS, a volume, or
+   elsewhere): a release contains only what git tracks.
+
+**After the first release deploy:** `vps-deploy --rollback` switches back to
+the previous release; `sudo vps-git log` reads root's mirror; remove
+`/opt/deploy-legacy` once the server has deployed cleanly from releases.
+
+---
+
 ## How to upgrade
 
 1. Note your current pointer date: `git -C scaffold log -1 --format=%cs`

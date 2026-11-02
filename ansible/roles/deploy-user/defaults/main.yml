@@ -120,3 +120,17 @@ deploy_secrets_sops_checksums:
   "3.13.3":
     amd64: "sha256:e5bec3346a873ae91d871550f3e698c1aad962aff462a080e40f25fde17fef6b"
     arm64: "sha256:53b0abacd38ef1b12a66d6c100956691b9cefce018d91f81e73ddf7438b94d77"
+
+# --- Release tree (docs/15-release-tree.md) ---------------------------------
+# Root fetches the server repo into its own mirror, verifies the tip, exports
+# it into /opt/deploy-releases/<commit> and switches /opt/deploy (a symlink) to
+# it. Off by default; adopt one server at a time.
+deploy_release_tree: false
+# Releases kept for `vps-deploy --rollback` (the current one included).
+deploy_release_keep: 3
+# The server repo's GitHub URL. Empty: read from the existing checkout's
+# origin, then from /etc/vps-scaffold/release.env.
+deploy_repo_url: ""
+# Where the read-only deploy key sits today; copied once to
+# /etc/vps-scaffold/deploy-key (root, 0600).
+deploy_release_key_source: "/home/{{ deploy_user }}/.ssh/github-deploy"

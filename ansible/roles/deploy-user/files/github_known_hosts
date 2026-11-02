@@ -1,0 +1,3 @@
+# GitHub's SSH host key (ed25519), pinned for root's fetch of the server repo
+# (docs/15-release-tree.md). Published at https://api.github.com/meta.
+github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl

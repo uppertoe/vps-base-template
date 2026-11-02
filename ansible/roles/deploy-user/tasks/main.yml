@@ -114,6 +114,15 @@
 
 # --- Deploy tree and entrypoints ---------------------------------------------
 
+- name: Check whether /opt/deploy is already a release link
+  ansible.builtin.stat:
+    path: /opt/deploy
+    follow: false
+  register: deploy_dir_stat
+
+# Under the release tree (docs/15-release-tree.md) /opt/deploy becomes a
+# symlink to a root-owned release; only create the checkout directory while it
+# is not one.
 - name: Create deploy directory for docker projects
   ansible.builtin.file:
     path: /opt/deploy
@@ -121,6 +130,7 @@
     owner: "{{ deploy_user }}"
     group: "{{ deploy_user }}"
     mode: "0755"
+  when: not (deploy_dir_stat.stat.islnk | default(false))
 
 - name: Create vps-scaffold config directory
   ansible.builtin.file:
@@ -137,6 +147,98 @@
     owner: root
     group: root
     mode: "0750"
+
+# --- Release tree (docs/15-release-tree.md) ---------------------------------
+# Root fetches, verifies and exports each commit itself; the deploy account's
+# checkout is no longer read or executed by root.
+- name: Release tree
+  when: deploy_release_tree | bool
+  block:
+    - name: Install the release tool and the first-switch bind check
+      ansible.builtin.copy:
+        src: "{{ item }}"
+        dest: "/usr/local/sbin/{{ item }}"
+        owner: root
+        group: root
+        mode: "0750"
+      loop:
+        - vps-release
+        - vps-release-bind-check
+
+    - name: Pin GitHub's SSH host key for root's fetch
+      ansible.builtin.copy:
+        src: github_known_hosts
+        dest: /etc/vps-scaffold/known_hosts
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Check for root's copy of the deploy key
+      ansible.builtin.stat:
+        path: /etc/vps-scaffold/deploy-key
+      register: release_key
+
+    - name: Copy the read-only deploy key to root's configuration
+      ansible.builtin.copy:
+        src: "{{ deploy_release_key_source }}"
+        dest: /etc/vps-scaffold/deploy-key
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0600"
+      when: not release_key.stat.exists
+
+    - name: Read the server repo URL from the existing checkout  # noqa: command-instead-of-module
+      ansible.builtin.command:
+        cmd: git -C /opt/deploy config --get remote.origin.url
+      become: true
+      become_user: "{{ deploy_user }}"
+      register: release_checkout_url
+      changed_when: false
+      failed_when: false
+      when:
+        - deploy_repo_url | length == 0
+        - not (deploy_dir_stat.stat.islnk | default(false))
+
+    - name: Read the server repo URL from the release configuration
+      ansible.builtin.slurp:
+        src: /etc/vps-scaffold/release.env
+      register: release_env_existing
+      failed_when: false
+      when: deploy_repo_url | length == 0
+
+    - name: Settle the server repo URL
+      ansible.builtin.set_fact:
+        deploy_release_repo_url: >-
+          {{ deploy_repo_url
+             if deploy_repo_url | length > 0
+             else (release_checkout_url.stdout | default('') | trim)
+             if (release_checkout_url.stdout | default('') | trim | length > 0)
+             else ((release_env_existing.content | default('') | b64decode)
+                   | regex_search('(?m)^REPO_URL=(.*)$', '\\1') | default([''], true) | first) }}
+
+    - name: Refuse an unusable server repo URL
+      ansible.builtin.assert:
+        that:
+          - deploy_release_repo_url is match('^(git@github\\.com:|https://github\\.com/)[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')
+        fail_msg: >-
+          The release tree needs the server repo's GitHub URL. Set deploy_repo_url
+          in the inventory (found '{{ deploy_release_repo_url }}').
+
+    - name: Write the release configuration
+      ansible.builtin.template:
+        src: release.env.j2
+        dest: /etc/vps-scaffold/release.env
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Refuse the first switch while a container binds an untracked or writable path in the checkout
+      ansible.builtin.command: /usr/local/sbin/vps-release-bind-check
+      register: release_bind_check
+      changed_when: false
+      failed_when: release_bind_check.rc != 0
+      when: not (deploy_dir_stat.stat.islnk | default(false))
 
 # vps-git-heal hands back anything under the checkout's .git that a hand-run
 # root git has taken (auto-deploy and vps-deploy call it first); vps-git is the

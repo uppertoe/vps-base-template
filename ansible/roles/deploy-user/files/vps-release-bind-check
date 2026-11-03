@@ -13,7 +13,11 @@ while IFS=$'\t' read -r src rw; do
   if [[ "$rw" == true ]]; then
     echo "writable bind into the deploy tree: $rel"; bad=1; continue
   fi
-  if ! runuser -u deploy -- git -C /opt/deploy ls-files --error-unmatch -- "$rel" >/dev/null 2>&1; then
+  # A release exports the scaffold submodule at its recorded commit, so a path
+  # under scaffold/ is tracked when the scaffold's own git tracks it.
+  repo=/opt/deploy path="$rel"
+  if [[ "$rel" == scaffold/* ]]; then repo=/opt/deploy/scaffold path="${rel#scaffold/}"; fi
+  if ! runuser -u deploy -- git -C "$repo" ls-files --error-unmatch -- "$path" >/dev/null 2>&1; then
     echo "untracked path bound from the deploy tree: $rel"; bad=1
   fi
 done < <(printf '%s\n' "$ids" | xargs -r docker inspect --format '{{range .Mounts}}{{if eq .Type "bind"}}{{.Source}}{{"\t"}}{{.RW}}{{"\n"}}{{end}}{{end}}' | grep '^/opt/deploy/' | sort -u)

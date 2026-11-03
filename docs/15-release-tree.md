@@ -74,7 +74,10 @@ A failed fetch fails the deploy; it never falls back to the cached tip.
    names the project after the release directory.
 8. **Run.** Images are pulled before the switch, so an unreachable registry
    fails the deploy with the running release in place. App hooks and `docker
-   compose up --wait --force-recreate` then run, as today, from `/opt/deploy`.
+   compose up --wait` then run, as today, from `/opt/deploy`. The first
+   switch from a checkout recreates every container once, so none keeps a
+   mount opened in the old checkout; later deploys recreate only the services
+   whose settings or mounted files changed (docs/04).
    App hooks run as root from the release and must not write inside it; a
    release never changes after its export.
 9. **Keep three.** The current release and the two most recently deployed
@@ -94,9 +97,10 @@ commit reaches the branch, so the rollback is not undone within minutes. A
 rollback is announced over ntfy, and any ordinary deploy clears the hold. The hold is re-checked under the deploy lock, so a
 rollback that finishes while auto-deploy is waiting is not undone. A second
 `--rollback` returns to the release just rolled back from; to go further
-back, deploy an earlier commit through git instead. Because every
-deploy recreates every container (docs/04), a rollback that changes an app's
-settings carries the same risk as a deploy that does: check before running it
+back, deploy an earlier commit through git instead. A rollback recreates
+the services whose settings differ between the two releases, so a rollback
+that changes an app's settings carries the same risk as a deploy that does:
+check before running it
 on an app whose key change is irreversible (p.stonn's `DATA_ENCRYPTION_KEY`).
 
 ## 5. What changes for people

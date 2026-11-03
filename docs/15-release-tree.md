@@ -88,7 +88,8 @@ previous release and nothing has been restarted.
 
 ## 4. Rollback
 
-`sudo vps-deploy --rollback` switches `/opt/deploy` to the release deployed
+`sudo vps-deploy --rollback`, run by the admin account (the deploy account's
+sudoers allows the bare `vps-deploy` only), switches `/opt/deploy` to the release deployed
 before the current one (from the switch history) and runs step 8. It does
 not fetch, so it works with GitHub unreachable, but it verifies the kept
 release's signature again in case a signer has been removed since. The

@@ -19,6 +19,11 @@ deploy_user_public_key: "{{ lookup('file', ((ansible_ssh_private_key_file | defa
 # posture is what CI continuously proves. Reversible: flipping back restores
 # broad sudo + the docker group on the next site run.
 deploy_restricted_mode: false
+# Restricted mode requires the release tree (docs/15) and the signature gate;
+# the play refuses otherwise. These two accept the weaker posture explicitly
+# for a transition (the smoke test reports them).
+deploy_restricted_checkout_ok: false
+deploy_restricted_unsigned_ok: false
 
 deploy_admin_user: admin
 # Defaults to the same public key as deploy; set a DEDICATED key in the

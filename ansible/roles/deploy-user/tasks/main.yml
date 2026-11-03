@@ -22,6 +22,43 @@
     - not (deploy_admin_key_allow_shared | default(false) | bool)
     - not (molecule_test | default(false) | bool)
 
+# Restricted mode keeps its promise only under the release tree: in the
+# checkout layout root still reads, checks and executes files the deploy
+# account owns, and the 2026-11-03 review showed that account can steer those
+# checks (its own repository configuration, symlinks in trees root chmods).
+# The release tree removes the class, so restricted mode requires it. The
+# override is for the transition only and is reported by the smoke test.
+- name: Refuse restricted mode without the release tree
+  ansible.builtin.fail:
+    msg: >-
+      deploy_restricted_mode is true but deploy_release_tree is not. In the
+      checkout layout the deploy account can influence what root executes, so
+      restricted mode needs the release tree (docs/15-release-tree.md). Set
+      deploy_release_tree: true, or accept the checkout layout for now with
+      deploy_restricted_checkout_ok: true (the smoke test will keep saying so).
+  when:
+    - deploy_restricted_mode | bool
+    - not (deploy_release_tree | bool)
+    - not (deploy_restricted_checkout_ok | default(false) | bool)
+    - not (molecule_test | default(false) | bool)
+
+# Without the signature gate the deploy account can commit locally, move the
+# branch pointer it owns, and pass every other check; the boundary is then
+# decorative while it looks enforced.
+- name: Refuse restricted mode without the signature gate
+  ansible.builtin.fail:
+    msg: >-
+      deploy_restricted_mode is true but deploy_verify_signature is not. The
+      deploy account owns the branch pointer, so without the gate it can make
+      root execute an unreviewed commit. Set deploy_verify_signature: true with
+      deploy_allowed_signers (docs/05-access-model.md), or accept the posture
+      explicitly with deploy_restricted_unsigned_ok: true.
+  when:
+    - deploy_restricted_mode | bool
+    - not (deploy_verify_signature | bool)
+    - not (deploy_restricted_unsigned_ok | default(false) | bool)
+    - not (molecule_test | default(false) | bool)
+
 - name: Create deploy user
   ansible.builtin.user:
     name: "{{ deploy_user }}"
@@ -60,16 +97,9 @@
     state: present
     exclusive: true  # only this key — remove all others
 
-# Restricted mode replaces broad sudo with the wrapper allowlist. Both
-# renderings go through visudo validation; the switch is reversible.
-- name: Configure sudo policy for deploy user
-  ansible.builtin.template:
-    src: sudoers-deploy.j2
-    dest: "/etc/sudoers.d/{{ deploy_user }}"
-    mode: "0440"
-    validate: "visudo -cf %s"
-
 # --- Admin (break-glass operator) identity ----------------------------------
+# Created and keyed BEFORE deploy's sudo is narrowed below, so a flip to
+# restricted mode can never leave a box with no sudo-capable account.
 
 - name: Create admin user
   ansible.builtin.user:
@@ -111,6 +141,28 @@
     groups: docker
     append: true
   when: deploy_allow_direct_docker_for_admin | bool
+
+# The flip must not run as the account it narrows: the next become would fail
+# mid-play. Site plays run as admin in restricted mode (docs/05).
+- name: Refuse to narrow deploy's sudo from the deploy account itself
+  ansible.builtin.fail:
+    msg: >-
+      deploy_restricted_mode is true but this play is connected as
+      '{{ ansible_user_id }}', the account whose sudo it narrows. Connect as
+      {{ deploy_admin_user }} (ansible_user=admin) and re-run.
+  when:
+    - deploy_restricted_mode | bool
+    - ansible_user_id == deploy_user
+    - not (molecule_test | default(false) | bool)
+
+# Restricted mode replaces broad sudo with the wrapper allowlist. Both
+# renderings go through visudo validation; the switch is reversible.
+- name: Configure sudo policy for deploy user
+  ansible.builtin.template:
+    src: sudoers-deploy.j2
+    dest: "/etc/sudoers.d/{{ deploy_user }}"
+    mode: "0440"
+    validate: "visudo -cf %s"
 
 # --- Deploy tree and entrypoints ---------------------------------------------
 

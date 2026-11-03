@@ -177,6 +177,12 @@ case "$REMOTE_USER" in
     check_remote "deploy is not in the docker group" "! id -nG deploy | tr ' ' '\n' | grep -qx docker"
     check_remote "wrapper entrypoints installed" "sudo test -x /usr/local/sbin/vps-deploy && sudo test -x /usr/local/sbin/vps-app-manage && sudo test -x /usr/local/sbin/vps-app-logs"
     check_remote "~deploy/deploy delegates to vps-deploy" "sudo grep -q 'sudo /usr/local/sbin/vps-deploy' /home/deploy/deploy"
+    # Restricted mode keeps its promise only with the release tree and the
+    # signature gate (docs/05, 2026-11-03 review); the play accepts the weaker
+    # posture for a transition, so say so here rather than let it go quiet.
+    check_soft "restricted mode runs on the release tree (/opt/deploy is a release link; docs/15)" "test -L /opt/deploy"
+    check_soft "signed deploys are enforced (root-owned allowed_signers present)" "sudo test -s /etc/ssh/allowed_signers"
+    check_soft "deploy may run the wrapper without arguments only" "sudo grep -q 'NOPASSWD:/usr/local/sbin/vps-deploy \"\"' /etc/sudoers.d/deploy"
     ;;
   *)
     fail "Connected user is deploy or admin (got: $REMOTE_USER)"
@@ -184,7 +190,9 @@ case "$REMOTE_USER" in
 esac
 
 header "Server"
-check_remote "/opt/deploy exists and is owned by deploy" "[[ -d /opt/deploy ]] && [[ \$(stat -c '%U:%G' /opt/deploy) == 'deploy:deploy' ]]"
+# Checkout layout: a deploy-owned directory. Release tree (docs/15): a link
+# to a root-owned release, which no account but root may change.
+check_remote "/opt/deploy is the deploy checkout or a release link" "if [[ -L /opt/deploy ]]; then [[ \$(stat -c '%U:%G' /opt/deploy/) == 'root:root' ]]; else [[ -d /opt/deploy ]] && [[ \$(stat -c '%U:%G' /opt/deploy) == 'deploy:deploy' ]]; fi"
 check_remote "deploy helper exists and is executable" "sudo test -x /home/deploy/deploy"
 check_remote "Docker CLI is installed" "sudo docker --version >/dev/null"
 check_remote "Docker Compose plugin is installed" "sudo docker compose version >/dev/null"

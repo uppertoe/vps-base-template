@@ -26,23 +26,25 @@ GIT_DIR="$REPO/.git"
 
 [ -d "$GIT_DIR" ] || exit 0
 
-# Root-owned lock files older than five minutes: a live root git would be the
-# wrapper's own read-only invocation, which takes no locks, so anything left
-# is debris from a hand-run command.
-stale_locks="$(find "$GIT_DIR" -name '*.lock' ! -user "$DEPLOY_USER" -mmin +5 2>/dev/null || true)"
-if [ -n "$stale_locks" ]; then
-  printf '%s\n' "$stale_locks" | xargs -r rm -f
-fi
+# Everything here runs as root inside a directory the deploy account owns, so
+# paths are never handed to a second command through text (a splitter would
+# break on whitespace and a renamed file could name any path), chown never follows a
+# link (-h), and chmod skips links, which it cannot avoid following. Root-owned
+# lock files older than five minutes are debris from a hand-run command: a
+# live root git would be the wrapper's own read-only invocation, which takes
+# no locks.
+find "$GIT_DIR" -name '*.lock' -type f ! -user "$DEPLOY_USER" -mmin +5 -delete 2>/dev/null || true
 
-wrong="$(find "$GIT_DIR" ! -user "$DEPLOY_USER" 2>/dev/null || true)"
+wrong="$(find "$GIT_DIR" ! -user "$DEPLOY_USER" -print 2>/dev/null || true)"
 [ -n "$wrong" ] || exit 0
 
 count="$(printf '%s\n' "$wrong" | wc -l | tr -d ' ')"
-printf '%s\n' "$wrong" | xargs -r chown "$DEPLOY_USER:$DEPLOY_USER"
 # Files git writes are user- and group-writable in this checkout; make the
-# handed-back ones match so the next deploy-account write succeeds.
-printf '%s\n' "$wrong" | xargs -r chmod u+rw,g+rw
-printf '%s\n' "$wrong" | while IFS= read -r p; do [ -d "$p" ] && chmod u+rwx,g+rwx "$p"; done || true
+# handed-back ones match so the next deploy-account write succeeds. Modes
+# first, while ownership still selects them; then the ownership itself.
+find "$GIT_DIR" ! -user "$DEPLOY_USER" -type d -exec chmod u+rwx,g+rwx {} + 2>/dev/null || true
+find "$GIT_DIR" ! -user "$DEPLOY_USER" -type f -exec chmod u+rw,g+rw {} + 2>/dev/null || true
+find "$GIT_DIR" ! -user "$DEPLOY_USER" -exec chown -h "$DEPLOY_USER:$DEPLOY_USER" {} + 2>/dev/null || true
 
 echo "vps-git-heal: handed $count path(s) under $GIT_DIR back to $DEPLOY_USER:" >&2
 printf '  %s\n' "$wrong" >&2

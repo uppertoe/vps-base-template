@@ -78,6 +78,22 @@ jobs:
             ansible/audit-all.yml ansible/audit-openscap.yml ansible/audit-docker.yml \
             ansible/audit-compose.yml ansible/audit-lynis.yml ansible/audit-vuln.yml
 
+  deploy-wrapper:
+    name: Deploy Wrapper
+    # The checkout-mode vps-deploy refusals (docs/05), exercised against a
+    # real deploy-owned checkout in a throwaway container as root.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Run the wrapper checks
+        run: |
+          docker run --rm -v "$PWD/ansible/roles/deploy-user":/t:ro \
+            ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852 \
+            bash /t/files/test_vps_deploy.sh
+
   molecule-default:
     name: Molecule Default
     runs-on: ubuntu-latest

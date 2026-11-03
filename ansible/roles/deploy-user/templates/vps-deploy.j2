@@ -62,6 +62,57 @@ while apt_busy; do
   sleep 20
 done
 
+# Arguments. The deploy account's sudoers allows the bare command only; the
+# other forms are for root and the admin account.
+#   --auto          the auto-deploy unit: a held commit is skipped (exit 3)
+#   --rollback      release tree only: switch back to the previous release
+#   --allow-rewind  accept a HEAD that is not a descendant of the last deployed
+#                   commit (see the rewind guard below)
+action=deploy allow_rewind=0
+for arg in "$@"; do
+  case "$arg" in
+    --rollback) action=rollback ;;
+    # auto-deploy: the hold is re-checked under the lock, so a rollback that
+    # finished while this run waited is not undone.
+    --auto) action=auto ;;
+    --allow-rewind) allow_rewind=1 ;;
+    *) echo "usage: vps-deploy [--auto] [--rollback] [--allow-rewind]" >&2; exit 2 ;;
+  esac
+done
+{% if not deploy_release_tree | default(false) | bool %}
+if [[ "$action" == rollback ]]; then
+  echo "vps-deploy: --rollback needs the release tree (docs/15-release-tree.md)." >&2
+  exit 2
+fi
+{% endif %}
+
+# Rewind guard. Every check below accepts any validly signed commit, so an
+# older commit that carries a vulnerable image or predates a security fix
+# would pass them all. Root keeps its own record of the last commit it
+# deployed and refuses a HEAD that does not descend from it, unless this is a
+# rollback (which the release tool verifies again) or the admin account passed
+# --allow-rewind on purpose. The record is root-owned: the deploy account
+# cannot move it. is_ancestor is defined per mode below.
+last_deployed_file=/var/lib/vps-deploy/last-deployed
+rewind_guard() {  # rewind_guard NEW_HEAD
+  local last
+  last="$(cat "$last_deployed_file" 2>/dev/null || true)"
+  [[ "$last" =~ ^[0-9a-f]{40}$ ]] || return 0
+  [[ "$last" == "$1" ]] && return 0
+  if ! is_ancestor "$last" "$1"; then
+    if [[ "$action" == rollback || "$allow_rewind" == 1 ]]; then
+      echo "vps-deploy: $1 does not descend from the last deployed commit ${last:0:7}; proceeding ($action, allow_rewind=$allow_rewind)." >&2
+      return 0
+    fi
+    echo "vps-deploy: HEAD $1 is not a descendant of the last deployed commit ${last:0:7} — a rewind to an older commit is refused. An administrator can run 'sudo vps-deploy --allow-rewind' on purpose." >&2
+    exit 1
+  fi
+}
+record_deployed() {  # record_deployed HEAD
+  install -d -m 0700 -o root -g root /var/lib/vps-deploy
+  (umask 077; printf '%s\n' "$1" > "$last_deployed_file.tmp") && mv -f "$last_deployed_file.tmp" "$last_deployed_file"
+}
+
 {% if deploy_release_tree | default(false) | bool %}
 # Release tree (docs/15-release-tree.md). Root fetches the server repo into its
 # own mirror, verifies the tip, exports it into /opt/deploy-releases/<commit>
@@ -78,15 +129,10 @@ if ! flock -w 1800 9; then
   echo "vps-deploy: another deploy has held the lock for 30 min — giving up." >&2
   exit 1
 fi
-action=deploy
-case "${1:-}" in
-  "") ;;
-  --rollback) action=rollback ;;
-  # auto-deploy: the hold is re-checked here, under the lock, so a rollback
-  # that finished while this run waited is not undone. Exit 3 means held.
-  --auto) action=auto ;;
-  *) echo "usage: vps-deploy [--rollback]" >&2; exit 2 ;;
-esac
+is_ancestor() {
+  env -i PATH="$PATH" HOME=/root GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 \
+    git --git-dir=/var/lib/vps-deploy/repo.git -c core.hooksPath=/dev/null merge-base --is-ancestor "$1" "$2" 2>/dev/null
+}
 release_field() { sed -n "s/^$2=//p" "$1/.release" 2>/dev/null; }
 old_head="$(/usr/local/sbin/vps-release current)"
 if [[ -L /opt/deploy ]]; then
@@ -133,6 +179,7 @@ for f in docker-compose.override.yml docker-compose.override.yaml compose.overri
 done
 # Pull before the switch, so an unreachable registry fails the deploy while
 # the running release is still in place.
+rewind_guard "$new_head"
 (cd "$release" && docker compose pull --policy always)
 /usr/local/sbin/vps-release switch "$release"
 # A rollback holds auto-deploy off the commit rolled back from until a new
@@ -174,29 +221,75 @@ new_scaffold="$(runuser -u {{ deploy_user }} -- git -C scaffold rev-parse HEAD 2
 # that account writes would otherwise have been consulted).
 root_tmp="$(mktemp -d /run/vps-deploy.XXXXXX)"
 trap 'rm -rf "$root_tmp"' EXIT
-cp /opt/deploy/.git/index "$root_tmp/index"
+# The repository must be a plain directory at the expected place: a gitfile or
+# a link there would let the deploy account point root's reads elsewhere.
+if [[ -L /opt/deploy/.git || ! -d /opt/deploy/.git ]]; then
+  echo "vps-deploy: /opt/deploy/.git is not a plain directory — refusing to deploy." >&2
+  exit 1
+fi
+if [[ -L /opt/deploy/.git/index || ! -f /opt/deploy/.git/index ]]; then
+  echo "vps-deploy: /opt/deploy/.git/index is not a plain file — refusing to deploy." >&2
+  exit 1
+fi
+cp --no-preserve=all /opt/deploy/.git/index "$root_tmp/index"
+# GIT_DIR and GIT_WORK_TREE are passed explicitly: the environment outranks
+# core.worktree in the deploy-owned config, which could otherwise point the
+# clean-tree comparison at a different directory (2026-11-03 review).
 rootgit() {
   env -i PATH="$PATH" HOME=/root GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
       GIT_NO_REPLACE_OBJECTS=1 GIT_OPTIONAL_LOCKS=0 GIT_INDEX_FILE="$root_tmp/index" \
+      GIT_DIR=/opt/deploy/.git GIT_WORK_TREE=/opt/deploy \
     git -C /opt/deploy -c safe.directory=/opt/deploy -c core.hooksPath=/dev/null \
       -c core.fsmonitor=false -c diff.ignoreSubmodules=none -c submodule.scaffold.ignore=none "$@"
 }
-# The scaffold submodule has its own index under .git/modules; copy it too.
-scaffold_gitdir="$(runuser -u {{ deploy_user }} -- git -C scaffold rev-parse --git-dir 2>/dev/null || true)"
-case "$scaffold_gitdir" in
-  /*) ;;
-  "") ;;
-  *) scaffold_gitdir="/opt/deploy/scaffold/$scaffold_gitdir" ;;
-esac
-if [[ -n "$scaffold_gitdir" && -f "$scaffold_gitdir/index" ]]; then
-  cp "$scaffold_gitdir/index" "$root_tmp/scaffold-index"
+# The scaffold submodule's git directory is where git keeps it; root does not
+# ask the deploy account where it is. A real directory there, or no submodule.
+scaffold_gitdir=/opt/deploy/.git/modules/scaffold
+if [[ -e "$scaffold_gitdir" ]]; then
+  if [[ -L "$scaffold_gitdir" || ! -d "$scaffold_gitdir" || -L "$scaffold_gitdir/index" || ! -f "$scaffold_gitdir/index" ]]; then
+    echo "vps-deploy: $scaffold_gitdir is not a plain git directory — refusing to deploy." >&2
+    exit 1
+  fi
+  cp --no-preserve=all "$scaffold_gitdir/index" "$root_tmp/scaffold-index"
 fi
 rootgit_scaffold() {
   env -i PATH="$PATH" HOME=/root GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
       GIT_NO_REPLACE_OBJECTS=1 GIT_OPTIONAL_LOCKS=0 GIT_INDEX_FILE="$root_tmp/scaffold-index" \
+      GIT_DIR="$scaffold_gitdir" GIT_WORK_TREE=/opt/deploy/scaffold \
     git -C /opt/deploy/scaffold -c safe.directory=/opt/deploy/scaffold -c safe.directory=/opt/deploy \
       -c core.hooksPath=/dev/null -c core.fsmonitor=false "$@"
 }
+is_ancestor() { rootgit merge-base --is-ancestor "$1" "$2" 2>/dev/null; }
+# The deploy-owned repository configuration is still read by every root-side
+# git call. Reading it runs nothing, so read it first and refuse any key that
+# would make a later call run a program (a clean or smudge filter during the
+# index refresh, an external diff or textconv, a different signing program),
+# redirect the work tree, or pull in another file. The keys pinned on the
+# command line above are refused here as well, so the two cannot drift. The
+# same applies to the submodule's configuration and to the attributes file
+# under either git directory, which could select such a filter.
+# Git itself writes core.worktree=../../../scaffold into the submodule's own
+# configuration; that one exact value is expected there, and the work tree is
+# passed explicitly regardless. Any other value, or the key in the
+# superproject, is refused.
+config_refused() {  # config_refused <git-fn> [expected-worktree]: prints offending lines
+  "$1" config --list --show-origin 2>/dev/null | grep '^file:' | cut -f2- \
+    | { if [[ -n "${2:-}" ]]; then grep -vxF "core.worktree=$2"; else cat; fi; } \
+    | grep -Ei '^(filter\.|diff\.[^=]*\.(textconv|command)=|diff\.external=|core\.worktree=|core\.attributesfile=|include\.|includeif\.|core\.hookspath=|core\.fsmonitor=|gpg\.|core\.sshcommand=|core\.gitproxy=|credential\.|alias\.|core\.pager=|core\.editor=|core\.askpass=|merge\.[^=]*\.driver=|url\.)' || true
+}
+bad_config="$(config_refused rootgit)"
+if [[ -z "$bad_config" && -f "$root_tmp/scaffold-index" ]]; then bad_config="$(config_refused rootgit_scaffold ../../../scaffold)"; fi
+if [[ -n "$bad_config" ]]; then
+  echo "vps-deploy: the repository configuration sets keys root must not honour — refusing to deploy:" >&2
+  printf '  %s\n' "$bad_config" >&2
+  exit 1
+fi
+for attr in /opt/deploy/.git/info/attributes "$scaffold_gitdir/info/attributes"; do
+  if [[ -e "$attr" ]]; then
+    echo "vps-deploy: $attr exists; attributes outside the tracked tree could select a filter — refusing to deploy." >&2
+    exit 1
+  fi
+done
 
 # What root executes below must be exactly the commit at HEAD, on the deployed
 # branch. The deploy user owns this checkout, so an edited hook, compose file
@@ -314,6 +407,8 @@ if ! env -i PATH="$PATH" HOME=/root GNUPGHOME=/etc/vps-scaffold/gnupg \
 fi
 {% endif %}
 
+rewind_guard "$new_head"
+
 # Secrets (docs/13-secrets.md): decrypt the repo's secrets/ into the .env files
 # Compose reads, after the signed-commit check so that only reviewed
 # ciphertext is ever decrypted, and before anything starts. Every file must be
@@ -338,10 +433,16 @@ docker compose pull --policy always
 
 # Keep server and app env files locked down. Only chmod files that are not
 # already 600 — an unconditional chmod bumps ctime on every deploy and trips
-# the AIDE tripwire on the deployed tree for no real change.
-find . \
+# the AIDE tripwire on the deployed tree for no real change. Both passes run
+# AS THE DEPLOY ACCOUNT: every file they are meant to touch is that account's,
+# and chmod follows symlinks, so running them as root inside a tree that
+# account writes would let a planted link change the mode of a file outside
+# it (2026-11-03 review). A file the deploy account cannot change is reported
+# and left alone.
+runuser -u {{ deploy_user }} -- find . \
   \( -path './.env' -o -path './apps/*/.env' -o -path './apps/*/*/.env' -o -path './backup/config.env' -o -path './backup/services/*.env' \) \
-  -type f ! -perm 600 -exec chmod 600 {} +
+  -type f ! -perm 600 -exec chmod 600 {} + \
+  || echo "vps-deploy: not every env file could be locked to 600 (a file not owned by {{ deploy_user }}?)" >&2
 
 # The inverse pass: containers run as dedicated non-root uids and bind-mount
 # repo files (compose configs, Caddy snippets, app config like sites.yaml).
@@ -352,10 +453,11 @@ find . \
 # container-consumed tree to world-readable, conditionally for the same
 # ctime/AIDE reason as above. Secrets are exactly the .env set locked to 600
 # above and are excluded here.
-find ./apps ./scaffold ./.generated ./Caddyfile \
+runuser -u {{ deploy_user }} -- find ./apps ./scaffold ./.generated ./Caddyfile \
   \( -name '.env' -o -name '.env.*' \) -prune \
   -o -type f ! -perm -0004 -exec chmod o+r {} + \
-  -o -type d ! -perm -0005 -exec chmod o+rx {} +
+  -o -type d ! -perm -0005 -exec chmod o+rx {} + \
+  || echo "vps-deploy: not every container-read file could be made world-readable (a file not owned by {{ deploy_user }}?)" >&2
 
 {% endif %}
 
@@ -457,6 +559,8 @@ if [[ -n "${recreate[*]:-}" ]]; then
   echo "vps-deploy: recreating services whose mounted files changed: ${recreate[*]}"
   compose_up --force-recreate "${recreate[@]}"
 fi
+
+record_deployed "$new_head"
 
 # Every digest bump strands the superseded image (untagged, unreferenced), and
 # nothing else on the host reclaims them — left alone they fill the disk at

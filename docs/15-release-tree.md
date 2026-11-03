@@ -63,7 +63,8 @@ A failed fetch fails the deploy; it never falls back to the cached tip.
    0644 and executables 0755 exactly as git records them, directories 0755.
    A file git marks as a symlink is refused if it points outside the release.
 6. **Render secrets.** `vps-secrets-render --repo <release>` decrypts
-   `secrets/**/*.sops` into the release, root-owned, 0600.
+   `secrets/**/*.sops` into the release, root-owned, 0600, and installs a
+   backup set under `secrets/backup/` into `/etc/restic` (docs/13).
 7. **Switch.** The partial directory is renamed to its final name, a new
    symlink is created beside `/opt/deploy` and renamed over it, and the switch
    is appended to `/var/lib/vps-deploy/history`. `vps-deploy` and the app

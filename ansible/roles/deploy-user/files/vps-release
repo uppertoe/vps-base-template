@@ -174,7 +174,9 @@ do_prepare() {
   chown -R root:root "$tmp"
   if [[ -d "$tmp/secrets" ]]; then
     # Its progress lines go to stderr: this function's stdout is the path.
-    /usr/local/sbin/vps-secrets-render --repo "$tmp" --owner root >&2
+    # --restic-dir: a backup set under secrets/backup/ is installed into
+    # /etc/restic by the same step, as in checkout mode (docs/13, Decision 2).
+    /usr/local/sbin/vps-secrets-render --repo "$tmp" --owner root --restic-dir /etc/restic >&2
   fi
   printf 'commit=%s\nscaffold=%s\nexported=%s\n' "$commit" "${scaffold:-none}" "$(date -u +%FT%TZ)" >"$tmp/.release"
   chmod 0644 "$tmp/.release"

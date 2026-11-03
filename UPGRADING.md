@@ -6,6 +6,48 @@ are always the same; what varies is the *operator actions* that accompany a
 given range of scaffold changes — that's what this file records.
 
 
+## 2026-11-03 — Restricted mode requires the release tree and the signature gate; the wrapper refuses rewinds
+
+From the 2026-11-03 review (docs/05 "The Repo-to-Root Trust Boundary").
+
+**The site play now refuses `deploy_restricted_mode: true` unless
+`deploy_release_tree: true` and `deploy_verify_signature: true` are set.** A
+server still on the checkout layout must either adopt the release tree
+(docs/15) or set `deploy_restricted_checkout_ok: true` for the transition;
+one without the gate must set it up (docs/05) or set
+`deploy_restricted_unsigned_ok: true`. The play also refuses to narrow
+deploy's sudo while connected as the deploy account, and creates the admin
+account before it narrows deploy.
+
+**The deploy account's sudoers allows the bare `vps-deploy` only.** `~/deploy`
+is unchanged; `--rollback` and the new `--allow-rewind` are run by the admin
+account with `sudo`.
+
+**Rewind guard, both modes:** root records the last deployed commit in
+`/var/lib/vps-deploy/last-deployed` and refuses a HEAD that does not descend
+from it. A deliberate deploy of an older commit (a revert is the normal
+route) needs `sudo vps-deploy --allow-rewind` as admin; `--rollback` is
+exempt. The first deploy after the upgrade records without checking.
+
+**Checkout layout hardening** (no action): explicit git directories, a
+repository-configuration deny list, no attributes file under `.git`, and
+the permission passes run as the deploy account. A checkout whose
+`.git/config` sets `core.worktree`, any `filter.*`, `include.*`,
+`core.hooksPath` or similar key is refused until the key is removed
+(`vps-git config --unset <key>`). `vps-git-heal` no longer passes paths
+through `xargs`.
+
+**Operator actions:**
+
+1. Add `deploy_release_tree=true` (after reading docs/15) or
+   `deploy_restricted_checkout_ok=true` to each restricted host's inventory
+   before the next site play.
+2. Re-run the site play.
+3. Tell anyone who runs `./deploy --rollback` as deploy that it is now
+   `sudo vps-deploy --rollback` as admin.
+
+---
+
 ## 2026-11-03 — The recovery bundle retires on SOPS servers; the deploy installs /etc/restic from secrets/backup/
 
 On a server whose repo carries `secrets/recovery.sops`, the smoke test now

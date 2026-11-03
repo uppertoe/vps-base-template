@@ -22,8 +22,18 @@ restricted mode is its closure.
 In **restricted mode** (`deploy_restricted_mode: true`):
 
 - `deploy` keeps SSH, but its sudoers file becomes a three-line allowlist for
-  the root-owned wrappers `/usr/local/sbin/vps-deploy`, `vps-app-manage`,
+  the root-owned wrappers `/usr/local/sbin/vps-deploy` (with no arguments:
+  `--rollback` and `--allow-rewind` are for the admin account), `vps-app-manage`,
   `vps-app-logs` — and it is removed from the `docker` group.
+- Restricted mode requires the **release tree** (`deploy_release_tree: true`,
+  [15-release-tree.md](15-release-tree.md)) and the **signature gate**
+  (`deploy_verify_signature: true`). The play refuses the mode without them.
+  In the checkout layout root still reads, checks and executes files the
+  deploy account owns, and the 2026-11-03 review showed that account could
+  steer those checks; without the gate it owns the branch pointer root
+  follows. A server mid-transition can accept the weaker posture explicitly
+  with `deploy_restricted_checkout_ok: true` or
+  `deploy_restricted_unsigned_ok: true`; the smoke test reports it.
 - `admin` (created in both modes) is the break-glass operator: own key
   (dedicated key recommended — defaults to the deploy key), full sudo, docker
   group. **Ansible site plays must run as `admin`** (`ansible_user=admin`),
@@ -272,8 +282,11 @@ To flip a live host to restricted mode **without locking yourself out**:
    `ssh admin@<host> 'sudo -n true && docker ps >/dev/null && echo ADMIN-OK'`
    (set a dedicated `deploy_admin_public_key` in the inventory first if you
    want separate key material — recommended).
-3. In the inventory: set `deploy_restricted_mode=true` as a host var and
-   switch `ansible_user=admin`.
+3. In the inventory: set `deploy_restricted_mode=true` as a host var, with
+   `deploy_release_tree=true` and `deploy_verify_signature=true` (the play
+   refuses restricted mode without them; see above), and switch
+   `ansible_user=admin`. The play also refuses to narrow deploy's sudo while
+   it is connected as the deploy account.
 4. Re-run `site-quick.yml`. Deploy's sudoers becomes the wrapper allowlist and
    it leaves the docker group. The play also propagates any registry
    credentials from `~deploy/.docker/config.json` to root's docker config —
@@ -398,9 +411,22 @@ the working tree is compared with HEAD, the scaffold submodule's checkout with
 the commit HEAD records and its own tree with that commit, the index flags are
 read so a skip-worktree bit cannot hide an edited file, and each hook is
 checked for being tracked, all with an isolated git configuration and a
-private copy of the index that absorbs the stat refresh (the 2026-11-02
-review: the deploy account's own git configuration can no longer change the
-answer, and no root-side read writes to the deploy-owned repository). The role
+private copy of the index that absorbs the stat refresh. The 2026-11-03
+review found two ways the deploy-owned repository configuration could still
+change the answer (a `core.worktree` pointing the comparison at a clean
+copy, and a clean filter that ran as root during the index refresh), and two
+root-side passes that followed symlinks in the deploy-owned tree. The wrapper
+now passes the git and work-tree directories explicitly, requires them to be
+plain directories at their expected places, reads the repository
+configuration first and refuses any key that would run a program, redirect
+the tree or include another file, refuses an attributes file under either git
+directory, and runs its permission passes as the deploy account. It also
+keeps a root-owned record of the last deployed commit and refuses a HEAD that
+does not descend from it, so an older signed commit cannot be redeployed by
+moving the branch; `--rollback` (release tree) and an explicit
+`sudo vps-deploy --allow-rewind` by the admin account are the exceptions.
+These are the belt-and-braces for the checkout layout; the release tree
+removes the class, which is why restricted mode now requires it. The role
 provisions two root-owned trust anchors:
 
 - `/etc/ssh/allowed_signers` from `deploy_allowed_signers` — the

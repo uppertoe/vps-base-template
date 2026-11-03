@@ -187,6 +187,40 @@
           - "'vps-secrets-render --repo /opt/deploy --restic-dir /etc/restic' in (vps_deploy_raw.content | b64decode)"
         msg: "vps-deploy must pass --restic-dir /etc/restic to the renderer so secrets/backup/ is the only source of the restic configuration"
 
+    - name: Assert wrapper pins the git directories, refuses dangerous repository configuration and guards against rewinds
+      ansible.builtin.assert:
+        that:
+          - "'GIT_DIR=/opt/deploy/.git GIT_WORK_TREE=/opt/deploy' in (vps_deploy_raw.content | b64decode)"
+          - "'config_refused' in (vps_deploy_raw.content | b64decode)"
+          - "'info/attributes' in (vps_deploy_raw.content | b64decode)"
+          - "'rewind_guard \"$new_head\"' in (vps_deploy_raw.content | b64decode)"
+          - "'runuser -u deploy -- find .' in (vps_deploy_raw.content | b64decode)"
+          - "'xargs' not in (vps_deploy_raw.content | b64decode)"
+        msg: "vps-deploy must pass GIT_DIR/GIT_WORK_TREE, refuse program-selecting config keys and stray attributes, run its chmod passes as the deploy account and refuse a rewind (2026-11-03 review)"
+
+    - name: Read vps-git-heal
+      ansible.builtin.slurp:
+        src: /usr/local/sbin/vps-git-heal
+      register: vps_git_heal_raw
+
+    - name: Assert vps-git-heal never hands paths through xargs or chowns through links
+      ansible.builtin.assert:
+        that:
+          - "'xargs' not in (vps_git_heal_raw.content | b64decode)"
+          - "'chown -h' in (vps_git_heal_raw.content | b64decode)"
+        msg: "vps-git-heal must use find -exec with chown -h (2026-11-03 review)"
+
+    - name: Read the deploy sudoers file
+      ansible.builtin.slurp:
+        src: /etc/sudoers.d/deploy
+      register: deploy_sudoers_raw
+
+    - name: Assert the deploy account may run the wrapper without arguments only
+      ansible.builtin.assert:
+        that:
+          - "'NOPASSWD:/usr/local/sbin/vps-deploy \"\"' in (deploy_sudoers_raw.content | b64decode)"
+        msg: "restricted mode must not let the deploy account pass --rollback or --allow-rewind to vps-deploy"
+
     - name: Assert wrapper compares the tree as root against a private index copy
       ansible.builtin.assert:
         that:

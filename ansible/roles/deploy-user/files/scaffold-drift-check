@@ -11,6 +11,24 @@ set -euo pipefail
 
 SCAFFOLD=/opt/deploy/scaffold
 [[ -d "$SCAFFOLD" ]] || exit 0
+
+if [[ -L /opt/deploy ]]; then
+  # Release tree (docs/15-release-tree.md): the scaffold commit is recorded in
+  # the release, and upstream is read through root's scaffold mirror.
+  checked_out="$(sed -n 's/^scaffold=//p' /opt/deploy/.release)"
+  applied="$(cat /var/lib/vps-site-applied 2>/dev/null || echo none)"
+  if [[ "$applied" != "$checked_out" ]]; then
+    /usr/local/bin/vps-notify "Host play due: scaffold ${checked_out:0:7} deployed, ${applied:0:7} applied" \
+      "Run site-quick.yml so roles, timers and scripts match the deployed scaffold (scaffold/docs/04-server-repo.md)." \
+      default package || true
+  fi
+  behind="$(/usr/local/sbin/vps-release scaffold-behind)"
+  [[ "$behind" -eq 0 ]] && exit 0
+  /usr/local/bin/vps-notify "Scaffold ${behind} commit(s) behind upstream" \
+    "Review UPGRADING.md entries newer than your pointer, bump the submodule, and re-run site-quick." || true
+  exit 0
+fi
+
 cd "$SCAFFOLD"
 
 checked_out="$(runuser -u deploy -- git rev-parse HEAD)"

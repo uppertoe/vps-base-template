@@ -13,7 +13,13 @@ set -euo pipefail
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 umask 022
 
+{% if deploy_release_tree | default(false) | bool %}
+# Release tree: start from /, so a missing or dangling /opt/deploy link (an
+# interrupted switch) cannot stop the wrapper that repairs it.
+cd /
+{% else %}
 cd /opt/deploy
+{% endif %}
 
 # Hand back anything under .git that a hand-run root git has taken (a root-owned
 # index stops the deploy account's pull). Logged and announced by the helper.
@@ -56,6 +62,88 @@ while apt_busy; do
   sleep 20
 done
 
+{% if deploy_release_tree | default(false) | bool %}
+# Release tree (docs/15-release-tree.md). Root fetches the server repo into its
+# own mirror, verifies the tip, exports it into /opt/deploy-releases/<commit>
+# as root-owned files and renders the secrets there; only then is /opt/deploy
+# switched to it. Nothing the deploy account can write is read or executed,
+# and a failure before the switch leaves the running release untouched.
+# The project name is fixed, because /opt/deploy is now a symlink and Compose
+# must not name the project after the release directory.
+export COMPOSE_PROJECT_NAME=deploy
+# One deploy at a time: a release prepared by one run must not be pruned or
+# switched away by another before it goes live.
+exec 9>/run/vps-deploy.lock
+if ! flock -w 1800 9; then
+  echo "vps-deploy: another deploy has held the lock for 30 min — giving up." >&2
+  exit 1
+fi
+action=deploy
+case "${1:-}" in
+  "") ;;
+  --rollback) action=rollback ;;
+  # auto-deploy: the hold is re-checked here, under the lock, so a rollback
+  # that finished while this run waited is not undone. Exit 3 means held.
+  --auto) action=auto ;;
+  *) echo "usage: vps-deploy [--rollback]" >&2; exit 2 ;;
+esac
+release_field() { sed -n "s/^$2=//p" "$1/.release" 2>/dev/null; }
+old_head="$(/usr/local/sbin/vps-release current)"
+if [[ -L /opt/deploy ]]; then
+  old_scaffold="$(release_field "$(readlink -f /opt/deploy)" scaffold)"
+else
+  old_scaffold="$(runuser -u {{ deploy_user }} -- git -C /opt/deploy/scaffold rev-parse HEAD 2>/dev/null || echo none)"
+fi
+if [[ "$action" == rollback ]]; then
+  release="$(/usr/local/sbin/vps-release previous)"
+  if [[ -z "$release" ]]; then
+    echo "vps-deploy: there is no earlier release to roll back to." >&2
+    exit 1
+  fi
+  # A kept release is verified again: a signer may have been removed since.
+  /usr/local/sbin/vps-release recheck "$release"
+else
+  release="$(/usr/local/sbin/vps-release prepare)"
+fi
+if [[ ! "$release" =~ ^/opt/deploy-releases/[0-9a-f]{40}$ || ! -f "$release/.release" ]]; then
+  echo "vps-deploy: vps-release returned '$release', which is not a release — refusing to deploy." >&2
+  exit 1
+fi
+new_head="$(release_field "$release" commit)"
+new_scaffold="$(release_field "$release" scaffold)"
+if [[ "$action" == auto && "$new_head" == "$(/usr/local/sbin/vps-release held)" ]]; then
+  echo "vps-deploy: ${new_head:0:7} is held after a rollback; not deploying it."
+  exit 3
+fi
+if [[ "$action" != rollback && "$new_head" == "$old_head" ]]; then
+  echo "vps-deploy: ${new_head:0:7} is already deployed; recreating its containers."
+fi
+# Compose reads COMPOSE_FILE and friends from the project's .env; even from
+# reviewed ciphertext they would steer root's compose. Override files would be
+# merged silently. Both are refused, as in checkout mode.
+if grep -Eq '^[[:space:]]*(export[[:space:]]+)?COMPOSE_[A-Z_]*=' "$release/.env" 2>/dev/null; then
+  echo "vps-deploy: .env sets a COMPOSE_* variable; compose behaviour must come from the tracked compose files — refusing to deploy." >&2
+  exit 1
+fi
+for f in docker-compose.override.yml docker-compose.override.yaml compose.override.yml compose.override.yaml; do
+  if [[ -e "$release/$f" ]]; then
+    echo "vps-deploy: $f is in the release — compose would merge it; refusing to deploy." >&2
+    exit 1
+  fi
+done
+# Pull before the switch, so an unreachable registry fails the deploy while
+# the running release is still in place.
+(cd "$release" && docker compose pull --policy always)
+/usr/local/sbin/vps-release switch "$release"
+# A rollback holds auto-deploy off the commit rolled back from until a new
+# commit arrives; any other deploy clears the hold.
+if [[ "$action" == rollback ]]; then
+  [[ "$old_head" =~ ^[0-9a-f]{40}$ ]] && /usr/local/sbin/vps-release hold "$old_head"
+else
+  /usr/local/sbin/vps-release unhold
+fi
+cd /opt/deploy
+{% else %}
 # Update the repo as the unprivileged owner, never as root. HEAD is captured
 # either side of the pull: a moved HEAD means the AIDE-monitored working tree
 # legitimately changed, which the tail of this script acknowledges.
@@ -263,10 +351,12 @@ find ./apps ./scaffold ./.generated ./Caddyfile \
   -o -type f ! -perm -0004 -exec chmod o+r {} + \
   -o -type d ! -perm -0005 -exec chmod o+rx {} +
 
+{% endif %}
+
 for hook in ./apps/*/deploy.sh; do
   if [[ -x "$hook" ]]; then
     echo "Running app deploy hook: ${hook#./}"
-    "$hook"
+    "$hook" 9>&-
   fi
 done
 
@@ -282,9 +372,18 @@ done
 # changed_paths OLD NEW prints the repo-relative paths that differ between two
 # commits, one per line. Kept as a function so another deploy mode (a release
 # tree without a checkout) can supply its own source for the same answer.
+{% if deploy_release_tree | default(false) | bool %}
+# Release tree: there is no checkout; root's mirror holds both commits.
+changed_paths() {
+  env -i PATH="$PATH" HOME=/root GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 \
+    git --git-dir=/var/lib/vps-deploy/repo.git -c core.hooksPath=/dev/null \
+    diff --name-only "$1" "$2" -- 2>/dev/null || true
+}
+{% else %}
 changed_paths() {
   rootgit diff --name-only "$1" "$2" -- 2>/dev/null || true
 }
+{% endif %}
 changed="$(changed_paths "$old_head" "$new_head")"
 if [[ "$old_scaffold" != "$new_scaffold" ]]; then
   changed="${changed}"$'\n'"scaffold"
@@ -304,13 +403,17 @@ if [[ -n "${changed//[[:space:]]/}" ]]; then
   # resolved them, never from a repository path.
   done < <(docker compose config --format json 2>/dev/null | python3 -c '
 import json, os, sys
-root = os.getcwd().rstrip("/") + "/"
+# Under the release tree /opt/deploy is a link: compose may report sources
+# under the link (PWD) or under the release it points at (getcwd).
+roots = {p.rstrip("/") + "/" for p in (os.getcwd(), os.environ.get("PWD", "")) if p}
 cfg = json.load(sys.stdin)
 for name, svc in sorted(cfg.get("services", {}).items()):
     for vol in svc.get("volumes", []) or []:
         src = vol.get("source", "") if isinstance(vol, dict) else ""
-        if vol.get("type") == "bind" and src.startswith(root):
-            print(name + "\t" + src[len(root):].rstrip("/"))
+        for root in roots:
+            if vol.get("type") == "bind" and src.startswith(root):
+                print(name + "\t" + src[len(root):].rstrip("/"))
+                break
 ')
 fi
 
@@ -331,7 +434,17 @@ compose_up() {
     fi
   fi
 }
+{% if deploy_release_tree | default(false) | bool %}
+# The first deploy from a release replaces a checkout: recreate everything once,
+# so no container keeps a mount opened in the old checkout.
+if [[ "$old_head" == none ]]; then
+  compose_up --force-recreate
+else
+  compose_up
+fi
+{% else %}
 compose_up
+{% endif %}
 # (Not "${{ '#' }}recreate[@]": that opens a Jinja comment in this template.)
 if [[ -n "${recreate[*]:-}" ]]; then
   mapfile -t recreate < <(printf '%s\n' "${recreate[@]}" | sort -u)
@@ -347,13 +460,26 @@ fi
 # volumes) only, and non-fatal: the deploy itself has already succeeded, and
 # a failed prune costs disk, not availability.
 docker image prune -af || true
+{% if deploy_release_tree | default(false) | bool %}
+/usr/local/sbin/vps-release prune || true
+if [[ "$action" == rollback ]]; then
+  /usr/local/bin/vps-notify "Rolled back to ${new_head:0:7}" \
+"vps-deploy --rollback switched /opt/deploy from ${old_head:0:7} to ${new_head:0:7} and redeployed it. Auto-deploy skips ${old_head:0:7} until a new commit reaches the branch." \
+    high warning || true
+fi
+{% endif %}
 
 # The deploy changed /opt/deploy's working tree (AIDE-monitored): acknowledge
 # via the evidence-recording re-baseline, debounced so back-to-back deploys
 # rebaseline once. Deploys are a trusted change channel (CI-gated, signed
 # HEAD, announced via ntfy); tampering outside a deploy still alerts. Guarded:
 # not every host runs the baseline-hardening AIDE stack.
+{% if deploy_release_tree | default(false) | bool %}
+# Every run switched /opt/deploy and may have exported or pruned a release.
+if true; then
+{% else %}
 if [[ "$old_head" != "$new_head" ]]; then
+{% endif %}
   systemctl restart aide-rebaseline-after-deploy.timer >/dev/null 2>&1 || true
 fi
 

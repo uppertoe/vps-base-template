@@ -16,4 +16,5 @@ lines="${2:-200}"
 [[ "$lines" =~ ^[0-9]+$ ]] || { echo "vps-app-logs: lines must be numeric" >&2; exit 2; }
 
 cd /opt/deploy
+export COMPOSE_PROJECT_NAME=deploy
 exec docker compose logs --no-color --tail "$lines" "$service"

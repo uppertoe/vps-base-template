@@ -139,6 +139,8 @@ baseline_aide_exclude_paths:
   - /etc/ufw/user.rules
   - /etc/ufw/user6.rules
   - /opt/deploy/.git
+  # Root's mirrors for the release tree (docs/15): objects change on every fetch.
+  - /var/lib/vps-deploy
   - '/root/\.bash_history'
   - '/home/[^/]+/\.bash_history'
   # Ansible's per-run temp dir when a site play runs on the box as admin.
@@ -168,6 +170,10 @@ baseline_aide_rule_overrides:
   - '=/etc/ld\.so\.cache VarFile'
   - "DeployConf = InodeData+Checksums"
   - "/opt/deploy DeployConf"
+  # AIDE selection lines are prefix regexes, so the line above also covers the
+  # release tree's /opt/deploy-releases and /opt/deploy-legacy (docs/15): each
+  # release is exported once and never changes, and the rebaseline after every
+  # release deploy covers the new or pruned ones.
 
 # Re-baseline AIDE after apt package operations (unattended-upgrades, manual
 # installs). Package upgrades legitimately change /usr/bin, /usr/lib, etc. -- the

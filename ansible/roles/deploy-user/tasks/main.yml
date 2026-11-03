@@ -114,6 +114,25 @@
 
 # --- Deploy tree and entrypoints ---------------------------------------------
 
+- name: Check whether /opt/deploy is already a release link
+  ansible.builtin.stat:
+    path: /opt/deploy
+    follow: false
+  register: deploy_dir_stat
+
+# The release tree is one-way: once /opt/deploy is a release link, turning the
+# switch off would leave a checkout-mode wrapper with no checkout.
+- name: Refuse to leave the release tree by switching it off
+  ansible.builtin.assert:
+    that: deploy_release_tree | bool
+    fail_msg: >-
+      /opt/deploy is a release link (docs/15-release-tree.md). Leaving the
+      release tree is a manual migration; set deploy_release_tree: true.
+  when: deploy_dir_stat.stat.islnk | default(false)
+
+# Under the release tree (docs/15-release-tree.md) /opt/deploy becomes a
+# symlink to a root-owned release, and vps-release fetches for itself, so the
+# checkout directory is only created in checkout mode.
 - name: Create deploy directory for docker projects
   ansible.builtin.file:
     path: /opt/deploy
@@ -121,6 +140,7 @@
     owner: "{{ deploy_user }}"
     group: "{{ deploy_user }}"
     mode: "0755"
+  when: not deploy_release_tree | bool
 
 - name: Create vps-scaffold config directory
   ansible.builtin.file:
@@ -130,6 +150,123 @@
     group: root
     mode: "0750"
 
+# --- Release tree (docs/15-release-tree.md) ---------------------------------
+# Root fetches, verifies and exports each commit itself; the deploy account's
+# checkout is no longer read or executed by root.
+- name: Release tree
+  when: deploy_release_tree | bool
+  block:
+    - name: Require the repo URL and signed deploys in restricted mode
+      ansible.builtin.assert:
+        that:
+          - deploy_repo_url | length > 0
+          - deploy_verify_signature | bool
+        fail_msg: >-
+          In restricted mode the release tree takes the server repo URL from the
+          inventory only (deploy_repo_url), never from the deploy account's
+          checkout, and needs deploy_verify_signature: true, or root would deploy
+          whatever that URL serves.
+      when: deploy_restricted_mode | bool
+
+    - name: Install the first-switch bind check
+      ansible.builtin.copy:
+        src: vps-release-bind-check
+        dest: /usr/local/sbin/vps-release-bind-check
+        owner: root
+        group: root
+        mode: "0750"
+
+    # Before anything that would let a deploy take the release path: the check
+    # is also enforced by vps-release at the first switch itself.
+    - name: Refuse the first switch while a container binds an untracked or writable path in the checkout
+      ansible.builtin.command: /usr/local/sbin/vps-release-bind-check
+      register: release_bind_check
+      changed_when: false
+      failed_when: release_bind_check.rc != 0
+      when: not (deploy_dir_stat.stat.islnk | default(false))
+
+    - name: Install the release tool
+      ansible.builtin.copy:
+        src: "{{ item }}"
+        dest: "/usr/local/sbin/{{ item }}"
+        owner: root
+        group: root
+        mode: "0750"
+      loop:
+        - vps-release
+
+    - name: Pin GitHub's SSH host key for root's fetch
+      ansible.builtin.copy:
+        src: github_known_hosts
+        dest: /etc/vps-scaffold/known_hosts
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Check for root's copy of the deploy key
+      ansible.builtin.stat:
+        path: /etc/vps-scaffold/deploy-key
+      register: release_key
+
+    - name: Copy the read-only deploy key to root's configuration
+      ansible.builtin.copy:
+        src: "{{ deploy_release_key_source }}"
+        dest: /etc/vps-scaffold/deploy-key
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0600"
+      when: not release_key.stat.exists
+
+    - name: Read the server repo URL from the existing checkout  # noqa: command-instead-of-module
+      ansible.builtin.command:
+        cmd: git -C /opt/deploy config --get remote.origin.url
+      become: true
+      become_user: "{{ deploy_user }}"
+      register: release_checkout_url
+      changed_when: false
+      failed_when: false
+      when:
+        - deploy_repo_url | length == 0
+        - not deploy_restricted_mode | bool
+        - not (deploy_dir_stat.stat.islnk | default(false))
+
+    - name: Read the server repo URL from the release configuration
+      ansible.builtin.slurp:
+        src: /etc/vps-scaffold/release.env
+      register: release_env_existing
+      failed_when: false
+      when: deploy_repo_url | length == 0
+
+    - name: Settle the server repo URL
+      ansible.builtin.set_fact:
+        deploy_release_repo_url: >-
+          {{ deploy_repo_url
+             if deploy_repo_url | length > 0
+             else (release_checkout_url.stdout | default('') | trim)
+             if (release_checkout_url.stdout | default('') | trim | length > 0)
+             else ((release_env_existing.content | default('') | b64decode)
+                   | regex_search('(?m)^REPO_URL=(.*)$', '\\1') | default([''], true) | first) }}
+
+    - name: Refuse an unusable server repo URL
+      ansible.builtin.assert:
+        that:
+          - deploy_release_repo_url is match('^(git@github\\.com:|https://github\\.com/)[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')
+        fail_msg: >-
+          The release tree needs the server repo's GitHub URL. Set deploy_repo_url
+          in the inventory (found '{{ deploy_release_repo_url }}').
+
+    - name: Write the release configuration
+      ansible.builtin.template:
+        src: release.env.j2
+        dest: /etc/vps-scaffold/release.env
+        owner: root
+        group: root
+        mode: "0600"
+
+
+# Installed after the release block, so a refused release-tree check leaves
+# the previous wrapper in place rather than one that expects vps-release.
 - name: Install root-owned deploy wrapper
   ansible.builtin.template:
     src: vps-deploy.j2
@@ -137,6 +274,14 @@
     owner: root
     group: root
     mode: "0750"
+
+# Switched off before the first switch: auto-deploy must not keep taking the
+# release path (the play refuses switching off after it, above).
+- name: Retire the release configuration while the release tree is off
+  ansible.builtin.file:
+    path: /etc/vps-scaffold/release.env
+    state: absent
+  when: not deploy_release_tree | bool
 
 # vps-git-heal hands back anything under the checkout's .git that a hand-run
 # root git has taken (auto-deploy and vps-deploy call it first); vps-git is the
@@ -252,11 +397,40 @@
 # gets "unauthorized" and every deploy of a private image fails. Propagate the
 # credentials to root's docker config. Found flipping a live host with private
 # GHCR images.
+# Root's docker runs every compose command in restricted mode and under the
+# release tree. Root takes only the registry logins from the deploy account's
+# Docker config, never the rest of that file: credential helpers, proxies and
+# CLI plugin directories there would otherwise choose what root's docker runs.
 - name: Check for deploy-user registry credentials
   ansible.builtin.stat:
     path: "/home/{{ deploy_user }}/.docker/config.json"
   register: deploy_docker_config
-  when: deploy_restricted_mode | bool
+  when: deploy_restricted_mode | bool or deploy_release_tree | bool
+
+- name: Read the deploy user's registry logins
+  ansible.builtin.slurp:
+    src: "/home/{{ deploy_user }}/.docker/config.json"
+  register: deploy_docker_config_raw
+  when:
+    - deploy_restricted_mode | bool or deploy_release_tree | bool
+    - deploy_docker_config.stat.exists
+
+- name: Keep only well-formed registry logins
+  ansible.builtin.set_fact:
+    root_docker_auths: >-
+      {%- set out = {} -%}
+      {%- set auths = ((deploy_docker_config_raw.content | b64decode | from_json).auths | default({})) -%}
+      {%- for registry, entry in auths.items()
+            if registry is match('^(https?://)?[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._/-]*)?$')
+            and entry is mapping and entry.auth is defined and entry.auth is string
+            and entry.auth is match('^[A-Za-z0-9+/=]+$') -%}
+        {%- set _ = out.update({registry: {'auth': entry.auth}}) -%}
+      {%- endfor -%}
+      {{ out }}
+  no_log: true
+  when:
+    - deploy_restricted_mode | bool or deploy_release_tree | bool
+    - deploy_docker_config.stat.exists
 
 - name: Ensure root docker config directory exists
   ansible.builtin.file:
@@ -266,20 +440,23 @@
     group: root
     mode: "0700"
   when:
-    - deploy_restricted_mode | bool
+    - deploy_restricted_mode | bool or deploy_release_tree | bool
     - deploy_docker_config.stat.exists
 
-- name: Propagate registry credentials to root in restricted mode
+# Skipped when nothing passes the filter, so a login an administrator made as
+# root is not wiped by an empty file.
+- name: Give root the registry logins only
   ansible.builtin.copy:
-    src: "/home/{{ deploy_user }}/.docker/config.json"
-    remote_src: true
+    content: "{{ {'auths': root_docker_auths} | to_nice_json }}\n"
     dest: /root/.docker/config.json
     owner: root
     group: root
     mode: "0600"
+  no_log: true
   when:
-    - deploy_restricted_mode | bool
+    - deploy_restricted_mode | bool or deploy_release_tree | bool
     - deploy_docker_config.stat.exists
+    - root_docker_auths | length > 0
 
 - name: Install root-owned app-manage and app-logs wrappers
   ansible.builtin.copy:

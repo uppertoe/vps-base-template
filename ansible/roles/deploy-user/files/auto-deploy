@@ -11,6 +11,42 @@
 set -euo pipefail
 
 REPO=/opt/deploy
+
+# Release tree (docs/15-release-tree.md): root's mirror is the source of truth,
+# and the commit deployed is the one /opt/deploy points at.
+if [[ -f /etc/vps-scaffold/release.env && -x /usr/local/sbin/vps-release ]]; then
+  local_head="$(/usr/local/sbin/vps-release current)"
+  remote_head="$(/usr/local/sbin/vps-release fetch)"
+  [[ "$local_head" == "$remote_head" ]] && exit 0
+  # After `vps-deploy --rollback`, the commit rolled back from is held until a
+  # new commit reaches the branch; the rollback message said so.
+  [[ "$(/usr/local/sbin/vps-release held)" == "$remote_head" ]] && exit 0
+  rc=0; /usr/local/sbin/vps-deploy --auto || rc=$?
+  [[ $rc -eq 3 ]] && exit 0
+  [[ $rc -eq 0 ]] || exit "$rc"
+  mgit() {
+    env -i PATH="$PATH" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+      git --git-dir=/var/lib/vps-deploy/repo.git -c core.hooksPath=/dev/null "$@"
+  }
+  if [[ "$local_head" == none ]] || ! mgit cat-file -e "$local_head^{commit}" 2>/dev/null; then
+    count=1; subjects="• $(mgit log -1 --format=%s "$remote_head")"
+  else
+    count="$(mgit rev-list --count "${local_head}..${remote_head}")"
+    subjects="$(mgit log --reverse --format='• %s' "${local_head}..${remote_head}" | awk 'NR<=6')"
+    if [ "$count" -gt 6 ]; then
+      subjects="${subjects}
+… and $((count - 6)) more"
+    fi
+  fi
+  s=""; [ "$count" -ne 1 ] && s="s"
+  /usr/local/bin/vps-notify "Auto-deploy: ${count} upstream change${s} applied" \
+"${subjects}
+
+${local_head:0:7} → ${remote_head:0:7} (CI-gated; full log: sudo vps-git log)" \
+    default package || true
+  exit 0
+fi
+
 cd "$REPO"
 
 # Hand back anything under .git that a hand-run root git has taken, so the

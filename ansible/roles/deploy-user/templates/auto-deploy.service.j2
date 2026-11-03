@@ -1,7 +1,12 @@
 # {{ ansible_managed }}
 [Unit]
 Description=Apply upstream server-repo changes (CI-gated fast path)
+{% if deploy_release_tree | default(false) | bool %}
+# Release tree (docs/15): a release has no .git; root's configuration decides.
+ConditionPathExists=/etc/vps-scaffold/release.env
+{% else %}
 ConditionPathExists=/opt/deploy/.git
+{% endif %}
 OnFailure=notify@%n.service
 
 [Service]

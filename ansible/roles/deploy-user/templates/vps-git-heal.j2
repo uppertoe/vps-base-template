@@ -20,6 +20,8 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 DEPLOY_USER="{{ deploy_user }}"
 REPO="${VPS_DEPLOY_REPO:-/opt/deploy}"
+# Release tree: no shared repository, nothing to heal.
+[[ -L "$REPO" ]] && exit 0
 GIT_DIR="$REPO/.git"
 
 [ -d "$GIT_DIR" ] || exit 0

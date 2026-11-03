@@ -2,9 +2,9 @@
 # deploy — pull latest changes, run optional app hooks, and restart containers.
 # Run from anywhere: ~/deploy
 # Managed by Ansible (deploy-user role).
-{% if deploy_restricted_mode | bool %}
-# Restricted mode: all privileged work happens in the root-owned, sudoers-
-# allowlisted wrapper. See docs/05-access-model.md.
+{% if deploy_restricted_mode | bool or deploy_release_tree | default(false) | bool %}
+# Restricted mode, or the release tree (docs/15-release-tree.md): all the work
+# happens in the root-owned wrapper. See docs/05-access-model.md.
 exec sudo /usr/local/sbin/vps-deploy "$@"
 {% else %}
 set -euo pipefail

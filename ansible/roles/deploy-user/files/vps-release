@@ -176,7 +176,13 @@ do_prepare() {
     # Its progress lines go to stderr: this function's stdout is the path.
     # --restic-dir: a backup set under secrets/backup/ is installed into
     # /etc/restic by the same step, as in checkout mode (docs/13, Decision 2).
-    /usr/local/sbin/vps-secrets-render --repo "$tmp" --owner root --restic-dir /etc/restic >&2
+    # An explicit failure path, not only the ERR trap: a caller that tests
+    # this function's result (as the test does) suppresses errexit and ERR.
+    /usr/local/sbin/vps-secrets-render --repo "$tmp" --owner root --restic-dir /etc/restic >&2 || {
+      rm -rf -- "$tmp"
+      echo "vps-release: the secrets render failed; the release is not prepared." >&2
+      exit 1
+    }
   fi
   printf 'commit=%s\nscaffold=%s\nexported=%s\n' "$commit" "${scaffold:-none}" "$(date -u +%FT%TZ)" >"$tmp/.release"
   chmod 0644 "$tmp/.release"

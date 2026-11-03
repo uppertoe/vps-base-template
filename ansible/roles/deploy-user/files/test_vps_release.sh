@@ -22,6 +22,8 @@ mkdir -p /opt/deploy && echo legacy >/opt/deploy/marker
 tip="$(vps-release fetch)"
 [[ "$tip" =~ ^[0-9a-f]{40}$ ]] || fail "fetch printed '$tip'"
 ok "fetch returns the tip"
+[[ "$(git --git-dir=/var/lib/vps-deploy/repo.git rev-parse HEAD)" == "$tip" ]] || fail "the mirror's HEAD is not the fetched tip"
+ok "the mirror's HEAD names the fetched branch"
 
 # A failed fetch fails, rather than falling back to the cached tip.
 cp /etc/vps-scaffold/release.env /tmp/release.env

@@ -65,6 +65,44 @@ def netc(service, networks, image="app:1"):
 # (name, {container_name: container}, expected {name: {key: bool}})
 NET_CASES = [
     (
+        "an app shares its own members network with the gateway alone -> passes",
+        {
+            "caddy": netc("caddy", ["cases_proxy", "auth_proxy"], "caddy:2"),
+            "cases": netc("cases", ["cases_proxy", "cases_members"]),
+            "auth": netc("auth", ["auth_proxy", "cases_members", "rota_members"]),
+            "rota": netc("rota", ["rota_proxy", "rota_members"]),
+        },
+        {
+            "cases": {"proxy_network_exclusive": True, "internal_network_isolated": True},
+            "rota": {"proxy_network_exclusive": True, "internal_network_isolated": True},
+            "auth": {"proxy_network_exclusive": True, "internal_network_isolated": True},
+        },
+    ),
+    (
+        "a second app on another app's members network -> internal isolation fails",
+        {
+            "caddy": netc("caddy", ["cases_proxy", "rota_proxy", "auth_proxy"], "caddy:2"),
+            "cases": netc("cases", ["cases_proxy", "cases_members"]),
+            "rota": netc("rota", ["rota_proxy", "cases_members"]),
+            "auth": netc("auth", ["auth_proxy", "cases_members"]),
+        },
+        {
+            "cases": {"internal_network_isolated": False},
+            "rota": {"internal_network_isolated": False},
+        },
+    ),
+    (
+        "the exemption is for the gateway only: another service named like it is not exempt elsewhere",
+        {
+            "caddy": netc("caddy", ["cases_proxy"], "caddy:2"),
+            "cases": netc("cases", ["cases_proxy", "cases_internal"]),
+            "auth": netc("auth", ["cases_internal"]),
+        },
+        {
+            "cases": {"internal_network_isolated": False},
+        },
+    ),
+    (
         "healthy estate: each app on its own proxy net, planka+db on planka_internal",
         {
             "caddy": netc("caddy", ["planka_proxy", "auth_proxy"], "caddy:2"),

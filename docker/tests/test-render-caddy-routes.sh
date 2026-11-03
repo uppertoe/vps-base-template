@@ -379,6 +379,58 @@ app.{$DOMAIN} {
 }
 EOF
 
+# --- 3. members networks ------------------------------------------------------
+# An app whose snippet carries "# scaffold-members:" gets an internal
+# <app>_members network that only the gateway (auth) and that app join; an app
+# without the marker gets none; and the marker without apps/auth enabled fails.
+members_fixture() {
+  local root="$1" with_auth="$2"
+  mkdir -p "$root/apps/auth" "$root/apps/cases" "$root/apps/rota"
+  {
+    printf 'include:\n'
+    [[ "$with_auth" == yes ]] && printf '  - apps/auth/docker-compose.yml\n'
+    printf '  - apps/cases/docker-compose.yml\n  - apps/rota/docker-compose.yml\n'
+  } > "$root/docker-compose.yml"
+  for a in auth cases rota; do
+    printf 'services:\n  %s:\n    image: example/%s\n' "$a" "$a" > "$root/apps/$a/docker-compose.yml"
+    # shellcheck disable=SC2016 # {$DOMAIN} is Caddy's placeholder, written literally
+    printf '# scaffold-lint: public -- a test fixture\n%s.{$DOMAIN} {\n\treverse_proxy %s:8080 {\n\t\timport strip_public\n\t}\n}\n' "$a" "$a" > "$root/apps/$a/$a.caddy"
+  done
+  sed -i.bak '1i\
+# scaffold-members: cases_coordinators -- reads these groups members from the gateway
+' "$root/apps/cases/cases.caddy" && rm -f "$root/apps/cases/cases.caddy.bak"
+}
+members_fixture "$work/members" yes
+if bash "$renderer" "$work/members" "$work/members-out" >/dev/null 2>"$work/members.err"; then
+  nets="$work/members-out/networks.yml"
+  auth_block="$(awk '/^  auth:/{f=1;next} /^  [a-z]/{f=0} f' "$nets")"
+  cases_block="$(awk '/^  cases:/{f=1;next} /^  [a-z]/{f=0} f' "$nets")"
+  rota_block="$(awk '/^  rota:/{f=1;next} /^  [a-z]/{f=0} f' "$nets")"
+  if grep -q -- '- cases_members' <<<"$auth_block" && grep -q -- '- cases_members' <<<"$cases_block" \
+     && ! grep -q -- '_members' <<<"$rota_block" \
+     && grep -A1 -q '^  cases_members:$' "$nets" && grep -A1 '^  cases_members:$' "$nets" | grep -q 'internal: true' \
+     && ! grep -q 'rota_members' "$nets"; then
+    pass "members network: cases and auth share an internal cases_members; rota has none"
+  else
+    fail "members network not as expected:"; cat "$nets" >&2
+  fi
+  if grep -q -- '- auth_proxy' <<<"$cases_block"; then
+    fail "an app was put on auth_proxy"
+  else
+    pass "no app joins auth_proxy"
+  fi
+else
+  fail "renderer refused the members fixture: $(cat "$work/members.err")"
+fi
+members_fixture "$work/members-noauth" no
+if bash "$renderer" "$work/members-noauth" "$work/members-noauth-out" >/dev/null 2>"$work/members-noauth.err"; then
+  fail "a scaffold-members marker without apps/auth enabled was accepted"
+elif grep -q 'apps/auth is not enabled' "$work/members-noauth.err"; then
+  pass "a scaffold-members marker without apps/auth fails"
+else
+  fail "unexpected error: $(cat "$work/members-noauth.err")"
+fi
+
 echo
 if [[ $failures -gt 0 ]]; then
   echo "$failures check(s) failed" >&2

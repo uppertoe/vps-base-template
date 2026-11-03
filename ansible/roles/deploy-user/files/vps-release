@@ -247,10 +247,28 @@ do_previous() {
   done < <(tac "$HISTORY")
 }
 # Keep the current release and the most recently switched-to others, $KEEP in all.
+# Releases named in mount tables on stdin (/proc/<pid>/mountinfo). The kernel
+# resolves /opt/deploy at mount time, so a container that later deploys did
+# not recreate still mounts files from the release it was created in.
+releases_in_mountinfo() {
+  local base; base="$(basename "$RELEASES")"
+  grep -oE "/$base/[0-9a-f]{40}(/| |$)" | grep -oE '[0-9a-f]{40}' | sort -u |
+    while read -r sha; do echo "$RELEASES/$sha"; done
+}
+
+mounted_releases() {
+  cat /proc/[0-9]*/mountinfo 2>/dev/null | releases_in_mountinfo || true
+}
+
 do_prune() {
   local cur d keep=() n=0
   cur="$(current_dir)"
   [[ -n "$cur" ]] && keep+=("$cur") && n=1
+  # A release a running container still mounts is kept whatever its age:
+  # removing it would empty that container's directory binds.
+  while read -r d; do
+    [[ -n "$d" ]] && keep+=("$d")
+  done < <(mounted_releases)
   if [[ -f "$HISTORY" ]]; then
     while read -r _ d; do
       (( n >= KEEP )) && break

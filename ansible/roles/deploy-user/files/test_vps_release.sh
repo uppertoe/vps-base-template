@@ -80,6 +80,13 @@ A=$(mk "$(printf 'a%.0s' {1..40})"); B=$(mk "$(printf 'b%.0s' {1..40})"); C=$(mk
 vps-release switch "$A"; vps-release switch "$B"; vps-release switch "$A"; vps-release switch "$C"
 [[ "$(vps-release previous)" == "$A" ]] || fail "previous after A B A C is '$(vps-release previous)', expected A"
 ok "previous follows the switch history, not export times"
+# A release a running container still mounts survives prune.
+line="3550 3540 253:1 /opt/deploy-releases/${rel##*/}/apps/www /srv rw,relatime - ext4 /dev/vda1 rw"
+[[ "$(releases_in_mountinfo <<<"$line")" == "$rel" ]] || fail "mountinfo parsing missed the release"
+# shellcheck disable=SC2317,SC2329  # do_prune calls this override
+( mounted_releases() { echo "$rel"; }; do_prune )
+[[ -d "$rel" ]] || fail "prune removed a release a container still mounts"
+ok "prune keeps a release that a running container still mounts"
 vps-release prune
 [[ -d "$C" && -d "$A" && -d "$B" && ! -d "$rel" ]] || fail "prune kept the wrong set"
 ok "prune keeps the current release and the two most recently deployed"

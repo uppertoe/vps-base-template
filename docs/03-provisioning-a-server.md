@@ -6,7 +6,7 @@ A full walkthrough from creating a VPS to a hardened, Docker-ready server.
 
 Your server repo ships `scripts/provision.sh`, a re-runnable orchestrator that
 chains every step below — bootstrap → hardening → AWS → backups → deploy →
-alerting → recovery bundle → strict verify — into one idempotent command:
+alerting → recovery set → strict verify — into one idempotent command:
 
 ```bash
 scripts/provision.sh <host>              # <host> = your inventory alias
@@ -14,8 +14,9 @@ scripts/provision.sh --dry-run <host>    # preview: prints each stage's skip/run
 ```
 
 It prompts for at most two things — the root credential (only on the first
-bootstrap, and only if the provider gave a root password) and the
-recovery-bundle passphrase — and skips both on a converged re-run. Wire the AWS
+bootstrap, and only if the provider gave a root password) and, on a server
+without SOPS, the recovery-bundle passphrase — and skips both on a converged
+re-run. Wire the AWS
 buckets in the same pass with `--aws-backup-bucket/--aws-backup-user` and
 `--aws-logs-bucket/--aws-logs-user` (needs an AWS admin profile via
 `--aws-profile`). You still create the VPS and cut DNS over yourself.
@@ -245,7 +246,7 @@ biggest exception.
 
 ```bash
 # Mode-aware end-to-end smoke test. --strict also fails on a missing/stale
-# recovery bundle (Step 13) or an unconfigured alerting/log-export layer:
+# recovery set (Step 13) or an unconfigured alerting/log-export layer:
 bash scripts/post-provision-smoke-test.sh myserver --require-backup --strict
 # Full audit bundle (OpenSCAP L1+L2, docker-bench, compose audit, Trivy,
 # Lynis, host captures with a control-tagged INDEX):
@@ -258,12 +259,24 @@ Copy [templates/](templates/) into the server repo's `compliance/` directory
 and fill them in — that pack plus the `reports/` bundle is what you hand a
 reviewer (see [compliance-plan-vic-health.md](compliance-plan-vic-health.md)).
 
-## Step 13 — Recovery bundle (do this last, and after any secret change)
+## Step 13 — Recovery set (do this last, and after any secret change)
 
 The box is not "set-and-forget" until a total loss is survivable. Everything
-NOT in git — `ansible/hosts`, the server `.env`, every `apps/*/.env`, and the
-restic **repository password** (without which the offsite backups are
-undecryptable) — lives only on this box. Package it into one encrypted archive:
+NOT in git in plain form — `ansible/hosts`, the server `.env`, every
+`apps/*/.env`, and the restic **repository password** (without which the
+offsite backups are undecryptable) — must survive the box.
+
+On a server that keeps its secrets in SOPS ([13-secrets.md](13-secrets.md))
+this step is a check, not a task: the env files are under `secrets/`, the
+restic configuration under `secrets/backup/`, and the inventory in
+`secrets/recovery.sops`, so the repository and the recovery key in the
+password manager are the recovery set. Confirm the recovery key is stored
+where it should be and that `scripts/post-provision-smoke-test.sh` reports the
+set as held in SOPS; there is no bundle to make, and the bundle script says so
+if run.
+
+On a server that has not adopted SOPS, package the set into one encrypted
+archive:
 
 ```bash
 # Run ON the server, with sudo — the restic secrets in /etc/restic are

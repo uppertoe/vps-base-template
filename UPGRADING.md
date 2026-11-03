@@ -6,6 +6,38 @@ are always the same; what varies is the *operator actions* that accompany a
 given range of scaffold changes — that's what this file records.
 
 
+## 2026-11-03 — The recovery bundle retires on SOPS servers; the deploy installs /etc/restic from secrets/backup/
+
+On a server whose repo carries `secrets/recovery.sops`, the smoke test now
+passes the recovery check as "held in SOPS", `provision.sh` skips the bundle
+stage, and `make-recovery-bundle.sh` does nothing unless `FORCE_BUNDLE=1`.
+`restore.sh --from-sops <new-ip>` rebuilds such a server from the repo and
+the owner or recovery age key (docs/09). Servers without SOPS keep the bundle
+path unchanged.
+
+The renderer (`vps-secrets-render`) now takes `--restic-dir`, and both deploy
+paths pass `/etc/restic`: when the repo carries `secrets/backup/config.env.sops`
+the rendered backup set is installed there, root-only, and a service file
+under `/etc/restic/services/` that the repo no longer names is **removed**, so
+a retired service stops being backed up. A repo without `secrets/backup/`
+leaves `/etc/restic` alone.
+
+**Operator actions:**
+
+1. Re-run the site play to install the new wrapper and renderer.
+2. If the restic configuration is still only on the box, move it into
+   `secrets/backup/` (encrypt `/etc/restic/config.env` and each
+   `/etc/restic/services/*.env` on the box with `sops` and commit the
+   ciphertext; docs/13 "Adopting on a server"). Until then the smoke test
+   warns that `/etc/restic` is hand-managed.
+3. Before the first deploy after step 2, compare `/etc/restic/services/` with
+   `secrets/backup/services/`: any service file missing from the repo is
+   deleted by that deploy. Add it to the repo first if it should stay.
+4. If `secrets/recovery.sops` still carries a `RESTIC_ETC_TGZ_B64` tarball
+   from the interim layout, drop it once `secrets/backup/` is in place.
+
+---
+
 ## 2026-11-03 — The release tree (opt-in): root fetches, verifies and exports each deploy
 
 **Nothing changes until you opt in.** With `deploy_release_tree: true` in the

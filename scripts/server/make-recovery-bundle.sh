@@ -28,6 +28,17 @@ set -euo pipefail
 ROOT_DIR="${SERVER_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)}"
 cd "$ROOT_DIR"
 
+# A server that keeps its secrets in SOPS (docs/13-secrets.md) holds the
+# inventory in secrets/recovery.sops and the restic configuration in
+# secrets/backup/, so the repo and the recovery key are the recovery set and a
+# bundle would only be a second copy of every secret under a second passphrase.
+if [[ -f secrets/recovery.sops && "${FORCE_BUNDLE:-0}" != "1" ]]; then
+  echo "make-recovery-bundle: this repo keeps its recovery set in SOPS (secrets/recovery.sops);"
+  echo "  a rebuild needs the repo and the recovery key, not a bundle (docs/13-secrets.md, docs/09-recovery.md)."
+  echo "  Set FORCE_BUNDLE=1 to make one anyway."
+  exit 0
+fi
+
 # Under sudo, default the output to the INVOKING user's home (not /root) and
 # hand them the file — otherwise a root-owned bundle they can't scp.
 out_dir="${1:-}"

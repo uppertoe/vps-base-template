@@ -317,7 +317,10 @@ fi
 # tracked, as the hooks above must be: an untracked file is not part of the
 # reviewed commit. vps-secrets-render writes nothing unless every file
 # decrypts, and leaves unchanged files untouched. No secrets/ directory, no
-# effect.
+# effect. When the repo carries the backup set under secrets/backup/, the
+# renderer also installs it into /etc/restic (root-only) and removes a service
+# file the repo no longer names, so the reviewed commit is the only source of
+# the restic configuration (docs/13-secrets.md, Decision 2).
 if [[ -d secrets ]]; then
   while IFS= read -r -d '' f; do
     if ! rootgit --literal-pathspecs ls-files --error-unmatch -- "$f" >/dev/null 2>&1; then
@@ -325,7 +328,7 @@ if [[ -d secrets ]]; then
       exit 1
     fi
   done < <(find ./secrets -type f -print0)
-  /usr/local/sbin/vps-secrets-render --repo /opt/deploy
+  /usr/local/sbin/vps-secrets-render --repo /opt/deploy --restic-dir /etc/restic
 fi
 
 docker compose pull --policy always

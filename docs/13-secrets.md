@@ -82,7 +82,11 @@ check and before `docker compose pull`:
      `backup/services/<name>.env`.
 
    Only the env files that the wrapper already locks to `600` may be targets.
-   `secrets/recovery.sops` is never rendered.
+   `secrets/recovery.sops` is never rendered. When the repo carries
+   `secrets/backup/config.env.sops`, the renderer also installs the rendered
+   backup set into `/etc/restic` (root-only, `--restic-dir`) and removes a
+   service file there that the repo no longer names, so the reviewed commit
+   is the only source of the restic configuration.
 4. If any file fails to decrypt or validate, nothing is written and the deploy
    stops before touching any container. A failed decrypt cannot take an app
    down. A file whose content has not changed is left untouched, so its ctime
@@ -128,10 +132,11 @@ let them write, read or hang anything they could not already
   `secrets/`.
 - **Pre-commit (not built):** the same check as an optional hook for the
   owner's laptop.
-- **Smoke test (not built; server-repo layer):** `post-provision-smoke-test.sh`
-  should check that the server key exists with mode `0400`, that
-  `vps-secrets-render --check` passes, and that no stray `.env.bak` or
-  `*-env.bak-*` files remain.
+- **Smoke test (built in part):** `post-provision-smoke-test.sh` reports the
+  recovery set as held in SOPS when `secrets/recovery.sops` exists, and
+  checks that `/etc/restic` matches `secrets/backup/`. Still to build: that
+  the server key exists with mode `0400`, that `vps-secrets-render --check`
+  passes, and that no stray `.env.bak` or `*-env.bak-*` files remain.
 
 ## Phase 1: SOPS with the apps unchanged
 
@@ -153,19 +158,26 @@ let them write, read or hang anything they could not already
 3. **RCH**, then the other servers, after a week without incident on MCH.
 4. **Clean-up:**
    - delete the `/root/*-env.bak-*` copies and the stray `.env.bak` files;
-   - move the inventory (`ansible/hosts`) and the restic password into
-     `secrets/recovery.sops` (Decision 2), then retire the recovery bundle
-     and its smoke-test check;
+   - move the inventory (`ansible/hosts`) into `secrets/recovery.sops` and
+     the restic configuration into `secrets/backup/` (Decision 2); the
+     recovery bundle and its smoke-test check then retire themselves
+     (done 2026-11-03: the smoke test, `provision.sh`,
+     `make-recovery-bundle.sh` and `restore.sh --from-sops` all recognise a
+     repo that carries `secrets/recovery.sops`);
    - retire the env-files backup once the drill has passed.
 
-**Decision 2 (made 2026-11-02): the restic password and the inventory move
-into SOPS.** Today the recovery bundle carries them. They move into
-`secrets/recovery.sops` (dotenv, like every secrets file; the inventory is one
-multi-line value), encrypted to the owner and recovery keys only, not to
-the server key: the server already holds the restic password in
-`/etc/restic/`, and it never needs the inventory. A rebuild then needs only
-the repo and the recovery key, and the recovery bundle is retired. The price
-is the backup password living in git as ciphertext, under the key-retirement
+**Decision 2 (made 2026-11-02, layout settled 2026-11-03): the restic
+configuration and the inventory move into SOPS.** The recovery bundle used to
+carry them. The inventory moves into `secrets/recovery.sops` (dotenv, like
+every secrets file; the inventory is one base64 value, `ANSIBLE_HOSTS_B64`),
+encrypted to the owner and recovery keys only, not to the server key, which
+never needs it. The restic configuration (`config.env` and
+`services/*.env`) moves into `secrets/backup/`, encrypted to the server key
+as well, because the renderer installs it into `/etc/restic` at every deploy;
+the repo is then the only source of what restic backs up, and a retired
+service stops being backed up when its file leaves the repo. A rebuild then
+needs only the repo and the recovery key, and the recovery bundle is retired.
+The price is the backup password living in git as ciphertext, under the key-retirement
 rule above.
 
 ## Adopting on a server

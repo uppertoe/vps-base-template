@@ -283,26 +283,41 @@ check_soft "Vulnerability scan timer is active" "sudo systemctl is-active --quie
 check_soft "AIDE daily integrity check timer is active" "sudo systemctl is-active --quiet dailyaidecheck.timer"
 check_soft "unattended-upgrades is enabled" "systemctl is-enabled --quiet unattended-upgrades"
 
-header "Recovery bundle"
-# A rebuild needs the not-in-git secrets. make-recovery-bundle.sh drops a
+header "Recovery set"
+# A rebuild needs what git does not hold. On a server that keeps its secrets
+# in SOPS (docs/13-secrets.md), secrets/recovery.sops carries the inventory
+# and secrets/backup/ carries the restic configuration, so the repo plus the
+# recovery key rebuild the box and no bundle is needed; the renderer installs
+# the backup set into /etc/restic at each deploy, so check the two agree.
+# Otherwise fall back to the recovery bundle: make-recovery-bundle.sh drops a
 # timestamp marker on success; flag it missing, or stale when any captured
 # secret (.env / apps/*/.env / restic config) is newer than the last bundle.
-bundle_state="$(remote 'm=/opt/deploy/.recovery-bundle-last; if [ ! -f "$m" ]; then echo MISSING; else n=$( { find /opt/deploy/.env /opt/deploy/apps -type f -name ".env" -newer "$m"; sudo find /etc/restic -type f -name "*.env" -newer "$m"; } 2>/dev/null | head -1 ); [ -n "$n" ] && echo STALE || echo OK; fi' 2>/dev/null || echo ERROR)"
-bundle_when="$(remote 'cat /opt/deploy/.recovery-bundle-last 2>/dev/null' 2>/dev/null || true)"
-case "$bundle_state" in
-  OK)
-    pass "Recovery bundle recorded and current (${bundle_when:-unknown})"
-    ;;
-  STALE)
-    soft_note "Recovery bundle is STALE — a secret changed since it was last made (${bundle_when:-unknown}); re-run 'ssh $HOST_ALIAS \"cd /opt/deploy && sudo scripts/make-recovery-bundle.sh\"'"
-    ;;
-  MISSING)
-    soft_note "No recovery bundle recorded — run 'ssh $HOST_ALIAS \"cd /opt/deploy && sudo scripts/make-recovery-bundle.sh\"' and store it offsite"
-    ;;
-  *)
-    soft_note "Recovery bundle status could not be determined"
-    ;;
-esac
+if remote 'test -f /opt/deploy/secrets/recovery.sops' >/dev/null 2>&1; then
+  pass "Recovery set is held in SOPS (secrets/recovery.sops): the repo and the recovery key rebuild the box; no bundle is needed"
+  if remote 'test -f /opt/deploy/secrets/backup/config.env.sops' >/dev/null 2>&1; then
+    check_soft "restic configuration on the box matches secrets/backup/ (installed at deploy)" \
+      'cd /opt/deploy && sudo cmp -s backup/config.env /etc/restic/config.env && for f in backup/services/*.env; do [ -e "$f" ] || continue; sudo cmp -s "$f" "/etc/restic/services/$(basename "$f")" || exit 1; done && for f in $(sudo find /etc/restic/services -name "*.env" -type f); do [ -e "backup/services/$(basename "$f")" ] || exit 1; done'
+  else
+    soft_note "The restic configuration is not in SOPS (no secrets/backup/): /etc/restic is hand-managed and a rebuild needs a copy of it; move it into secrets/backup/ (docs/13-secrets.md)"
+  fi
+else
+  bundle_state="$(remote 'm=/opt/deploy/.recovery-bundle-last; if [ ! -f "$m" ]; then echo MISSING; else n=$( { find /opt/deploy/.env /opt/deploy/apps -type f -name ".env" -newer "$m"; sudo find /etc/restic -type f -name "*.env" -newer "$m"; } 2>/dev/null | head -1 ); [ -n "$n" ] && echo STALE || echo OK; fi' 2>/dev/null || echo ERROR)"
+  bundle_when="$(remote 'cat /opt/deploy/.recovery-bundle-last 2>/dev/null' 2>/dev/null || true)"
+  case "$bundle_state" in
+    OK)
+      pass "Recovery bundle recorded and current (${bundle_when:-unknown})"
+      ;;
+    STALE)
+      soft_note "Recovery bundle is STALE — a secret changed since it was last made (${bundle_when:-unknown}); re-run 'ssh $HOST_ALIAS \"cd /opt/deploy && sudo scripts/make-recovery-bundle.sh\"', or move the secrets into SOPS (docs/13-secrets.md) and retire the bundle"
+      ;;
+    MISSING)
+      soft_note "No recovery bundle recorded — run 'ssh $HOST_ALIAS \"cd /opt/deploy && sudo scripts/make-recovery-bundle.sh\"' and store it offsite, or move the secrets into SOPS (docs/13-secrets.md)"
+      ;;
+    *)
+      soft_note "Recovery bundle status could not be determined"
+      ;;
+  esac
+fi
 
 header "Summary"
 echo "Pass: $PASS_COUNT"

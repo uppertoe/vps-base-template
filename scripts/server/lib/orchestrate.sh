@@ -232,3 +232,88 @@ bundle_current() {
   state="$(ssh_box 'm=/opt/deploy/.recovery-bundle-last; if [ ! -f "$m" ]; then echo MISSING; else n=$( { find /opt/deploy/.env /opt/deploy/apps -type f -name ".env" -newer "$m"; sudo find /etc/restic -type f -name "*.env" -newer "$m"; } 2>/dev/null | head -1 ); [ -n "$n" ] && echo STALE || echo OK; fi' 2>/dev/null || echo ERROR)"
   [[ "$state" == "OK" ]]
 }
+
+# ---------------------------------------------------------------------------
+# SOPS recovery set (docs/13-secrets.md, Decision 2). A server that keeps its
+# secrets in SOPS holds the inventory in secrets/recovery.sops (encrypted to
+# the owner and recovery keys) and the restic configuration in secrets/backup/.
+# These helpers let restore.sh rebuild such a server from the repo and one of
+# those keys, with no bundle.
+# ---------------------------------------------------------------------------
+sops_dotenv() {  # sops_dotenv <file>  — decrypt one dotenv file to stdout
+  sops --decrypt --input-type dotenv --output-type dotenv "$1"
+}
+# Write ansible/hosts (and, for a repo that still carries the /etc/restic
+# tarball of the earlier layout, backup/) from secrets/recovery.sops, then
+# render secrets/backup/*.sops into backup/ so ansible/backup.yml can install
+# /etc/restic. Nothing else is decrypted on the laptop: the apps' env files are
+# rendered on the box by its own key once the secrets are re-keyed to it.
+recovery_set_from_sops() {
+  [[ -f secrets/recovery.sops ]] || die "secrets/recovery.sops not found: this repo does not keep its recovery set in SOPS"
+  local plain
+  plain="$(sops_dotenv secrets/recovery.sops)" || die "could not decrypt secrets/recovery.sops (is the owner or recovery age key in SOPS_AGE_KEY_FILE?)"
+  local hosts_b64 restic_b64
+  hosts_b64="$(printf '%s\n' "$plain" | sed -n 's/^ANSIBLE_HOSTS_B64=//p' | head -1)"
+  restic_b64="$(printf '%s\n' "$plain" | sed -n 's/^RESTIC_ETC_TGZ_B64=//p' | head -1)"
+  [[ -n "$hosts_b64" ]] || die "secrets/recovery.sops carries no ANSIBLE_HOSTS_B64"
+  (umask 077; printf '%s' "$hosts_b64" | base64 -d > ansible/hosts) || die "could not write ansible/hosts"
+  ok "wrote ansible/hosts from secrets/recovery.sops (0600)"
+  if [[ -n "$restic_b64" ]]; then
+    mkdir -p backup/services
+    (umask 077; printf '%s' "$restic_b64" | base64 -d | tar -xz -C backup --no-same-owner) \
+      || die "could not unpack the restic configuration from secrets/recovery.sops"
+    ok "unpacked backup/ from the restic tarball in secrets/recovery.sops"
+  fi
+  local f out n=0
+  while IFS= read -r f; do
+    out="${f#secrets/}"; out="${out%.sops}"
+    mkdir -p "$(dirname "$out")"
+    (umask 077; sops_dotenv "$f" > "$out") || die "could not decrypt $f"
+    n=$((n+1))
+  done < <(find secrets/backup -type f -name '*.sops' 2>/dev/null | sort)
+  (( n == 0 )) || ok "rendered $n restic file(s) from secrets/backup/ into backup/ (0600)"
+  [[ -f backup/config.env ]] || warn "no backup/config.env: ansible/backup.yml will have nothing to install; the restic repository password must come from somewhere"
+}
+# The new box has a new server age key. Put its public half on the secrets
+# rule in .sops.yaml in place of the old server key, re-encrypt every secrets
+# file to it (updatekeys needs the owner or recovery key), and commit. The
+# commit must reach main before the box can render: the deploy pulls main.
+rekey_secrets_to_box() {
+  local pub old
+  pub="$(ssh_box 'sudo cat /etc/vps-scaffold/age/key.pub' 2>/dev/null | tr -d '[:space:]')"
+  [[ "$pub" =~ ^age1[0-9a-z]+$ ]] || die "could not read the new server key (/etc/vps-scaffold/age/key.pub); has site-first-run run?"
+  if grep -q "$pub" .sops.yaml; then
+    ok "the new server key is already on .sops.yaml"
+  else
+    # The server key is the one on the general secrets rule that the recovery
+    # rule does not carry (recovery.sops is never encrypted to the server).
+    old="$(python3 - "$pub" <<'PY'
+import re, sys
+text = open(".sops.yaml").read()
+rules = re.split(r"\n\s*-\s+path_regex:", text)[1:]
+keysets = [set(re.findall(r"age1[0-9a-z]+", r)) for r in rules]
+recovery = set().union(*(k for r, k in zip(rules, keysets) if "recovery" in r.split("\n", 1)[0]))
+general = set().union(*(k for r, k in zip(rules, keysets) if "recovery" not in r.split("\n", 1)[0]))
+server = general - recovery
+print(server.pop() if len(server) == 1 else "")
+PY
+)"
+    if [[ -n "$old" ]]; then
+      run sed -i.bak "s/$old/$pub/" .sops.yaml && rm -f .sops.yaml.bak
+      ok "replaced the old server key with the new one in .sops.yaml"
+    else
+      die "could not identify the old server key in .sops.yaml; add $pub to the secrets rule by hand, run 'sops updatekeys -y' on every secrets file except recovery.sops, commit, and re-run"
+    fi
+  fi
+  local f
+  while IFS= read -r f; do
+    run sops updatekeys -y "$f" >/dev/null
+  done < <(find secrets -type f -name '*.sops' ! -name recovery.sops | sort)
+  ok "re-encrypted the secrets to the new server key"
+  if [[ "${DRY_RUN:-0}" != "1" ]] && ! git diff --quiet -- .sops.yaml secrets; then
+    run git add .sops.yaml secrets
+    run git commit -q -m "secrets: re-key to the rebuilt server's age key"
+    ok "committed the re-key; it must reach main before the next stage"
+  fi
+}
+

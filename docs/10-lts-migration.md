@@ -52,8 +52,10 @@ passing monthly self-test IS the evidence the release runs unattended.
 
 ## Phase 3 — per-instance migration (repeat per VPS repo)
 
-1. Refresh the recovery bundle (`scripts/make-recovery-bundle.sh`); lower the
-   DNS TTL a day ahead.
+1. Confirm the recovery set (on a SOPS server, that the recovery key is in
+   the password manager and the smoke test reports the set held in SOPS;
+   otherwise refresh the bundle with `scripts/make-recovery-bundle.sh`); lower
+   the DNS TTL a day ahead.
 2. Provision a fresh VPS on the new release from the SAME instance repo (new
    IP in the inventory), with the scaffold pointer bumped to the enabled
    commit: `bootstrap.yml` → `site-first-run.yml` → `./deploy`.

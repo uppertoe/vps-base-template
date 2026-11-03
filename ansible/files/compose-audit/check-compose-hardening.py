@@ -282,6 +282,11 @@ def container_networks(c):
     return set(((c.get("NetworkSettings") or {}).get("Networks") or {}).keys())
 
 
+def is_members_gateway(c, net):
+    """True for the gateway on an <app>_members network (render-caddy-routes.sh)."""
+    return compose_service(c) == "auth" and net.endswith("_members")
+
+
 def network_controls(inspected):
     """Cross-container network-topology controls (pure — no docker calls).
 
@@ -312,6 +317,12 @@ def network_controls(inspected):
             continue
         for net in container_networks(c):
             apps_per_net[net] = apps_per_net.get(net, 0) + 1
+            # The gateway is the one service every <app>_members network is
+            # meant to share: it serves group members to that app alone, and
+            # each app's token limits it to its own groups. It does not count
+            # as the app's peer there; a second app on the network still does.
+            if is_members_gateway(c, net):
+                continue
             if not is_db_container(c):
                 nondb_apps_per_net[net] = nondb_apps_per_net.get(net, 0) + 1
 

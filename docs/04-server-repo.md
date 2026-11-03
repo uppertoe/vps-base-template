@@ -212,6 +212,39 @@ two fields only. The auth service uses the third field to tell an app's own
 admin group from a route gate, and refuses a declared group as the target of a
 break-glass card. A group that is both is listed twice, once in each form.
 
+### An app that reads group members
+
+Group membership is set in the gateway. An app learns a signed-in person's
+groups from `Remote-Groups` on each request, and an app that must act when
+nobody is signed in, such as a weekly email to a group, reads the group's
+members from the gateway's members endpoint at the moment it needs them. It
+keeps no copy.
+
+Such an app's snippet carries a line written by vps-app-kit from the app's
+`app.yaml`:
+
+    # scaffold-members: <groups> -- <why>
+
+The renderer then gives the app an internal network, `<app>_members`, which
+only the gateway and that app join, so the app reaches `http://auth:8081`
+and no other app can. Never put an app on `auth_proxy`, and never publish
+port 8081. The compose audit accepts the gateway on each `*_members` network
+and fails a second app on one.
+
+Enable the reading in `apps/auth/.env`, and give the app the same token:
+
+    MEMBER_READERS=<app>=<group>,<group>
+    MEMBER_READER_TOKEN_<APP>=<openssl rand -hex 32>   # the app's name upper-cased, - as _
+
+and in `apps/<app>/.env`:
+
+    GATEWAY_MEMBERS_URL=http://auth:8081
+    GATEWAY_MEMBERS_TOKEN=<the same token>
+
+After deploying, `docker compose exec <app> /app -members <group>` shows what
+the app receives. The gateway's README ("Group members for apps") describes
+the endpoint, and its access log lists each app's reads.
+
 ### Static-asset caching (fingerprint to cache forever)
 
 The renderer stamps every site with a static-asset cache rule, so an app gets

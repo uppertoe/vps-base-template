@@ -50,6 +50,7 @@ ok "a second prepare reuses the release"
 rm -rf "$rel"
 cat >/usr/local/sbin/vps-secrets-render <<'R'
 #!/bin/sh
+echo "$@" >/tmp/render-args
 echo "vps-secrets-render: .env written"
 R
 chmod 0755 /usr/local/sbin/vps-secrets-render
@@ -60,6 +61,23 @@ source /usr/local/sbin/vps-release
 # shellcheck disable=SC2317,SC2329  # do_prepare calls this override
 out="$( check_links() { mkdir -p "$1/secrets"; }; do_prepare )"
 [[ "$out" == "$rel" ]] || fail "prepare's stdout carried render output: '$out'"
+grep -q -- '--restic-dir /etc/restic' /tmp/render-args || fail "prepare did not ask the renderer to install the backup set into /etc/restic (got: $(cat /tmp/render-args))"
+ok "the render step installs the backup set into /etc/restic"
+# A render failure fails prepare and leaves no partial release behind.
+printf '#!/bin/sh\necho "vps-secrets-render: refused" >&2\nexit 1\n' >/usr/local/sbin/vps-secrets-render
+rm -rf "$rel"
+# shellcheck disable=SC2317,SC2329  # do_prepare calls this override
+if out="$( check_links() { mkdir -p "$1/secrets"; }; do_prepare 2>/dev/null )"; then fail "prepare succeeded although the render step failed ($out)"; fi
+[[ -z "$(ls -d /opt/deploy-releases/.*.partial 2>/dev/null)" ]] || fail "a partial release survived a failed render"
+ok "a failed render fails prepare and removes the partial release"
+cat >/usr/local/sbin/vps-secrets-render <<'R'
+#!/bin/sh
+echo "$@" >/tmp/render-args
+echo "vps-secrets-render: .env written"
+R
+chmod 0755 /usr/local/sbin/vps-secrets-render
+# Put the release back for the steps below.
+[[ "$(vps-release prepare)" == "$rel" ]] || fail "prepare did not recreate the release after the failed render"
 ok "the render step's output stays off prepare's stdout"
 
 [[ "$(vps-release current)" == none ]] || fail "current before the switch"

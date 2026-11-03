@@ -80,6 +80,8 @@ do_fetch() {
   # A failed fetch must fail the run, never fall back to the cached tip.
   rgit --git-dir="$MIRROR" fetch --quiet --prune --no-tags "$REPO_URL" \
     "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
+  # HEAD names the deployed branch, so 'vps-git log' reads it without a ref.
+  rgit --git-dir="$MIRROR" symbolic-ref HEAD "refs/remotes/origin/$BRANCH"
   rgit --git-dir="$MIRROR" rev-parse --verify --quiet "refs/remotes/origin/$BRANCH^{commit}"
 }
 

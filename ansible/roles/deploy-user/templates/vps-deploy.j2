@@ -121,8 +121,8 @@ fi
 # Compose reads COMPOSE_FILE and friends from the project's .env; even from
 # reviewed ciphertext they would steer root's compose. Override files would be
 # merged silently. Both are refused, as in checkout mode.
-if grep -Eq '^[[:space:]]*(export[[:space:]]+)?COMPOSE_[A-Z_]*=' "$release/.env" 2>/dev/null; then
-  echo "vps-deploy: .env sets a COMPOSE_* variable; compose behaviour must come from the tracked compose files — refusing to deploy." >&2
+if grep -Eq '^[[:space:]]*(export[[:space:]]+)?(COMPOSE|DOCKER)_[A-Za-z0-9_.-]*[[:space:]]*[=:]' "$release/.env" 2>/dev/null; then
+  echo "vps-deploy: .env sets a COMPOSE_* or DOCKER_* variable; compose behaviour must come from the tracked compose files — refusing to deploy." >&2
   exit 1
 fi
 for f in docker-compose.override.yml docker-compose.override.yaml compose.override.yml compose.override.yaml; do
@@ -265,8 +265,11 @@ fi
 # .env, which the deploy user writes. Any of them would steer the root-run
 # `docker compose` towards files the checks above never looked at, so the .env
 # may hold interpolation values only.
-if grep -Eq '^[[:space:]]*(export[[:space:]]+)?COMPOSE_[A-Z_]*=' .env 2>/dev/null; then
-  echo "vps-deploy: .env sets a COMPOSE_* variable; compose behaviour must come from the tracked compose files — refusing to deploy." >&2
+# Compose's dotenv grammar ends a key at '=' or ':' and trims spaces before
+# the separator, so the pattern must accept both; DOCKER_* keys steer the
+# CLI itself and are refused for the same reason.
+if grep -Eq '^[[:space:]]*(export[[:space:]]+)?(COMPOSE|DOCKER)_[A-Za-z0-9_.-]*[[:space:]]*[=:]' .env 2>/dev/null; then
+  echo "vps-deploy: .env sets a COMPOSE_* or DOCKER_* variable; compose behaviour must come from the tracked compose files — refusing to deploy." >&2
   exit 1
 fi
 for f in docker-compose.override.yml docker-compose.override.yaml compose.override.yml compose.override.yaml; do

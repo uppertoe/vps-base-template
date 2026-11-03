@@ -45,6 +45,8 @@ jobs:
           # digest lag between a rebuild and its bump PR must not page us with a red
           # run every week. Capture drift WITHOUT failing the step; the issue below
           # is the durable, non-silent signal (opened on drift, closed when fresh).
+          # pipefail, or the pipeline's status is tee's and drift is never seen.
+          set -o pipefail
           if bash scripts/check-digest-freshness.sh | tee freshness.txt; then
             echo "drift=0" >> "$GITHUB_OUTPUT"
           else

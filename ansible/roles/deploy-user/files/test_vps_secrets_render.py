@@ -177,7 +177,17 @@ class RenderTests(Base):
         self.assertEqual(self.run_render(), 1)
         self.secret(".env.sops", "export COMPOSE_PROJECT_NAME=x\n")
         self.assertEqual(self.run_render(), 1)
+        # compose's dotenv grammar also accepts ':' and a space before '='
+        self.secret(".env.sops", "COMPOSE_FILE: /tmp/evil.yml\n")
+        self.assertEqual(self.run_render(), 1)
+        self.secret(".env.sops", "COMPOSE_FILE =/tmp/evil.yml\n")
+        self.assertEqual(self.run_render(), 1)
+        self.secret(".env.sops", "DOCKER_HOST=tcp://evil:2375\n")
+        self.assertEqual(self.run_render(), 1)
         self.assertFalse(self.exists(".env"))
+        # an ordinary value with a colon is fine
+        self.secret(".env.sops", "BASE_URL=https://example.org:8443\n")
+        self.assertEqual(self.run_render(), 0)
 
     def test_recovery_file_is_never_rendered(self):
         self.secret("recovery.sops", "FAIL because the server cannot decrypt it\n")

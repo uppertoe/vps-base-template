@@ -181,6 +181,12 @@
           - "'recreating services whose mounted files changed' in (vps_deploy_raw.content | b64decode)"
         msg: "vps-deploy must not force-recreate the whole stack; it recreates the services whose bind-mounted files changed"
 
+    - name: Assert wrapper installs a SOPS-held backup set into /etc/restic
+      ansible.builtin.assert:
+        that:
+          - "'vps-secrets-render --repo /opt/deploy --restic-dir /etc/restic' in (vps_deploy_raw.content | b64decode)"
+        msg: "vps-deploy must pass --restic-dir /etc/restic to the renderer so secrets/backup/ is the only source of the restic configuration"
+
     - name: Assert wrapper compares the tree as root against a private index copy
       ansible.builtin.assert:
         that:

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# restore.sh — one-shot rebuild of a lost box from a recovery bundle + offsite
+# restore.sh — one-shot rebuild of a lost box from the recovery set + offsite
 # restic backups. Automates the docs/09 disaster-recovery drill end to end.
 #
 # Run from a FRESH clone of this server repo (git clone --recurse-submodules).
@@ -7,13 +7,21 @@
 # restic -> deploy -> restore data. Resumable: re-run the same command after a
 # mid-way failure; completed stages skip.
 #
-# Two prompts:
-#   - bundle passphrase (decrypt, stage 1)
-#   - root credential   (bootstrap, stage 3; --ask-pass)
+# Two sources for the recovery set (docs/09, docs/13):
+#   --from-sops   the repo keeps it in SOPS: secrets/recovery.sops (inventory)
+#                 and secrets/backup/ (restic). Needs sops and the owner or
+#                 recovery age key in SOPS_AGE_KEY_FILE. After the box is
+#                 hardened, the secrets are re-keyed to its new server key and
+#                 that commit must reach main before the deploy stage.
+#   <bundle.enc>  the older encrypted tarball from make-recovery-bundle.sh.
+#
+# Prompts: the bundle passphrase (bundle mode, stage 1) and the root credential
+# (bootstrap, stage 3; --ask-pass).
 #
 # Manual bookend: cut DNS over to the new IP (stage 9 prints the instruction).
 #
 # Usage:
+#   scripts/restore.sh [--dry-run] [--force-data] --from-sops <new-ip>
 #   scripts/restore.sh [--dry-run] [--force-data] <recovery-bundle.enc> <new-ip>
 #     --list        list the bundle contents and exit (no decrypt to disk)
 #     --dry-run     print what would run; mutate nothing
@@ -28,7 +36,7 @@ cd "${SERVER_ROOT:-$SCRIPT_DIR/../../..}"
 
 usage() { sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//; $d'; }
 
-DRY_RUN=0 FORCE_DATA=0 LIST_ONLY=0
+DRY_RUN=0 FORCE_DATA=0 LIST_ONLY=0 FROM_SOPS=0
 BUNDLE="" NEW_IP=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -36,8 +44,9 @@ while [[ $# -gt 0 ]]; do
     --dry-run) DRY_RUN=1 ;;
     --force-data) FORCE_DATA=1 ;;
     --list) LIST_ONLY=1 ;;
+    --from-sops) FROM_SOPS=1 ;;
     --*) die "unknown option: $1 (see --help)" ;;
-    *) if [[ -z "$BUNDLE" ]]; then BUNDLE="$1"; elif [[ -z "$NEW_IP" ]]; then NEW_IP="$1"; else die "unexpected arg: $1"; fi ;;
+    *) if [[ "$FROM_SOPS" == "1" && -z "$NEW_IP" ]]; then NEW_IP="$1"; elif [[ -z "$BUNDLE" ]]; then BUNDLE="$1"; elif [[ -z "$NEW_IP" ]]; then NEW_IP="$1"; else die "unexpected arg: $1"; fi ;;
   esac
   shift
 done
@@ -51,8 +60,13 @@ if [[ "$LIST_ONLY" == "1" ]]; then
   exit 0
 fi
 
-[[ -f "$BUNDLE" ]] || die "recovery bundle not found: $BUNDLE"
-[[ "$NEW_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "second arg must be the new box IP (got: '${NEW_IP:-}')"
+if [[ "$FROM_SOPS" == "1" ]]; then
+  [[ -z "$BUNDLE" ]] || die "--from-sops takes only the new box IP, not a bundle"
+  [[ -f secrets/recovery.sops ]] || die "--from-sops needs secrets/recovery.sops in this repo"
+else
+  [[ -f "$BUNDLE" ]] || die "recovery bundle not found: $BUNDLE"
+fi
+[[ "$NEW_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "the last arg must be the new box IP (got: '${NEW_IP:-}')"
 
 on_exit() {
   local rc=$?
@@ -66,15 +80,27 @@ trap on_exit EXIT
 stage "0/10 Preflight"
 require_repo_root
 require_cmd ansible-playbook ansible-galaxy ssh scp git python3 openssl tar
+if [[ "$FROM_SOPS" == "1" ]]; then
+  require_cmd sops base64
+  [[ -f "${SOPS_AGE_KEY_FILE:-$HOME/.config/sops/age/keys.txt}" ]] \
+    || die "no age key at ${SOPS_AGE_KEY_FILE:-$HOME/.config/sops/age/keys.txt}; put the owner or recovery key there (or set SOPS_AGE_KEY_FILE)"
+fi
 ensure_galaxy
-ok "bundle: $BUNDLE  ->  new box: $NEW_IP"
+if [[ "$FROM_SOPS" == "1" ]]; then ok "recovery set: SOPS (secrets/)  ->  new box: $NEW_IP"; else ok "bundle: $BUNDLE  ->  new box: $NEW_IP"; fi
 
-# --- 1/10 decrypt bundle (prompt #1) --------------------------------------
-stage "1/10 Decrypt recovery bundle"
+# --- 1/10 the recovery set (prompt #1 in bundle mode) ----------------------
+stage "1/10 Recover the inventory and restic configuration"
 if [[ -f .restore-decrypted ]]; then
-  skip "bundle already decrypted this rebuild (.restore-decrypted)"
+  skip "recovery set already placed this rebuild (.restore-decrypted)"
 elif [[ "$DRY_RUN" == "1" ]]; then
-  info "[dry-run] would decrypt $BUNDLE (passphrase prompt) and lay secrets over the checkout"
+  if [[ "$FROM_SOPS" == "1" ]]; then
+    info "[dry-run] would decrypt secrets/recovery.sops into ansible/hosts and secrets/backup/*.sops into backup/"
+  else
+    info "[dry-run] would decrypt $BUNDLE (passphrase prompt) and lay secrets over the checkout"
+  fi
+elif [[ "$FROM_SOPS" == "1" ]]; then
+  recovery_set_from_sops
+  : > .restore-decrypted
 else
   info "decrypting — you will be prompted for the bundle passphrase..."
   openssl "${DEC_OPTS[@]}" -in "$BUNDLE" | tar -xzv
@@ -113,8 +139,8 @@ else
   ans scaffold/ansible/site-first-run.yml
 fi
 
-# --- 5/10 /opt/deploy clone + bundle secrets -------------------------------
-stage "5/10 /opt/deploy clone + bundle secrets"
+# --- 5/10 /opt/deploy clone + secrets --------------------------------------
+stage "5/10 /opt/deploy clone + secrets"
 if remote_test 'test -d /opt/deploy/.git'; then
   skip "/opt/deploy already a clone"
 else
@@ -122,7 +148,24 @@ else
   [[ -n "$origin" ]] || die "no git 'origin' remote — cannot clone /opt/deploy"
   run_box "git clone --recurse-submodules $origin /opt/deploy"
 fi
-install_all_secrets_remote
+if [[ "$FROM_SOPS" == "1" ]]; then
+  # The box renders its own env files from secrets/ at deploy, once they are
+  # encrypted to its new server key; that commit has to be on main first.
+  if [[ "$DRY_RUN" == "1" ]]; then
+    info "[dry-run] would re-key secrets/ to the new server key, commit, and wait for that commit on main"
+  else
+    rekey_secrets_to_box
+    git fetch -q origin main
+    if ! git merge-base --is-ancestor HEAD origin/main 2>/dev/null; then
+      warn "the re-key commit is not on main yet. Push it (a PR if main is protected), merge, then re-run this same command; the stages so far skip."
+      warn "  git push origin HEAD:restore/rekey-$NEW_IP"
+      exit 2
+    fi
+    ok "the re-key commit is on main; the deploy stage can render on the box"
+  fi
+else
+  install_all_secrets_remote
+fi
 
 # --- 6/10 backups (restic) -------------------------------------------------
 stage "6/10 Install restic + verify repo reachable"

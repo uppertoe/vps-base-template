@@ -147,10 +147,11 @@ Do not disinfect in place — **rebuild** (docs/09): fresh VPS, provision from
 the repo, restore data from a restic snapshot that predates the incident.
 Before cutover:
 
-1. Rotate **everything in the recovery bundle** (inventory tokens, `.env`
+1. Rotate **everything in the recovery set** (inventory tokens, `.env`
    secrets, backup credentials, SMTP, ntfy tokens) and the auth service's
-   `SESSION_SECRET` (invalidates all sessions). Re-run
-   `make-recovery-bundle.sh` afterwards.
+   `SESSION_SECRET` (invalidates all sessions). On a SOPS server that is an
+   edit to the files under `secrets/`, committed and deployed; on a bundle
+   server re-run `make-recovery-bundle.sh` afterwards.
 2. Rotate SSH keys and GitHub credentials if the vector is unclear.
 3. Repoint the dead-man's switch and ntfy at the new box before DNS cutover.
 4. Close the vector: the fix lands as a PR (scaffold or instance), with the

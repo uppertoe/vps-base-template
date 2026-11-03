@@ -13,11 +13,23 @@ a pet with no vet.
 
 1. **The server repo** — everything reproducible: hardening, compose files,
    routes, this scaffold. Lives on GitHub; nothing to do.
-2. **The recovery bundle** — everything deliberately NOT in git:
+2. **The recovery set** — everything deliberately NOT in git in plain form:
    `ansible/hosts` (inventory + tokens), the server `.env`, `apps/*/.env`,
    and the backup credentials (including the **restic repository password** —
-   without it the offsite backups are undecryptable). Create and refresh it
-   with:
+   without it the offsite backups are undecryptable). A server that keeps its
+   secrets in SOPS ([13-secrets.md](13-secrets.md)) holds all of this in the
+   repository as ciphertext: the env files under `secrets/`, the restic
+   configuration under `secrets/backup/`, and the inventory in
+   `secrets/recovery.sops`, which is encrypted to the owner and recovery keys
+   only. The recovery set is then the repository plus either of those two age
+   keys, and the **recovery key in the password manager** is the one thing to
+   keep safe; there is no bundle to refresh, and the renderer installs the
+   restic configuration into `/etc/restic` at every deploy so the box cannot
+   drift from the repository. `post-provision-smoke-test.sh` confirms the set
+   is in SOPS and that `/etc/restic` matches it.
+
+   A server that has not adopted SOPS packages the same set into an encrypted
+   **recovery bundle** instead. Create and refresh it with:
 
    ```bash
    ssh -t <host> 'cd /opt/deploy && sudo scripts/make-recovery-bundle.sh'
@@ -37,8 +49,8 @@ a pet with no vet.
    `/opt/deploy/.recovery-bundle-last` marker; `post-provision-smoke-test.sh
    --strict` reports the bundle **missing** or **stale** (a captured secret
    newer than the last bundle) so the gap surfaces at the next evidence pass
-   rather than during an outage. Creating the bundle is Step 13 of the
-   provisioning runbook (docs/03), not an afterthought.
+   rather than during an outage. On a SOPS server the script does nothing and
+   says why. Step 13 of the provisioning runbook (docs/03) covers both cases.
 3. **Out-of-band access** — the DNS registrar login, the VPS provider login,
    and the GitHub account. These live in the password manager, not on the box.
 
@@ -62,23 +74,43 @@ which automates steps 1–9 below (everything except creating the VPS and cuttin
 DNS). From a fresh `git clone --recurse-submodules` of the server repo:
 
 ```bash
-scripts/restore.sh <recovery-bundle.enc> <new-ip>
-scripts/restore.sh --dry-run <recovery-bundle.enc> <new-ip>   # preview
+scripts/restore.sh --from-sops <new-ip>                       # SOPS server: repo + owner/recovery key
+scripts/restore.sh --dry-run --from-sops <new-ip>             # preview
+scripts/restore.sh <recovery-bundle.enc> <new-ip>             # bundle server
 scripts/restore.sh --list <recovery-bundle.enc>               # inspect bundle
 ```
 
-Two prompts — the bundle passphrase and the new box's root credential — and
-it's resumable: re-run the same command after any mid-way failure and completed
+The SOPS path needs `sops` and the owner or recovery age key in
+`SOPS_AGE_KEY_FILE` (default `~/.config/sops/age/keys.txt`). It decrypts the
+inventory and the restic configuration on the laptop, provisions the box, then
+re-keys every secrets file to the new server's age key and commits; that
+commit has to reach `main` (a pull request, if `main` is protected) before the
+deploy stage can render on the box, and the script stops and says so, then
+resumes from there when re-run. The bundle path prompts for the passphrase
+instead. Both prompt for the new box's root credential, and both are
+resumable: re-run the same command after any mid-way failure and completed
 stages skip. The annotated manual steps below are the reference, and exactly
 what `restore.sh` executes in order (the "order matters" note is why the
 orchestrator enforces it).
 
 1. Create a fresh VPS at the provider (same Ubuntu LTS). Note the IP. Clear
    the stale SSH host key locally: `ssh-keygen -R <ip>`.
-2. Decrypt the recovery bundle into a fresh clone of the server repo:
+2. Recover the inventory and the restic configuration into a fresh clone of
+   the server repo. On a SOPS server, with the owner or recovery key in
+   `SOPS_AGE_KEY_FILE`:
 
    ```bash
    git clone --recurse-submodules <server-repo> && cd <server-repo>
+   sops -d --input-type dotenv --output-type dotenv secrets/recovery.sops \
+     | sed -n 's/^ANSIBLE_HOSTS_B64=//p' | base64 -d > ansible/hosts
+   for f in secrets/backup/config.env.sops secrets/backup/services/*.sops; do
+     out="${f#secrets/}"; sops -d --input-type dotenv --output-type dotenv "$f" > "${out%.sops}"
+   done
+   ```
+
+   On a bundle server, decrypt the bundle over the clone instead:
+
+   ```bash
    openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -in <bundle> | tar -xzv
    ```
 
@@ -93,15 +125,24 @@ orchestrator enforces it).
 
    ```bash
    ssh <host> 'git clone --recurse-submodules <server-repo> /opt/deploy'
-   # then place the not-in-git secrets from the decrypted bundle:
-   #   .env, apps/*/.env, backup/config.env, backup/services/*.env
-   # (scp to /tmp, then install -o deploy -g deploy -m 600 into /opt/deploy)
    ```
+
+   On a SOPS server the box renders its own env files at deploy, once the
+   secrets are encrypted to its new server key: read
+   `/etc/vps-scaffold/age/key.pub` from the box, put it on the secrets rule
+   in `.sops.yaml` in place of the old server key, run
+   `sops updatekeys -y` on every file under `secrets/` except
+   `recovery.sops`, commit, and get that commit onto `main`. On a bundle
+   server place the not-in-git secrets from the decrypted bundle instead:
+   `.env`, `apps/*/.env`, `backup/config.env`, `backup/services/*.env` (scp
+   to `/tmp`, then `install -o deploy -g deploy -m 600` into `/opt/deploy`).
 
 5. **Configure backups**: `ansible-playbook -i ansible/hosts ansible/backup.yml`
    — this is a separate play, NOT part of site-first-run; it installs restic
-   and `/etc/restic/` from `backup/config.env` + `backup/services/*.env`.
-   Confirm the repo is reachable: `ssh <host> 'sudo restic … snapshots'`.
+   and `/etc/restic/` from the laptop's `backup/config.env` +
+   `backup/services/*.env` (the files decrypted in step 2). From the first
+   deploy onward a SOPS server reinstalls `/etc/restic` from `secrets/backup/`
+   itself. Confirm the repo is reachable: `ssh <host> 'sudo restic … snapshots'`.
 6. Deploy the stack: `ssh <host> ./deploy`.
 7. Restore app data from restic into the named volumes where an app has a
    database (the backup role's restore path; the restore-drill unit exercises
@@ -251,9 +292,11 @@ record takes several slots, newest first.
 
 - **Provider/region loss** — rebuild at another provider; nothing in the
   repo is provider-specific beyond the inventory IP.
-- **Laptop loss** — the bundle is offsite and the passphrase is in the
-  password manager; a new laptop bootstraps from GitHub + bundle.
-- **Compromise** — same rebuild, but rotate every credential in the bundle
+- **Laptop loss** — on a SOPS server the recovery key is in the password
+  manager and the repository is on GitHub, so a new laptop needs only those
+  two; on a bundle server the bundle is offsite and the passphrase is in the
+  password manager.
+- **Compromise** — same rebuild, but rotate every credential in the recovery set
   first and restore data from a snapshot predating the incident. Caveat: the
   backup bucket is **versioned, not Object-Locked** (restic prune needs delete
   rights, so the on-box key can delete/overwrite snapshots). If the box's

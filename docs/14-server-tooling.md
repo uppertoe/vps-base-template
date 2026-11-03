@@ -10,7 +10,7 @@ carries a tooling fix to every server; nothing is patched per repo.
 
 | In the scaffold | In each server repo |
 |---|---|
-| `scripts/server/*.sh`, `*.py`, `lib/` : the checks and operator scripts (image pins, template consistency, compose smoke test, forward-auth test, digest freshness, update pipeline, recovery bundle, provision, restore, the AWS setup helpers) | `scripts/<same name>` : a five-line shim that sets `SERVER_ROOT` and runs the scaffold's copy, so `bash scripts/check-image-pins.sh` works unchanged |
+| `scripts/server/*.sh`, `*.py`, `lib/` : the checks and operator scripts (image pins, template consistency, compose smoke test, forward-auth test, digest freshness, update pipeline, recovery bundle for servers without SOPS, provision, restore, the AWS setup helpers) | `scripts/<same name>` : a five-line shim that sets `SERVER_ROOT` and runs the scaffold's copy, so `bash scripts/check-image-pins.sh` works unchanged |
 | `.github/workflows/server-ci.yml`, `server-container-security.yml`, `server-secret-scan.yml` : reusable workflows holding the jobs | `.github/workflows/ci.yml`, `container-security.yml`, `secret-scan.yml` : the triggers only, each calling the scaffold's workflow at the commit the submodule is at |
 | `server-files/` : the canonical copy of every server-side file above, plus `deploy-ping.yml`, `digest-freshness.yml`, `maintenance-day.yml`, the optional `codeql.yml`, `scorecard.yml` and `update-pipeline-freshness.yml`, `ansible.cfg`, `Caddyfile.local`, `docker-compose.override.yml.example`, and the `.gitignore` block | the same files, byte for byte |
 | `server-files/MANIFEST` : which files, and how closely each must match | `.scaffold-server.yml` : this server's choices |

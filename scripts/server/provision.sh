@@ -197,6 +197,8 @@ fi
 stage "9/10 Recovery bundle"
 if [[ "$SKIP_BUNDLE" == "1" ]]; then
   skip "--skip-bundle"
+elif [[ -f secrets/recovery.sops ]]; then
+  skip "recovery set is held in SOPS (secrets/recovery.sops); no bundle is needed (docs/13-secrets.md)"
 elif [[ "$FORCE_BUNDLE" != "1" ]] && bundle_current; then
   skip "recovery bundle is current"
 elif [[ "$DRY_RUN" == "1" ]]; then

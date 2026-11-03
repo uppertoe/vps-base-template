@@ -250,6 +250,76 @@ class RenderTests(Base):
 
 
 @unittest.skipUnless(shutil.which("sops") and shutil.which("age-keygen"), "real sops/age not installed")
+class ResticInstallTests(Base):
+    """--restic-dir: the rendered backup set is installed for restic and a
+    service the repo no longer carries is removed."""
+
+    def setUp(self):
+        super().setUp()
+        self.restic = os.path.join(self.tmp, "restic")
+
+    def rpath(self, rel):
+        return os.path.join(self.restic, rel)
+
+    def test_without_the_flag_the_restic_directory_is_untouched(self):
+        self.secret("backup/config.env.sops", "RESTIC_PASSWORD=a\n")
+        self.assertEqual(self.run_render(), 0)
+        self.assertFalse(os.path.exists(self.restic))
+
+    def test_the_backup_set_is_installed_mode_600_in_a_700_directory(self):
+        self.secret("backup/config.env.sops", "RESTIC_PASSWORD=a\n")
+        self.secret("backup/services/planka.env.sops", "SERVICE=planka\n")
+        self.assertEqual(self.run_render("--restic-dir", self.restic), 0)
+        with open(self.rpath("config.env")) as f:
+            self.assertEqual(f.read(), "RESTIC_PASSWORD=a\n")
+        with open(self.rpath("services/planka.env")) as f:
+            self.assertEqual(f.read(), "SERVICE=planka\n")
+        for rel in ("config.env", "services/planka.env"):
+            self.assertEqual(stat.S_IMODE(os.stat(self.rpath(rel)).st_mode), 0o600)
+        for rel in ("", "services"):
+            self.assertEqual(stat.S_IMODE(os.stat(self.rpath(rel)).st_mode), 0o700)
+        # The checkout copies are still rendered as before.
+        self.assertEqual(self.read("backup/config.env"), "RESTIC_PASSWORD=a\n")
+
+    def test_a_service_the_repo_no_longer_carries_is_removed(self):
+        os.makedirs(self.rpath("services"))
+        with open(self.rpath("services/retired.env"), "w") as f:
+            f.write("SERVICE=retired\n")
+        with open(self.rpath("services/notes.txt"), "w") as f:
+            f.write("kept: not an env file\n")
+        self.secret("backup/config.env.sops", "RESTIC_PASSWORD=a\n")
+        self.secret("backup/services/planka.env.sops", "SERVICE=planka\n")
+        self.assertEqual(self.run_render("--restic-dir", self.restic), 0)
+        self.assertFalse(os.path.exists(self.rpath("services/retired.env")))
+        self.assertTrue(os.path.exists(self.rpath("services/notes.txt")))
+        self.assertTrue(os.path.exists(self.rpath("services/planka.env")))
+
+    def test_an_unchanged_restic_file_is_not_rewritten(self):
+        self.secret("backup/config.env.sops", "RESTIC_PASSWORD=a\n")
+        self.assertEqual(self.run_render("--restic-dir", self.restic), 0)
+        before = os.stat(self.rpath("config.env")).st_ino
+        self.assertEqual(self.run_render("--restic-dir", self.restic), 0)
+        self.assertEqual(os.stat(self.rpath("config.env")).st_ino, before)
+
+    def test_a_repo_without_a_backup_set_leaves_the_directory_alone(self):
+        os.makedirs(self.rpath("services"))
+        with open(self.rpath("services/hand.env"), "w") as f:
+            f.write("SERVICE=hand-managed\n")
+        self.secret("apps/planka/.env.sops", "A=1\n")
+        self.assertEqual(self.run_render("--restic-dir", self.restic), 0)
+        self.assertTrue(os.path.exists(self.rpath("services/hand.env")))
+
+    def test_services_without_a_config_are_refused_and_nothing_is_installed(self):
+        self.secret("backup/services/planka.env.sops", "SERVICE=planka\n")
+        self.assertEqual(self.run_render("--restic-dir", self.restic), 1)
+        self.assertFalse(os.path.exists(self.rpath("services/planka.env")))
+
+    def test_check_mode_installs_nothing(self):
+        self.secret("backup/config.env.sops", "RESTIC_PASSWORD=a\n")
+        self.assertEqual(self.run_render("--check", "--restic-dir", self.restic), 0)
+        self.assertFalse(os.path.exists(self.restic))
+
+
 class RealSopsTests(Base):
     def test_round_trip_with_real_encryption(self):
         os.unlink(self.key)  # replace the stand-in key with a real one

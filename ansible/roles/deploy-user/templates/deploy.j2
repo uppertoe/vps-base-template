@@ -18,9 +18,10 @@ old_head="$(git rev-parse HEAD)"
 git pull --recurse-submodules
 new_head="$(git rev-parse HEAD)"
 # Secrets (docs/13-secrets.md): the render step runs as root, because only root
-# reads the server's age key; in default mode the deploy user may sudo.
+# reads the server's age key; in default mode the deploy user may sudo. A backup
+# set under secrets/backup/ is installed into /etc/restic by the same step.
 if [[ -d secrets ]]; then
-  sudo -n /usr/local/sbin/vps-secrets-render --repo /opt/deploy
+  sudo -n /usr/local/sbin/vps-secrets-render --repo /opt/deploy --restic-dir /etc/restic
 fi
 docker compose pull --policy always
 

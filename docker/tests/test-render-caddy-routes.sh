@@ -393,6 +393,7 @@ members_fixture() {
   } > "$root/docker-compose.yml"
   for a in auth cases rota; do
     printf 'services:\n  %s:\n    image: example/%s\n' "$a" "$a" > "$root/apps/$a/docker-compose.yml"
+    # shellcheck disable=SC2016 # {$DOMAIN} is Caddy's placeholder, written literally
     printf '# scaffold-lint: public -- a test fixture\n%s.{$DOMAIN} {\n\treverse_proxy %s:8080 {\n\t\timport strip_public\n\t}\n}\n' "$a" "$a" > "$root/apps/$a/$a.caddy"
   done
   sed -i.bak '1i\

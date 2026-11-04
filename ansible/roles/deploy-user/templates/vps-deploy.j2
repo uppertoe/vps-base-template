@@ -525,6 +525,40 @@ for name, svc in sorted(cfg.get("services", {}).items()):
 ')
 fi
 
+# A network whose definition changed (internal, driver, IPv6) is removed and
+# created again by compose, which then only reconnects the containers already
+# on it, and a reconnected container loses its service-name alias: on MCH on
+# 2026-11-04, planka-db answered only to its container name after its network
+# became internal, and Planka could not find its database. Find such networks
+# now, while the old ones still exist, and recreate every service on them in
+# a compose up of their own, before the main one.
+netrecreate=()
+while IFS= read -r svc; do
+  [[ -n "$svc" ]] && netrecreate+=("$svc")
+done < <(docker compose config --format json 2>/dev/null | python3 -c '
+import json, subprocess, sys
+cfg = json.load(sys.stdin)
+changed = set()
+for key, net in (cfg.get("networks") or {}).items():
+    net = net or {}
+    if net.get("external"):
+        continue
+    name = net.get("name") or key
+    r = subprocess.run(["docker", "network", "inspect", name, "--format",
+                        "{% raw %}{{json .}}{% endraw %}"], capture_output=True, text=True)
+    if r.returncode != 0:
+        continue  # not created yet: compose creates it and attaches with aliases
+    live = json.loads(r.stdout)
+    want = (bool(net.get("internal", False)), net.get("driver") or "bridge",
+            bool(net.get("enable_ipv6", False)))
+    have = (bool(live.get("Internal")), live.get("Driver") or "bridge",
+            bool(live.get("EnableIPv6")))
+    if want != have:
+        changed.add(key)
+for svc_name, svc in sorted((cfg.get("services") or {}).items()):
+    if changed & set((svc.get("networks") or {}).keys()):
+        print(svc_name)
+')
 # One retry covers a transient engine hiccup (a container that failed to start
 # right after a dockerd/containerd restart). If it still fails, say exactly
 # which containers are not Up before exiting non-zero — `docker ps` without -a
@@ -542,6 +576,10 @@ compose_up() {
     fi
   fi
 }
+if [[ -n "${netrecreate[*]:-}" ]]; then
+  echo "vps-deploy: recreating services on networks whose definition changed: ${netrecreate[*]}"
+  compose_up --force-recreate "${netrecreate[@]}"
+fi
 {% if deploy_release_tree | default(false) | bool %}
 # The first deploy from a release replaces a checkout: recreate everything once,
 # so no container keeps a mount opened in the old checkout.

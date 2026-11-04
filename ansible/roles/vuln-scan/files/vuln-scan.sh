@@ -26,7 +26,12 @@
 #
 # Report-only by design: findings never block anything. The script exits
 # non-zero only when the scan itself could not run (Docker down, Trivy pull
-# failed), which fires the unit's OnFailure=notify@ hook.
+# failed) or when any image could not be scanned, which fires the unit's
+# OnFailure=notify@ hook. A failed image used to read as zero findings and
+# its first-seen dates were dropped, so an intermittent failure could keep
+# restarting the grace clock (2026-11-03 review, A-M7). Now the summary
+# counts scanned and failed images, and the state keys of a failed image are
+# carried forward unchanged.
 #
 # Configuration comes from the systemd unit (Environment=) or the shell:
 #   TRIVY_IMAGE, SEVERITY, CACHE_DIR, STATE_DIR, RETENTION_DAYS, GRACE_DAYS
@@ -73,6 +78,12 @@ docker pull -q "$TRIVY_IMAGE" >/dev/null
 # push the box into swap, and give it a low CPU share so it yields to the app
 # tier under contention. 1 GiB is generous for the handful of small images here.
 TRIVY_LIMITS=(--memory=1g --memory-swap=1g --cpu-shares=256)
+# Per-image outcome: a failed image is named in failed.txt (its ref without
+# the digest), its partial reports are removed so the aggregator cannot read
+# an empty file as a clean one, and the run as a whole fails at the end.
+scanned=0
+failed=0
+: > "$OUT_DIR/failed.txt"
 for pair in "${image_pairs[@]}"; do
   image_id="${pair%% *}"
   ref="${pair#* }"
@@ -80,24 +91,37 @@ for pair in "${image_pairs[@]}"; do
   # digest bumps, so day-to-day reports for one app keep one filename.
   safe="$(printf '%s' "${ref%%@*}" | tr '/:@' '___')"
   log "Scanning ${ref%%@*} (${image_id:7:12})"
+  image_ok=1
   for fmt in table json; do
     ext="txt"; [[ "$fmt" == "json" ]] && ext="json"
-    docker run --rm "${TRIVY_LIMITS[@]}" \
+    if ! docker run --rm "${TRIVY_LIMITS[@]}" \
       -v "$CACHE_DIR:/root/.cache/trivy" \
       -v /var/run/docker.sock:/var/run/docker.sock \
       "$TRIVY_IMAGE" image --quiet --no-progress --scanners vuln \
       --severity "$SEVERITY" --format "$fmt" --output /dev/stdout "$image_id" \
-      > "$OUT_DIR/trivy-$safe.$ext" 2>/dev/null || true
+      > "$OUT_DIR/trivy-$safe.$ext" 2>"$OUT_DIR/trivy-$safe.err"; then
+      image_ok=0
+    fi
   done
+  if (( image_ok )); then
+    scanned=$((scanned + 1))
+    rm -f "$OUT_DIR/trivy-$safe.err"
+  else
+    failed=$((failed + 1))
+    log "FAILED to scan ${ref%%@*}: $(tail -n 3 "$OUT_DIR/trivy-$safe.err" 2>/dev/null | tr '\n' ' ')"
+    rm -f "$OUT_DIR/trivy-$safe.json" "$OUT_DIR/trivy-$safe.txt"
+    printf '%s\n' "${ref%%@*}" >> "$OUT_DIR/failed.txt"
+  fi
 done
 
 # Aggregate the json: count HIGH/CRITICAL, attribute fixable CRITICALs to
 # their image, and age each against the first-seen state file.
-summary="$(python3 - "$OUT_DIR" "$FIRST_SEEN" "$GRACE_DAYS" "$DATE_UTC" <<'PY'
+summary="$(python3 - "$OUT_DIR" "$FIRST_SEEN" "$GRACE_DAYS" "$DATE_UTC" "$scanned" "$failed" <<'PY'
 import datetime, glob, json, os, sys
 
-out, state_path, grace_days, today_s = (
-    sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4])
+out, state_path, grace_days, today_s, scanned, failed = (
+    sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4],
+    int(sys.argv[5]), int(sys.argv[6]))
 today = datetime.date.fromisoformat(today_s)
 
 try:
@@ -105,6 +129,23 @@ try:
         state = json.load(fh)
 except (OSError, ValueError):
     state = {}
+
+# The images that could not be scanned this run, in every form a state key
+# may name them: the configured ref without its digest, that ref without its
+# tag (what Trivy's RepoDigests reduce to), and the report file name.
+failed_refs = []
+try:
+    with open(os.path.join(out, "failed.txt")) as fh:
+        failed_refs = [line.strip() for line in fh if line.strip()]
+except OSError:
+    pass
+failed_names = set()
+for ref in failed_refs:
+    failed_names.add(ref)
+    last = ref.rsplit("/", 1)[-1]
+    if ":" in last:
+        failed_names.add(ref[: len(ref) - len(last)] + last.split(":", 1)[0])
+    failed_names.add(ref.replace("/", "_").replace(":", "_").replace("@", "_"))
 
 high = crit = 0
 fixable = []  # (key, image, description)
@@ -133,6 +174,8 @@ for path in sorted(glob.glob(os.path.join(out, "trivy-*.json"))):
 
 # Age each finding; keep only findings seen this run in the state so anything
 # the pipeline fixed drops out (a re-appearing finding restarts its clock).
+# A finding on an image that could not be scanned this run was neither seen
+# nor fixed: its first-seen date is carried forward as it stands.
 new_state, lines, overdue = {}, [], []
 for key, image, desc in fixable:
     first = state.get(key, today_s)
@@ -142,6 +185,14 @@ for key, image, desc in fixable:
     lines.append(line)
     if age >= grace_days:
         overdue.append(line)
+carried = 0
+for key, first in state.items():
+    if key in new_state:
+        continue
+    image = key.rsplit("|", 1)[-1]
+    if image in failed_names:
+        new_state[key] = first
+        carried += 1
 
 tmp = state_path + ".tmp"
 with open(tmp, "w") as fh:
@@ -149,11 +200,16 @@ with open(tmp, "w") as fh:
 os.replace(tmp, state_path)
 
 print(f"TOTAL HIGH={high} CRITICAL={crit} "
-      f"CRITICAL_FIXABLE={len(fixable)} OVERDUE={len(overdue)}")
+      f"CRITICAL_FIXABLE={len(fixable)} OVERDUE={len(overdue)} "
+      f"SCANNED={scanned} FAILED={failed}")
 for line in lines[:25]:
     print(f"  FIXABLE: {line}")
 for line in overdue[:25]:
     print(f"  OVERDUE: {line}")
+for ref in failed_refs:
+    print(f"  FAILED: {ref} could not be scanned; its findings are not counted above")
+if carried:
+    print(f"  CARRIED: {carried} first-seen date(s) kept for the images that failed")
 PY
 )"
 
@@ -173,4 +229,8 @@ fi
 # Prune old reports so evidence accumulates without filling the disk.
 find "$STATE_DIR" -mindepth 1 -maxdepth 1 -type d -mtime "+$RETENTION_DAYS" -exec rm -rf {} + 2>/dev/null || true
 
-log "Scan complete — reports in $OUT_DIR"
+if (( failed > 0 )); then
+  log "Scan incomplete — $failed of $((scanned + failed)) image(s) could not be scanned; see $OUT_DIR/failed.txt and the trivy-*.err files"
+  exit 1
+fi
+log "Scan complete — $scanned image(s) scanned, reports in $OUT_DIR"

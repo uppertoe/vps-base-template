@@ -10,9 +10,20 @@ a JSON + Markdown report.
 
 Usage:
   check-compose-hardening.py [--json OUT.json] [--md OUT.md] [--exceptions FILE]
+  check-compose-hardening.py --compose-config CONFIG.json --compose-project NAME ...
+
+With --compose-config the same controls run against the output of
+`docker compose config --format json` before anything is started: each
+service is turned into the shape `docker inspect` would report for it, and
+the same evaluate() functions decide. CI runs this over every app's compose
+file so a service that lacks the section 5 block fails the pull request
+rather than the first audit after deploy. The two modes share one control
+list, so they cannot disagree about what "hardened" means.
 
 Exit code: 0 if every (non-excepted) control passes, 1 otherwise — so the audit
-playbook fails loudly on a regression.
+playbook fails loudly on a regression. Finding nothing to audit is also a
+failure: a filter that matches no container, or a config with no services,
+means the audit did not look at the stack it was asked about.
 """
 import argparse
 import os
@@ -371,11 +382,113 @@ def network_controls(inspected):
     return out
 
 
+def _mem_bytes(value):
+    """A compose memory value as bytes. `docker compose config` normalises
+    mem_limit and deploy.resources.limits.memory to a byte count in a string;
+    a raw file may still say 256m or 1g."""
+    if value in (None, ""):
+        return 0
+    if isinstance(value, (int, float)):
+        return int(value)
+    m = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*([kmg]?)(?:i?b)?\s*", str(value).lower())
+    if not m:
+        return 0
+    mult = {"": 1, "k": 1024, "m": 1024 ** 2, "g": 1024 ** 3}[m.group(2)]
+    return int(float(m.group(1)) * mult)
+
+
+def inspected_from_compose(cfg, project):
+    """Synthesise `docker inspect` records from `docker compose config
+    --format json`, keyed by the container name Compose would give each
+    service (its container_name, else <project>-<service>-1, which is how the
+    exceptions register names them). Only the fields the controls read are
+    filled in. A service with no `user:` carries an empty User, as a running
+    container does when the image's USER applies; evaluate() then asks
+    `docker image inspect`, which answers only for an image already present,
+    so a compose file that relies on the image USER passes the static check
+    only where CI has pulled that image."""
+    out = {}
+    for svc_name, svc in sorted((cfg.get("services") or {}).items()):
+        svc = svc or {}
+        name = svc.get("container_name") or f"{project}-{svc_name}-1"
+        labels = svc.get("labels") or {}
+        if isinstance(labels, list):
+            labels = dict(item.split("=", 1) if "=" in item else (item, "") for item in labels)
+        labels = dict(labels)
+        labels["com.docker.compose.service"] = svc_name
+        labels["com.docker.compose.project"] = project
+        limits = ((svc.get("deploy") or {}).get("resources") or {}).get("limits") or {}
+        mem = _mem_bytes(svc.get("mem_limit")) or _mem_bytes(limits.get("memory"))
+        pids = svc.get("pids_limit") or limits.get("pids") or 0
+        hc = svc.get("healthcheck") or {}
+        test = [] if hc.get("disable") else (hc.get("test") or [])
+        if isinstance(test, str):
+            test = ["CMD-SHELL", test]
+        mounts = []
+        for v in svc.get("volumes") or []:
+            if isinstance(v, str):
+                src = v.split(":", 1)[0] if ":" in v else ""
+                mounts.append({"Type": "bind" if src.startswith(("/", ".", "~")) else "volume", "Source": src})
+            elif isinstance(v, dict):
+                mounts.append({"Type": v.get("type") or "volume", "Source": v.get("source") or ""})
+        ports = {}
+        for p in svc.get("ports") or []:
+            if isinstance(p, dict):
+                key = f"{p.get('target')}/{p.get('protocol') or 'tcp'}"
+                ports[key] = [{"HostPort": str(p.get("published") or "")}]
+            else:
+                ports[str(p)] = [{"HostPort": str(p)}]
+        net_mode = svc.get("network_mode") or "bridge"
+        networks = svc.get("networks")
+        if isinstance(networks, list):
+            networks = {n: {} for n in networks}
+        if not networks and net_mode == "bridge":
+            # Compose puts a service that names no network on the project's
+            # default network, which `config` leaves implicit.
+            networks = {"default": {}}
+        out[name] = {
+            "Name": "/" + name,
+            "Config": {
+                "Image": str(svc.get("image") or ""),
+                "User": str(svc.get("user") or ""),
+                "Labels": labels,
+                "Healthcheck": {"Test": [str(t) for t in test]},
+            },
+            "HostConfig": {
+                "Privileged": bool(svc.get("privileged")),
+                "CapDrop": [str(c) for c in (svc.get("cap_drop") or [])],
+                "CapAdd": [str(c) for c in (svc.get("cap_add") or [])],
+                "SecurityOpt": [str(s) for s in (svc.get("security_opt") or [])],
+                "ReadonlyRootfs": bool(svc.get("read_only")),
+                "Memory": mem,
+                "PidsLimit": int(pids or 0),
+                "NetworkMode": net_mode,
+                "CgroupParent": str(svc.get("cgroup_parent") or ""),
+                "PortBindings": ports,
+                "Binds": [],
+                "UsernsMode": str(svc.get("userns_mode") or ""),
+                "PidMode": str(svc.get("pid") or ""),
+                "IpcMode": str(svc.get("ipc") or ""),
+                "UTSMode": str(svc.get("uts") or ""),
+                "CgroupnsMode": str(svc.get("cgroup") or ""),
+            },
+            "Mounts": mounts,
+            "NetworkSettings": {"Networks": {n: {} for n in (networks or {})}},
+            "State": {"Pid": 0},
+        }
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--json")
     ap.add_argument("--md")
     ap.add_argument("--compose-project", help="Only audit containers from this Compose project")
+    ap.add_argument(
+        "--compose-config",
+        help="Audit the services in this `docker compose config --format json` output "
+        "instead of the running containers (names them <project>-<service>-1)",
+    )
     ap.add_argument(
         "--exceptions",
         help="JSON: {container_name: [control_key, ...]} to accept as documented exceptions",
@@ -395,17 +508,28 @@ def main():
         with open(args.exceptions) as fh:
             exceptions = json.load(fh)
 
-    ps_args = ["ps", "-a", "--format", "{{.Names}}"]
-    if args.compose_project:
-        ps_args[2:2] = ["--filter", f"label=com.docker.compose.project={args.compose_project}"]
-    names = [n for n in docker(ps_args).splitlines() if n]
+    if args.compose_config:
+        if not args.compose_project:
+            ap.error("--compose-config needs --compose-project to name the containers")
+        with open(args.compose_config) as fh:
+            inspected = inspected_from_compose(json.load(fh), args.compose_project)
+        names = list(inspected)
+        if not names:
+            print(f"[FAIL] {args.compose_config} declares no services; nothing was audited")
+            return 1
+        print(f"[INFO] auditing {len(names)} services declared in {args.compose_config}")
+    else:
+        ps_args = ["ps", "-a", "--format", "{{.Names}}"]
+        if args.compose_project:
+            ps_args[2:2] = ["--filter", f"label=com.docker.compose.project={args.compose_project}"]
+        names = [n for n in docker(ps_args).splitlines() if n]
+        if not names:
+            where = f"in compose project {args.compose_project}" if args.compose_project else "on this host"
+            print(f"[FAIL] no containers {where}; nothing was audited")
+            return 1
+        inspected = {name: json.loads(docker(["inspect", name]))[0] for name in names}
     report = {"containers": {}, "summary": {"pass": 0, "warn": 0, "excepted": 0}}
     failed = False
-
-    if not names:
-        print("[INFO] no running containers to audit")
-
-    inspected = {name: json.loads(docker(["inspect", name]))[0] for name in names}
     proxy_networks = set()
     for c in inspected.values():
         if compose_service(c) == "caddy":
@@ -417,6 +541,9 @@ def main():
     for name in names:
         c = inspected[name]
         results = evaluate(c)
+        if args.compose_config and not (c.get("Config") or {}).get("User") and not results["non_root"]:
+            print(f"[NOTE] {name}: its compose file sets no user: and the image is not present "
+                  "locally, so the image USER cannot be read; declare user: in the compose file")
         controls = list(INIT_CONTROLS if is_init_container(c) else CONTROLS)
         if not is_init_container(c):
             results.update(evaluate_tier(c))

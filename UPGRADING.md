@@ -107,6 +107,53 @@ takes its "newer than" mark at the start of a run; `vps-deploy` reads
 
 ---
 
+## 2026-11-04 — CI checks what the docs say it checks
+
+From the 2026-11-03 review, batch 3 (docs/14 "The check", docs/08 "Container
+CIS Docker §5 controls").
+
+**The workflow callers pass one named secret instead of `secrets: inherit`.**
+`check-server-files.sh --fix` rewrites `ci.yml` and `container-security.yml`
+as it does on every bump; the callers now pass `GHCR_READ_TOKEN` alone, and
+the shared workflows run with the repository's own token where it is not set.
+
+**The compose smoke now checks the CIS Docker section 5 block as declared.**
+Every service in the resolved compose config is held to the same controls
+and the same `ansible/audit-exceptions.yml` register as `audit-compose.yml`
+applies on the host, so a pull request fails where the host audit would have.
+A server whose host audit is clean passes unchanged; one with an open finding
+sees it in CI from this bump and either fixes the compose file or records
+the exception. A service without `user:` fails the non-root control unless
+CI has pulled its image; declare `user:` explicitly.
+
+**The route lint treats the site block as the outermost frame.** A
+`reverse_proxy`, `file_server` or `respond` written at the top level of a
+site whose guard sits only inside a `handle` now needs a guard or an
+open-path marker beside it, as a `handle` would. The orchestrator's
+`hooks.{$DOMAIN}` site ends in a bare `respond 404` after its guarded and
+marked handles; add the marker on the line above it, for example
+`# scaffold-lint: open-path -- /*: every other path is answered 404`, then
+re-render the bundle and commit `.generated/`.
+
+**The drift check refuses three things `--fix` cannot write.** A
+`.gitignore` line below the canonical block that un-ignores a secret path, a
+workflow the manifest does not name that runs on `pull_request_target`, and a
+`.scaffold-server.yml` value the shared CI cannot act on (anything but
+`true`/`false`, a `gateway_ref` that is not a 40-character commit, an unknown
+key). Each is reported with the line; correct it by hand.
+
+**Operator actions:**
+
+- Bump the pointer, run `bash scaffold/scripts/server/check-server-files.sh --fix`
+  and `bash scaffold/docker/render-caddy-routes.sh`, add the open-path marker
+  above any top-level `respond 404` the render reports, and commit.
+- No host play is needed for this entry. `vuln-scan.sh` is reinstalled by the
+  next `site-quick`; from then on a run in which any image could not be
+  scanned exits non-zero (the unit's failure hook notifies) instead of
+  reading as clean, and `summary.txt` carries `SCANNED=` and `FAILED=` counts.
+
+---
+
 ## 2026-11-04 — Whole files in SOPS: the renderer carries a key or a user list, not only env files
 
 A secrets file whose name does not end in `.env.sops` is now a whole file

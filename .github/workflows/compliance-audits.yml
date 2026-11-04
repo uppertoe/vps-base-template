@@ -61,11 +61,21 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # The scan must cover the image the servers run, which is the digest
+      # pinned in caddy.base.yml, whatever tag sits in front of it. A grep
+      # that found nothing used to fall back to a floating tag, so the report
+      # described an image nobody deployed (2026-11-03 review, B-M5); now the
+      # step fails instead.
       - name: Resolve pinned caddy image reference
         id: img
         run: |
-          ref="$(grep -oE 'caddy:2-alpine@sha256:[a-f0-9]+' docker/caddy.base.yml | head -1)"
-          echo "ref=${ref:-caddy:2-alpine}" >> "$GITHUB_OUTPUT"
+          ref="$(grep -oE 'image: *caddy:[^ ]+@sha256:[0-9a-f]{64}' docker/caddy.base.yml | head -1 | sed 's/^image: *//')"
+          if [ -z "$ref" ]; then
+            echo "::error::docker/caddy.base.yml carries no digest-pinned caddy image; refusing to scan a floating tag"
+            exit 1
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "Scanning $ref"
 
       - name: Prepare reports directory
         run: mkdir -p reports/container-security

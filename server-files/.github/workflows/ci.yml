@@ -26,4 +26,8 @@ permissions:
 jobs:
   ci:
     uses: uppertoe/vps-base-template/.github/workflows/server-ci.yml@SCAFFOLD_COMMIT
-    secrets: inherit
+    # Only the secret the shared workflow declares is passed; the repository's
+    # other secrets (deploy tokens, cloud keys) stay out of jobs that run
+    # images from the pull request.
+    secrets:
+      GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}

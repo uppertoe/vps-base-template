@@ -54,8 +54,10 @@ services:
       - "vps-scaffold.audit=init-volume-owner"
 
   caddy:
-    # Pinned by digest (multi-arch index). Renovate bumps the digest; the :2-alpine
-    # tag is kept for human readability. See scaffold/docs/08-security-model.md.
+    # Pinned by digest (multi-arch index). Renovate bumps the version and the
+    # digest together; the tag is kept for human readability, and the
+    # scaffold's CVE scan reads this exact reference. See
+    # scaffold/docs/08-security-model.md.
     image: caddy:2.11.7-alpine@sha256:e70b164da81ef698b3ad19af799ea6086ce6d9e48ed4079eb9fe26f6fbf14ee5
     restart: unless-stopped
     depends_on:

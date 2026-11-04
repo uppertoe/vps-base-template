@@ -21,9 +21,11 @@
 #    an undeclared open handle fails; the marker inside the handle, above it
 #    and above its named matcher passes and lands in the table; a nested
 #    route under a marked handle passes; a guard in a nested route covers the
-#    enclosing handle; a guard in a sibling handle covers nothing; a site
-#    with no guard is not checked; handle_errors is not a door; a malformed
-#    marker and a marker outside a site fail.
+#    enclosing handle; a guard in a sibling handle covers nothing; a
+#    reverse_proxy or file_server at the site's top level beside a
+#    handle-scoped guard fails unless marked, and a top-level route guard
+#    covers it; a site with no guard is not checked; handle_errors is not a
+#    door; a malformed marker and a marker outside a site fail.
 #
 # Go is needed for part 1 (it is on every GitHub-hosted runner); the test
 # fails plainly if it is missing rather than pretending to pass.
@@ -304,6 +306,64 @@ app.{$DOMAIN} {
 			}
 		}
 	}
+}
+EOF
+
+# The site block is the outermost frame: a reverse_proxy at the site's top
+# level beside a guard that sits only inside a handle answers every path the
+# handle does not match, and is refused like an open handle would be.
+render_case top-level-proxy-beside-handle-guard fail "$open_err" <<'EOF'
+app.{$DOMAIN} {
+	handle /admin/* {
+		import protected_admin app:8080
+	}
+	reverse_proxy app:8080 {
+		import strip_auth_cookie
+	}
+}
+EOF
+
+# The same shape with a marker above the top-level proxy passes and the
+# table lists the open paths.
+render_case top-level-proxy-marked pass <<'EOF'
+app.{$DOMAIN} {
+	handle /admin/* {
+		import protected_admin app:8080
+	}
+	# scaffold-lint: open-path -- /*: the public pages; only /admin/* is gated
+	reverse_proxy app:8080 {
+		import strip_public
+	}
+}
+EOF
+expect_row top-level-proxy-marked $'app.{$DOMAIN}\tpublic\t/*: the public pages; only /admin/* is gated'
+expect_row top-level-proxy-marked $'app.{$DOMAIN}\tgroups\tadmin'
+
+# A top-level file_server is refused the same way.
+render_case top-level-file-server-beside-handle-guard fail "$open_err" <<'EOF'
+app.{$DOMAIN} {
+	root * /srv/www/app
+	handle /staff/* {
+		import protected_domains "example.org" app:8080
+	}
+	file_server
+}
+EOF
+
+# A route block at the top level guards the top level, as it guards an
+# enclosing handle: the file_server after it is covered.
+render_case top-level-route-guard-covers-top-level pass <<'EOF'
+app.{$DOMAIN} {
+	root * /srv/www/app
+	route {
+		import strip_client_identity
+		forward_auth auth:8080 {
+			uri /verify
+			copy_headers Remote-User Remote-Email Remote-Groups
+			header_up X-Auth-Policy "domains=example.org"
+		}
+	}
+	file_server
 }
 EOF
 

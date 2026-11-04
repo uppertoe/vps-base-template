@@ -175,7 +175,9 @@ Behind `deploy_release_tree: true` in the inventory, then a site play:
 end to end in a throwaway Ubuntu container against the public
 server-instance-template: fetch, export with the scaffold, ownership and
 modes, the first switch from a checkout, previous, prune, switching back and
-the symlink rule. It needs network access, so it is run by hand:
+the symlink rule. The scaffold's CI runs it on every pull request (the
+"Deploy Wrapper" job, beside `test_vps_deploy.sh`); it needs network access
+and can be run by hand the same way:
 
 ```bash
 cd ansible/roles/deploy-user/files

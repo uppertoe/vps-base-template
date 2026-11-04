@@ -78,7 +78,10 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          # GHCR_READ_TOKEN (a read:packages token, as the Renovate runner
+          # holds) reads private first-party packages, which this repository's
+          # own token can read only when each package grants it access.
+          password: ${{ secrets.GHCR_READ_TOKEN || secrets.GITHUB_TOKEN }}
 
       # Surface the git commit each first-party image was built from; fail on
       # a digest built from a commit that is not in its source repo.

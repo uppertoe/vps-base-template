@@ -44,11 +44,14 @@ if [[ -f docker-compose.yml ]]; then
         if [[ -f "$inc" ]]; then add_file "$inc"; else echo "NOTE: scaffold submodule not checked out — skipping caddy.base.yml"; fi ;;
       .generated/caddy/networks.yml)
         ;;  # generated network wiring, declares no images
-      apps/*/docker-compose.yml)
+      apps/*/docker-compose.yml|apps/*/*.yml|apps/*/*.yaml)
+        # An app may also include a compose fragment of its own (markbot's
+        # apps/pstonn/caddy-env.yml hands Caddy one environment variable).
+        # It is checked for images like any other compose file.
         if [[ -f "$inc" ]]; then add_file "$inc"; else echo "ERROR: docker-compose.yml includes $inc but it does not exist" >&2; fail=1; fi ;;
       *)
         echo "ERROR: docker-compose.yml includes '$inc', which is outside the checked set" >&2
-        echo "       (apps/<name>/docker-compose.yml, scaffold/docker/caddy.base.yml, .generated/caddy/networks.yml)" >&2
+        echo "       (apps/<name>/*.yml, scaffold/docker/caddy.base.yml, .generated/caddy/networks.yml)" >&2
         fail=1 ;;
     esac
   done < <(awk '

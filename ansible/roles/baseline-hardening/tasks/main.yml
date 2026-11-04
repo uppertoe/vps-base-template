@@ -556,6 +556,8 @@
       [Service]
       ExecStartPre=+/usr/local/bin/aide-wait-for-rebaseline
       ExecStartPost=/usr/local/bin/aide-fail-on-change
+      MemoryHigh={{ baseline_aide_memory_high }}
+      CPUQuota={{ baseline_aide_cpu_quota }}
   notify: Reload systemd daemon
   when:
     - baseline_enable_aide | bool
@@ -585,8 +587,13 @@
   ansible.builtin.blockinfile:
     path: /etc/aide/aide.conf
     marker: "# {mark} ANSIBLE MANAGED BLOCK: vps-scaffold AIDE exclusions"
+    # Under the release tree, each deploy writes a new root-owned release from
+    # a signature-checked commit, and vps-release verify checks the live one
+    # against its manifest daily. AIDE leaves those paths alone, so a deploy
+    # no longer forces a whole-host re-baseline (about twelve a day on RCH,
+    # 2026-11-04 review). The checkout mode keeps watching /opt/deploy.
     block: |
-      {% for p in baseline_aide_exclude_paths %}
+      {% for p in baseline_aide_exclude_paths + (['/opt/deploy-releases', '/opt/deploy'] if deploy_release_tree | default(false) | bool else []) %}
       !{{ p }}
       {% endfor %}
   register: baseline_aide_exclusions
@@ -744,6 +751,11 @@
         ExecStart=/usr/local/bin/aide-rebaseline
         Nice=15
         IOSchedulingClass=idle
+        # A whole-host scan peaked at 330-690 MB on a 2 GB box. MemoryHigh
+        # makes it reclaim its own page cache rather than push others into
+        # swap; CPUQuota leaves the vCPU to the apps.
+        MemoryHigh={{ baseline_aide_memory_high }}
+        CPUQuota={{ baseline_aide_cpu_quota }}
     - name: aide-rebaseline-after-apt.timer
       content: |
         # Managed by Ansible (baseline-hardening role) -- started/reset by the

@@ -247,6 +247,49 @@
       loop:
         - vps-release
 
+    # The release tree is checked against the manifest written when each
+    # release was prepared, daily, in place of AIDE re-hashing every new
+    # release (2026-11-04 review). A difference fails the unit and alerts.
+    - name: Install the daily release verification
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/{{ item.name }}"
+        owner: root
+        group: root
+        mode: "0644"
+        content: "{{ item.content }}"
+      loop:
+        - name: vps-release-verify.service
+          content: |
+            # Managed by Ansible (deploy-user role)
+            [Unit]
+            Description=Check the live release against its manifest
+            OnFailure=notify@%n.service
+            [Service]
+            Type=oneshot
+            ExecStart=/usr/local/sbin/vps-release verify
+            Nice=15
+            IOSchedulingClass=idle
+        - name: vps-release-verify.timer
+          content: |
+            # Managed by Ansible (deploy-user role)
+            [Unit]
+            Description=Daily check of the live release against its manifest
+            [Timer]
+            OnCalendar=*-*-* 05:40:00
+            RandomizedDelaySec=20min
+            Persistent=true
+            [Install]
+            WantedBy=timers.target
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Enable the daily release verification
+      ansible.builtin.systemd:
+        name: vps-release-verify.timer
+        enabled: true
+        state: started
+        daemon_reload: true
+
     - name: Pin GitHub's SSH host key for root's fetch
       ansible.builtin.copy:
         src: github_known_hosts

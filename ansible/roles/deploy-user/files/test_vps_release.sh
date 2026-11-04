@@ -94,6 +94,26 @@ vps-release switch "$rel"
 [[ "$(vps-release current)" == "$tip" ]] || fail "current after the switch"
 ok "the first switch keeps the legacy checkout and links /opt/deploy"
 
+# The manifest: root-only, and verify finds a change, an addition and a
+# removal in the live release, then passes once the tree is restored.
+[[ "$(stat -c '%a %U' "$rel/.manifest")" == "600 root" ]] || fail "the manifest is not root-only"
+vps-release verify >/dev/null || fail "verify failed on an untouched release"
+f="$(cd "$rel" && find . -type f -name '*.md' ! -path './.*' | head -1)"
+cp "$rel/$f" /tmp/orig
+echo tampered >>"$rel/$f"
+out="$(vps-release verify 2>&1)" && fail "verify passed a changed file"
+grep -q "changed: $f" <<<"$out" || fail "verify did not name the changed file: $out"
+cp /tmp/orig "$rel/$f"
+touch "$rel/planted"
+out="$(vps-release verify 2>&1)" && fail "verify passed an added file"
+grep -q 'added: ./planted' <<<"$out" || fail "verify did not name the added file: $out"
+rm "$rel/planted"
+chmod 0755 "$rel/$f"
+vps-release verify >/dev/null 2>&1 && fail "verify passed a changed mode"
+chmod 0644 "$rel/$f"
+vps-release verify >/dev/null || fail "verify failed after the tree was restored"
+ok "the manifest is root-only, and verify finds changed, added and re-moded files"
+
 # Three more releases, deployed in order A B C after the tip, by switching.
 mk() { local d="/opt/deploy-releases/$1"; mkdir -p "$d"; printf 'commit=%s\nscaffold=none\nexported=2020-01-01T00:00:00Z\n' "$1" >"$d/.release"; echo "$d"; }
 A=$(mk "$(printf 'a%.0s' {1..40})"); B=$(mk "$(printf 'b%.0s' {1..40})"); C=$(mk "$(printf 'c%.0s' {1..40})")

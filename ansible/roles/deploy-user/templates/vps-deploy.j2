@@ -579,19 +579,17 @@ if [[ "$action" == rollback ]]; then
 fi
 {% endif %}
 
+{% if not deploy_release_tree | default(false) | bool %}
 # The deploy changed /opt/deploy's working tree (AIDE-monitored): acknowledge
 # via the evidence-recording re-baseline, debounced so back-to-back deploys
 # rebaseline once. Deploys are a trusted change channel (CI-gated, signed
 # HEAD, announced via ntfy); tampering outside a deploy still alerts. Guarded:
-# not every host runs the baseline-hardening AIDE stack.
-{% if deploy_release_tree | default(false) | bool %}
-# Every run switched /opt/deploy and may have exported or pruned a release.
-if true; then
-{% else %}
+# not every host runs the baseline-hardening AIDE stack. Under the release
+# tree AIDE does not watch the releases; vps-release verify checks them.
 if [[ "$old_head" != "$new_head" ]]; then
-{% endif %}
   systemctl restart aide-rebaseline-after-deploy.timer >/dev/null 2>&1 || true
 fi
+{% endif %}
 
 # A deploy only ships containers. When it moved the scaffold pointer, the
 # host layer (roles, timers, scripts) is now behind until someone runs a site

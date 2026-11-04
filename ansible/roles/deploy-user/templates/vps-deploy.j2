@@ -638,7 +638,7 @@ if [[ "$old_scaffold" != "$new_scaffold" ]]; then
   if [[ "$applied" != "$new_scaffold" ]]; then
     /usr/local/bin/vps-notify "Host play due: scaffold moved to ${new_scaffold:0:7}" \
 "This deploy pulled scaffold ${old_scaffold:0:7} -> ${new_scaffold:0:7}; the last site play applied ${applied:0:7}.
-Roles, timers and scripts only change on a play: run site-quick.yml (scaffold/docs/04-server-repo.md).
+Roles, timers and scripts only change on a play: run site-quick.yml (scaffold/docs/12-applying-scaffold-updates.md).
 scaffold-drift.timer reminds weekly until they match." \
       default package || true
   fi

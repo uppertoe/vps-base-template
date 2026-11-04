@@ -1,11 +1,14 @@
 # Access Model
 
-**Status: implemented as a staged rollout.** The split-trust model below is
+**Status (2026-11-04): restricted mode is built and runs on both production
+servers (RCH and MCH), on the release tree.** The split-trust model below is
 built into the `deploy-user` and `docker` roles behind
-`deploy_restricted_mode` (default **false** — the simple model — until the
-restricted path is proven on your real VPS). Molecule converges with the flag
-**on**, so CI continuously proves the restricted posture. See the
-[migration runbook](#migration-runbook) below to flip a live host.
+`deploy_restricted_mode`. The role default stays **false** so that a new
+server starts in the simpler model and is provisioned with the orchestrators,
+which assume it; turn restricted mode on with the
+[migration runbook](#migration-runbook) below once admin access is proven.
+Molecule converges with the flag **on**, so CI continuously proves the
+restricted posture.
 
 In the default (unrestricted) mode the scaffold optimizes for simplicity:
 
@@ -38,8 +41,11 @@ In **restricted mode** (`deploy_restricted_mode: true`):
   (dedicated key recommended — defaults to the deploy key), full sudo, docker
   group. **Ansible site plays must run as `admin`** (`ansible_user=admin`),
   since deploy can no longer become root.
-- `~/deploy` still works — it delegates to `sudo vps-deploy`, which runs git
-  as `deploy` (repo ownership intact) and docker/hooks as root.
+- `~/deploy` still works — it delegates to `sudo vps-deploy`. Under the
+  release tree root fetches and verifies the commit in its own mirror and
+  exports it into a root-owned release (docs/15); in the checkout layout the
+  wrapper runs git as `deploy` (repo ownership intact). Docker and the hooks
+  run as root in both.
 - `vps-app-manage <service> <verb>` executes only verbs listed in root-owned
   `/etc/vps-scaffold/app-manage.allow` (templated from
   `deploy_allowed_app_manage_commands`, default empty).
@@ -103,10 +109,11 @@ That is a real security improvement even though `admin` remains powerful.
 
 The main tradeoff is flexibility versus control.
 
-If `deploy` is no longer allowed arbitrary Docker commands, then day-to-day
-operations need approved entrypoints instead of free-form shell access.
+Because `deploy` is not allowed arbitrary Docker commands in restricted mode,
+day-to-day operations go through approved entrypoints instead of free-form
+shell access.
 
-Examples of commands that would no longer be typed directly by `deploy`:
+Commands that `deploy` can no longer type directly:
 
 ```bash
 docker compose run --rm jw_django python manage.py migrate
@@ -114,64 +121,81 @@ docker compose exec jw_postgres psql ...
 docker compose logs -f
 ```
 
-Instead, `deploy` would invoke approved wrappers.
+Instead, `deploy` invokes the wrappers below, and anything else is done as
+`admin`.
 
-## Proposed Command Model
+## Command Model
 
 ### Root-owned wrapper commands
 
-Install root-owned, audited entrypoints such as:
+The deploy-user role installs root-owned, audited entrypoints:
 
 - `/usr/local/sbin/vps-deploy`
 - `/usr/local/sbin/vps-app-manage`
 - `/usr/local/sbin/vps-app-logs`
 
-These wrappers become the only supported way for `deploy` to trigger app-level
+These wrappers are the only supported way for `deploy` to trigger app-level
 container operations.
 
 Two further root-owned helpers serve the administrator rather than the deploy
-account:
+account; both are installed mode `0750`, so they are run with `sudo`:
 
-- `/usr/local/sbin/vps-git` runs git in `/opt/deploy` as the deploy account,
-  with optional locks off, so `vps-git status --short` or `vps-git log` never
-  leaves a root-owned file behind. Plain `sudo git` in the checkout is the one
-  known way to break the next deploy: git refreshes the index and rewrites it
-  as root, and the deploy account can no longer open it (seen on 2026-11-01 and
-  again on 2026-11-02).
+- `/usr/local/sbin/vps-git` runs git for the administrator. Under the release
+  tree it reads root's mirror (`git --git-dir /var/lib/vps-deploy/repo.git`),
+  so `sudo vps-git log --oneline -5` shows what is deployed. In the checkout
+  layout it runs git in `/opt/deploy` as the deploy account, with optional
+  locks off, so `sudo vps-git status --short` never leaves a root-owned file
+  behind. Plain `sudo git` in a checkout is the one known way to break the
+  next deploy: git refreshes the index and rewrites it as root, and the deploy
+  account can no longer open it (seen on 2026-11-01 and again on 2026-11-02).
 - `/usr/local/sbin/vps-git-heal` hands back to the deploy account anything
   under `/opt/deploy/.git` that root has taken, removes a stale root-owned lock
   file, logs the repair and announces it over ntfy. `auto-deploy` and
   `vps-deploy` run it first, so a hand-run mistake no longer stops the next
-  deploy; the alert still tells the operator it happened.
+  deploy; the alert still tells the operator it happened. It does nothing once
+  `/opt/deploy` is a release link, because no repository is shared.
 
 ### Deploy entrypoint
 
-`~/deploy` would remain the human-facing command, but instead of relying on
-unrestricted Docker access it would call a controlled root-owned wrapper.
-
-Conceptually:
+`~/deploy` is the human-facing command. In restricted mode, and under the
+release tree in either mode, it runs the root-owned wrapper:
 
 ```bash
 sudo /usr/local/sbin/vps-deploy
 ```
 
-`vps-deploy` would perform the existing release workflow:
+`vps-deploy` performs the release workflow in this order:
 
-- update the repo
-- update submodules
-- normalize `.env` permissions
-- run approved app deploy hooks
-- `docker compose pull`
-- `docker compose up -d --remove-orphans --wait`, then the same with
-  `--force-recreate` for only the services whose bind-mounted repo files this
-  deploy changed (compose recreates image, definition and env changes itself)
-- `docker image prune -af` (reclaim superseded images once the new containers are healthy)
+1. Verify. Under the release tree root fetches the server repo into its own
+   mirror, verifies the tip's signature against the root-owned trust stores
+   and exports the commit into `/opt/deploy-releases/<commit>` (docs/15). In
+   the checkout layout it checks the deploy-owned checkout as root (clean
+   tree, branch and upstream, scaffold pointer, tracked hooks, the signature
+   on HEAD) and refuses to proceed if any check fails.
+2. Render the SOPS secrets (`vps-secrets-render`, docs/13) into the release or
+   the checkout, and install `secrets/backup/` into `/etc/restic`.
+3. `docker compose pull`; under the release tree the pull happens before the
+   switch, so an unreachable registry leaves the running release in place.
+4. Normalise permissions: the `.env` set to `600`, everything else containers
+   mount to world-readable (checkout layout; a release is exported with git's
+   modes).
+5. Run each tracked `apps/*/deploy.sh` hook as root.
+6. `docker compose up -d --remove-orphans --wait`, then the same with
+   `--force-recreate` for only the services whose bind-mounted repo files this
+   deploy changed (compose recreates image, definition and env changes itself).
+7. `docker image prune -af` (reclaim superseded images once the new containers
+   are healthy), then record the deployed commit in
+   `/var/lib/vps-deploy/last-deployed`.
+
+A hand-run `./deploy` on a default-mode server in the checkout layout does not
+go through the wrapper: it pulls as the deploy account, renders the secrets
+through `sudo`, and still runs `docker compose up --force-recreate` for the
+whole stack. The automatic deploy always uses the wrapper.
 
 ### App maintenance entrypoint
 
-For app-specific maintenance tasks, expose a narrow command surface.
-
-Examples:
+For app-specific maintenance tasks, the wrapper exposes a narrow command
+surface:
 
 ```bash
 vps-app-manage journal-watch migrate
@@ -179,31 +203,33 @@ vps-app-manage journal-watch collectstatic
 vps-app-manage journal-watch shell
 ```
 
-The wrapper would map only approved verbs to fixed `docker compose` commands.
-Unknown verbs would be rejected.
+The wrapper maps only approved verbs to fixed `docker compose` commands, read
+from root-owned `/etc/vps-scaffold/app-manage.allow`. Unknown verbs are
+rejected.
 
 This preserves operational usefulness without giving `deploy` arbitrary Docker
 control.
 
 ## Sudoers Model
 
-The current scaffold grants:
+The deploy-user role templates `/etc/sudoers.d/deploy` from
+`deploy_restricted_mode`. In default mode it grants:
 
 ```text
 deploy ALL=(ALL) NOPASSWD:ALL
 ```
 
-The future restricted model should replace that with a minimal allowlist.
-
-Example direction:
+In restricted mode it is the allowlist below, and nothing else. The empty
+string after `vps-deploy` means the bare command only: `--rollback` and
+`--allow-rewind` are for the admin account.
 
 ```text
-deploy ALL=(root) NOPASSWD:/usr/local/sbin/vps-deploy
+deploy ALL=(root) NOPASSWD:/usr/local/sbin/vps-deploy ""
 deploy ALL=(root) NOPASSWD:/usr/local/sbin/vps-app-manage *
 deploy ALL=(root) NOPASSWD:/usr/local/sbin/vps-app-logs *
 ```
 
-The exact `sudoers` surface should be kept small and explicit.
+`admin` has `admin ALL=(ALL) NOPASSWD:ALL` in both modes.
 
 ## Docker Access Model
 
@@ -212,16 +238,18 @@ There are three practical choices:
 1. `deploy` keeps `docker` group access
    - simplest
    - weakest separation
+   - this is default mode
 
 2. `deploy` loses `docker` group access, `admin` keeps it
-   - preferred split-trust model
+   - the split-trust model
    - `admin` remains break-glass operator
+   - this is restricted mode
 
 3. nobody has ad hoc Docker access
    - strongest restriction
    - worst operational ergonomics for a small VPS
 
-For this project, option 2 is the best target.
+For this project, option 2 is the model in use.
 
 ## Incident Response
 
@@ -247,11 +275,11 @@ That pattern can remain.
 
 The change is only who invokes the hook:
 
-- current model:
+- default mode, checkout layout:
   - `deploy` runs the hook directly with its own Docker access
-- future model:
+- restricted mode, and the release tree in either mode:
   - root-owned `vps-deploy` invokes the hook under the controlled deployment
-    path
+    path, from the release, which the hook must not write into
 
 ## Idempotence
 
@@ -325,39 +353,57 @@ silently with no output. Run it in the system manager instead:
 
 ```bash
 sudo systemd-run --unit=site-run \
-  --uid=deploy --gid=deploy --setenv=HOME=/home/deploy \
-  --setenv=PYTHONUNBUFFERED=1 --property=WorkingDirectory=/opt/deploy \
+  --uid=admin --gid=admin --setenv=HOME=/home/admin \
+  --setenv=PYTHONUNBUFFERED=1 --property=WorkingDirectory=/home/admin/server-repo \
   ansible-playbook -i ansible/hosts -c local -l <host> \
   scaffold/ansible/site-first-run.yml
 ```
+
+In restricted mode the play runs as `admin`, because the deploy account can
+neither run `sudo systemd-run` nor become root; in default mode `deploy` works
+too. The working directory must hold the inventory and the playbooks. On a
+release-tree server `/opt/deploy` is a root-owned export of tracked files
+only, so it holds no `ansible/hosts`: keep a clone of the server repo with
+the inventory in admin's home and point `-i` at it, as above. In the checkout
+layout `/opt/deploy` itself serves, when `ansible/hosts` has been placed
+there.
 
 Watch it with `journalctl -u site-run -f`; the unit survives the SSH drop, and
 `systemctl show site-run -p ExecMainStatus` is the true play exit code (0 = ok).
 Re-run after a failure needs `sudo systemctl reset-failed site-run` first.
 
-## Suggested Variables
+## Variables
 
-Possible future variables:
+The role variables that shape the model, with their defaults
+(`ansible/roles/deploy-user/defaults/main.yml`):
 
 ```yaml
-deploy_restricted_mode: false
+deploy_restricted_mode: false           # the wrapper-only sudoers and no docker group
+deploy_release_tree: false              # required by restricted mode (docs/15)
+deploy_verify_signature: false          # required by restricted mode (below)
+deploy_repo_url: ""                     # required by the release tree in restricted mode
 deploy_admin_user: admin
-deploy_admin_public_key: "{{ lookup('file', '~/.ssh/id_ed25519.pub') }}"
-deploy_allow_direct_docker_for_admin: true
-deploy_allowed_app_manage_commands:
-  - migrate
-  - collectstatic
-  - shell
+deploy_admin_public_key: "{{ deploy_user_public_key }}"   # set a dedicated key
+deploy_admin_key_allow_shared: false    # accept the shared key explicitly
+deploy_allowed_app_manage_commands: {}  # verb -> command, per app
 ```
 
-## Access Review Cadence (applies today)
+`deploy_allowed_app_manage_commands` is a map from verb to the command the
+wrapper runs, not a list of verbs, for example
+`migrate: "python manage.py migrate --noinput"`; it is templated into
+`/etc/vps-scaffold/app-manage.allow`. `deploy_restricted_checkout_ok` and
+`deploy_restricted_unsigned_ok` accept the weaker posture during a transition
+and are reported by the smoke test.
 
-Unlike the target model above, this is current practice, not aspiration:
-**quarterly**, review and record in the server repo (a dated markdown entry is
+## Access Review Cadence
+
+**Quarterly**, review and record in the server repo (a dated markdown entry is
 enough — it becomes control-matrix row 23 evidence):
 
-- `~deploy/.ssh/authorized_keys` — every key still maps to a person who needs it
-- `ADMIN_EMAILS` (and user activity) in `apps/auth/.env`
+- `~deploy/.ssh/authorized_keys` and `~admin/.ssh/authorized_keys` — every
+  key still maps to a person who needs it
+- `ADMIN_EMAILS` (and user activity) in the gateway's settings
+  (`secrets/apps/auth/.env.sops` on a SOPS server, `apps/auth/.env` otherwise)
 - credentials the box holds: backup S3 keys, SES/SMTP, registry tokens —
   rotate anything unexplained or older than 12 months
 - dormant access: anything unused for ~45 days gets removed, not kept "just
@@ -389,9 +435,12 @@ Treat them with the same seriousness as SSH keys:
 - **CODEOWNERS** on the executable surface (`apps/*/deploy.sh`, compose files,
   workflows, the `scaffold` submodule pointer) so those paths always require
   an owner's review — the instance template ships one.
-- **Renovate cooldown** (`minimumReleaseAge`): automerged digest bumps must
-  age upstream before they can reach the box, so a poisoned release is caught
-  by the ecosystem before your deploy timer ships it.
+- **Renovate cooldown** (`minimumReleaseAge`) applies to version bumps, which
+  wait three days so a poisoned release can be pulled upstream before the
+  deploy ships it. Digest bumps have no cooldown, because Renovate cannot date
+  a digest (an undated update would stay pending forever, which froze the
+  digest group from July 2026); a digest bump is a rebuild of the same tag,
+  and CI plus the signed-deploy gate are its checks.
 - **2FA + hardware keys** on any GitHub account with merge rights.
 
 ### Enforcing the boundary on the box: `deploy_verify_signature`

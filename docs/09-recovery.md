@@ -39,7 +39,11 @@ a pet with no vet.
    full current set. The live `apps/*/.env` may have been edited only on the
    box, and the restic secrets live in **`/etc/restic/` (root-only), not in the
    deploy checkout** — a laptop-made or non-sudo bundle silently omits the
-   restic password, the one irreplaceable secret. The script refuses to write a
+   restic password, the one irreplaceable secret. On a restricted-mode server
+   the deploy account cannot run the script through `sudo`, so run it through
+   the admin alias and copy the file from admin's home:
+   `ssh -t <admin-alias> 'cd /opt/deploy && sudo scripts/make-recovery-bundle.sh'`.
+   The script refuses to write a
    bundle that captured no `RESTIC_PASSWORD` rather than hand you a confident
    dud; `DRY_RUN=1` previews the file list first. Store the encrypted bundle
    somewhere that survives your laptop (a password-manager attachment, a cloud
@@ -50,7 +54,7 @@ a pet with no vet.
    --strict` reports the bundle **missing** or **stale** (a captured secret
    newer than the last bundle) so the gap surfaces at the next evidence pass
    rather than during an outage. On a SOPS server the script does nothing and
-   says why. Step 13 of the provisioning runbook (docs/03) covers both cases.
+   says why. Step 12 of the provisioning runbook (docs/03) covers both cases.
 3. **Out-of-band access** — the DNS registrar login, the VPS provider login,
    and the GitHub account. These live in the password manager, not on the box.
 
@@ -93,6 +97,20 @@ stages skip. The annotated manual steps below are the reference, and exactly
 what `restore.sh` executes in order (the "order matters" note is why the
 orchestrator enforces it).
 
+`restore.sh`, and the manual steps below, assume the default access model and
+a checkout at `/opt/deploy`: the clone is made as the deploy account and the
+stack is deployed with `./deploy` from its home. Both production servers run
+restricted mode on the release tree, and their inventories say so. For the
+rebuild, set `deploy_restricted_mode` and `deploy_release_tree` to `false` and
+`ansible_user=deploy` in the recovered `ansible/hosts`; `restore.sh` stops with
+a message if either flag is still `true`. Complete the drill, then put the
+three settings back and run `site-quick.yml` as `admin`, which is the
+restricted-mode runbook in docs/05 (the play refuses to narrow deploy's sudo
+while connected as deploy). Before that play, the read-only deploy key must
+exist at `/home/deploy/.ssh/github-deploy` (`deploy_release_key_source`),
+because the release tree copies it to `/etc/vps-scaffold/deploy-key`; a fresh
+box has no such file until you create it (step 4).
+
 1. Create a fresh VPS at the provider (same Ubuntu LTS). Note the IP. Clear
    the stale SSH host key locally: `ssh-keygen -R <ip>`.
 2. Recover the inventory and the restic configuration into a fresh clone of
@@ -117,11 +135,14 @@ orchestrator enforces it).
 3. Point `ansible/hosts` at the new IP. Provision as on first run — from a
    provider root password, that is `bootstrap.yml --ask-pass` (creates the
    users + installs your key), then `site-first-run.yml` over the key (full
-   hardening; see docs/03). **Run ansible from the repo root with the
-   scaffold's transport config**, or the slow/flaky-link resilience does not
-   apply: `ANSIBLE_CONFIG=scaffold/ansible/ansible.cfg ansible-playbook …`.
+   hardening; see docs/03). Run ansible from the server repo root, where its
+   `ansible.cfg` applies the transport settings for a slow or lossy link.
 4. **Populate `/opt/deploy` on the server** (site-first-run creates the
-   directory but does not clone the repo):
+   directory but does not clone the repo). The clone is made as the deploy
+   account, which owns the directory. A private repo needs a read-only deploy
+   key on the new box: create it at `/home/deploy/.ssh/github-deploy` and
+   register its public half as a deploy key on the repo in GitHub, because
+   the old box's key died with it.
 
    ```bash
    ssh <host> 'git clone --recurse-submodules <server-repo> /opt/deploy'
@@ -151,7 +172,12 @@ orchestrator enforces it).
 8. Cut DNS over to the new IP. Lower TTLs ahead of time if you want a faster
    drill number.
 9. Verify: post-provision smoke test, `audit-all.yml`, and confirm the
-   dead-man's switch and ntfy alerts point at the NEW host.
+   dead-man's switch and ntfy alerts point at the NEW host. If the server
+   ran in restricted mode before the loss, this is the point to restore
+   `deploy_restricted_mode`, `deploy_release_tree`, `deploy_verify_signature`
+   and `ansible_user=admin` in the inventory and run `site-quick.yml` as
+   `admin` (docs/05); the first deploy after it moves the checkout to
+   `/opt/deploy-legacy` and serves from a release.
 
 > **Order matters.** The secrets restore (step 4) and backup config (step 5)
 > sit *between* provisioning and deploy — a fresh box has neither the repo nor

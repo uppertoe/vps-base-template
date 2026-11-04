@@ -98,6 +98,11 @@ all DB volumes are plain ext4 — no LUKS. Provision-time, so unfixable in place
 ---
 
 ## P1-3 · MFA on the application tier
+
+> Note (2026-11-04): shipped. Authelia has since been retired from the estate;
+> the gateway (`vps-scaffold-auth`) provides admin TOTP, on by default
+> (docs/07). The text below is kept as the record of the decision.
+
 **Driver:** E8 #3 · **Current:** ⚠️ SSH key-only (strong); Authelia `one_factor`,
 auth gateway email-OTP (single factor) for app/clinical access.
 
@@ -130,7 +135,7 @@ the box itself is down (documented limitation in `apps/ntfy/README.md`).
 
 **Scaffold change**
 - Ship a small `notify`-role timer that curls an external monitor
-  (Healthchecks.io / UptimeRobot) on a schedule. Var `deadman_switch_url`;
+  (Gatus / Healthchecks) on a schedule. Var `notify_deadman_url`;
   opt-in but first-class. Closes the one hole the self-hosted alerting model
   otherwise has.
 
@@ -159,8 +164,9 @@ are run individually; OpenSCAP defaults to L1.
 - `audit-all.yml` orchestrator: run OpenSCAP (**L2 by default for this profile**),
   docker-bench, audit-compose, audit-vuln, Lynis → a single dated
   `reports/<host>-<date>/` bundle with an index.
-- Generalise the deployment's `compliance/README.md` into a scaffold
-  `docs/compliance-handover-template.md` so every instance ships a handover skeleton.
+- Generalise the deployment's `compliance/README.md` into a scaffold handover
+  template so every instance ships a handover skeleton (still to be written;
+  `docs/templates/README.md` indexes the templates that exist).
 
 **Effort:** Low–Med.
 
@@ -171,8 +177,8 @@ are run individually; OpenSCAP defaults to L1.
 1. **Now (P1 quick wins):** digest pinning (P1-1), dead-man's-switch (P1-5),
    restore drill (P1-4), vuln scan (P1-2). Low effort, fold straight into
    existing roles/CI.
-2. **Next (config):** Authelia 2FA (P1-3), encrypted swap (the P0-1 retrofit
-   slice).
+2. **Next (config):** application-tier 2FA (P1-3; shipped as gateway TOTP,
+   Authelia since retired), encrypted swap (the P0-1 retrofit slice).
 3. **Structural decisions (P0):** off-host logging destination (P0-2) and
    full-disk encryption (P0-1) — these need an external dependency (SIEM /
    provider FDE) and the FDE one is a rebuild, so decide before the next provision.

@@ -23,15 +23,18 @@ browser ─▶ Caddy (app.example.com)
 
 - Caddy calls `GET /verify` on every request to a protected app.
 - A valid session returns `200` plus `Remote-User`, `Remote-Email`, and
-  `Remote-Groups` (`admin` or `user`), which Caddy forwards to the app.
+  `Remote-Groups`, which Caddy forwards to the app. `Remote-Groups` carries
+  the gateway groups the person belongs to.
 - Otherwise `/verify` returns a 302 to the login page.
 - The session is a stateless, HMAC-signed cookie scoped to the parent domain, so
   one login covers every app subdomain.
 
 Access rule: a verified email at an **allowed domain** is a regular user; an
-email on the **admin whitelist** is an admin. The only persisted state is
-single-use OTP codes (SHA-256 hashed) and optional admin TOTP secrets, in a
-small SQLite file — no Postgres or Redis.
+email on the **admin whitelist** is an admin. A guard can require a group, an
+email domain, or any signed-in user (the snippet catalogue is in the server
+repo's `apps/auth/auth.caddy`), and the route renderer lists what each site
+requires in `.generated/caddy/route-access.tsv`. The service keeps its state
+in a small SQLite file — no Postgres or Redis.
 
 ## Enabling it
 
@@ -39,22 +42,26 @@ The server repo (from `server-instance-template`) ships the wiring under
 `apps/auth/`. It is **opt-in** so an unconfigured server never crash-loops on
 deploy.
 
-1. Configure secrets:
-   ```bash
-   cp apps/auth/.env.example apps/auth/.env
-   $EDITOR apps/auth/.env          # set SESSION_SECRET, ALLOWED_EMAIL_DOMAINS,
-                                    # ADMIN_EMAILS, EMAIL_* etc.
-   openssl rand -hex 32            # value for SESSION_SECRET
-   ```
+1. Configure the gateway's settings (`SESSION_SECRET` from
+   `openssl rand -hex 32`, `ALLOWED_EMAIL_DOMAINS`, `ADMIN_EMAILS`, the
+   `EMAIL_*` values; `apps/auth/.env.example` lists them all). Where they are
+   written depends on the server ([13-secrets.md](13-secrets.md)):
+   - On a SOPS server, edit `secrets/apps/auth/.env.sops` with `sops` on your
+     laptop, then commit signed and push. The deploy renders it to
+     `apps/auth/.env` on the box, and an edit made on the box is overwritten
+     by the next deploy.
+   - On a server without SOPS, copy `apps/auth/.env.example` to
+     `apps/auth/.env` on the server and edit it there.
 2. Uncomment the auth include in the root `docker-compose.yml`:
    ```yaml
    include:
      - scaffold/docker/caddy.base.yml
+     - .generated/caddy/networks.yml
      - apps/auth/docker-compose.yml   # ← uncomment this
    ```
 3. Point a DNS record for `auth.<your-domain>` at the server (so Caddy can issue
    its certificate), then deploy (`~/deploy` on the server, or
-   `docker compose up -d`).
+   `docker compose up -d` locally).
 
 `apps/auth/.env` is gitignored and reset to mode 600 by the deploy helper.
 
@@ -136,7 +143,8 @@ tier TOTP is required by default (`TOTP_ENABLED=true` in the template
 at login** — otherwise an attacker who only controls the inbox could bootstrap
 the second factor. An un-enrolled admin is refused at login and told to ask an
 administrator. Bootstrap the first admin from the box (prints the `otpauth://`
-URL and setup key once — treat as a secret):
+URL and setup key once — treat as a secret). On a restricted-mode server the
+deploy account cannot run `docker compose`, so connect as the admin account:
 
 ```bash
 cd /opt/deploy && docker compose exec -T auth /app -totp-enroll admin@example.org
@@ -203,7 +211,8 @@ in its CI.
 - `Secure`/`HttpOnly`/`SameSite=Lax` cookies, tight CSP, no inline scripts.
 - Stateless sessions can't be revoked before expiry — keep `SESSION_TTL`
   moderate (default 12h).
-- Pin the image to a version tag in production rather than `:latest`.
+- Pin the image by digest (`repo:tag@sha256:…`), as for every image; the
+  server repo's `check-image-pins.sh` fails CI on a tag alone.
 
 ## Email authenticity (SPF/DKIM/DMARC)
 

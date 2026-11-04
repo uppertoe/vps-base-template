@@ -1,20 +1,21 @@
 # 15 — The release tree
 
-Status: design, 2026-11-03. Owner decisions recorded in §2. Implementation
-lands behind `deploy_release_tree` (default `false`) and is adopted one server
-at a time, RCH first.
+Status (2026-11-04): built and merged behind `deploy_release_tree` (default
+`false`), and in use on both production servers (RCH and MCH), which run
+restricted mode on it. Restricted mode requires it (docs/05). Owner decisions
+are recorded in §2.
 
 ## 1. The weakness this closes
 
-Today `/opt/deploy` is a git checkout owned by the deploy account. `vps-deploy`
+In the checkout layout `/opt/deploy` is a git checkout owned by the deploy account. `vps-deploy`
 runs as root and checks that checkout carefully (clean tree against a private
 index copy, branch and upstream, the scaffold pointer, untracked hooks, the
 signature on HEAD), then executes what is in it: compose files, Caddy
 snippets, app hooks and the rendered secrets. Between the moment root checks a
 file and the moment root uses it, the deploy account can still write to it. In
 restricted mode the deploy account is meant to be unable to act as root, so
-that window is a privilege boundary with a hole in it (the time-of-check,
-time-of-use note in docs/13-secrets.md §6).
+that window is a privilege boundary with a hole in it (the first point under
+"What this does not protect against" in docs/13-secrets.md).
 
 The cure is for root to use only files the deploy account cannot write: root
 fetches the repository itself, verifies the commit itself, and exports that
@@ -117,8 +118,9 @@ on an app whose key change is irreversible (p.stonn's `DATA_ENCRYPTION_KEY`).
   deploy account's `~/.docker/config.json`, never the rest of that file
   (credential helpers, proxies and plugin directories would otherwise choose
   what root's `docker` runs).
-- `vps-git <args>` reads the root mirror (`git --git-dir
-  /var/lib/vps-deploy/repo.git`), so `vps-git log --oneline -5` still works.
+- `sudo vps-git <args>` reads the root mirror (`git --git-dir
+  /var/lib/vps-deploy/repo.git`), so `sudo vps-git log --oneline -5` still
+  works; the helper is root-owned, mode `0750`, so it needs `sudo`.
   `vps-git-heal` does nothing once `/opt/deploy` is a link, because no
   repository is shared.
 - `auto-deploy` compares the mirror's fetched tip with the commit
@@ -126,11 +128,14 @@ on an app whose key change is irreversible (p.stonn's `DATA_ENCRYPTION_KEY`).
 - `scaffold-drift-check` reads the scaffold commit from the current release's
   `.release` file (commit, scaffold commit, time) and compares it with
   upstream through root's scaffold mirror (`vps-release scaffold-behind`).
-- AIDE's existing `/opt/deploy DeployConf` rule also covers
-  `/opt/deploy-releases`, because selection lines are prefix regexes. A
-  release never changes after its export, so any change inside one alerts;
-  every release deploy rebaselines. Root's mirrors under `/var/lib/vps-deploy`
-  are excluded, as `.git` was.
+- AIDE excludes `/opt/deploy-releases` and `/opt/deploy` on a release-tree
+  server, so a deploy no longer forces a whole-host re-baseline. In their
+  place `vps-release verify` runs daily (`vps-release-verify.timer`) and
+  compares the live release, rendered secrets included, with the manifest
+  written when the release was prepared; a difference fails the unit and
+  alerts over ntfy. A release never changes after its export, which is what
+  makes the manifest a complete description of it. Root's mirrors under
+  `/var/lib/vps-deploy` are excluded from AIDE, as `.git` was.
 
 ## 6. Migration on an existing server
 
@@ -187,5 +192,8 @@ docker run --rm -v "$PWD":/t:ro ubuntu:24.04 bash /t/test_vps_release.sh
 - markbot needs SOPS support for two non-dotenv files (Authelia's key and
   user list) before it can adopt; `vps-secrets-render` gains a binary mode
   for `secrets/**/*.file.sops`.
-- `provision.sh`, `restore.sh` and the post-provision smoke test assume a
-  checkout at `/opt/deploy` and need a release-tree path.
+- `provision.sh` and `restore.sh` assume the default access model and a
+  checkout at `/opt/deploy`, and need a release-tree path. Until then a
+  server is provisioned or rebuilt in default mode and switched afterwards
+  (docs/03 Step 14, docs/09). The smoke test reports the release tree, the
+  signature gate and the wrapper-only sudoers when it connects as admin.

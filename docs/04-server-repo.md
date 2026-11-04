@@ -10,13 +10,15 @@ shims, the ignore rules) are the scaffold's canonical set under
 
 ## Creating a server repo
 
+Create the repo from
+[server-instance-template](https://github.com/uppertoe/server-instance-template)
+on GitHub ("Use this template"). It already carries the scaffold as a
+submodule over HTTPS, which the release tree requires
+([15-release-tree.md](15-release-tree.md)). If you add the submodule by hand,
+use the HTTPS URL:
+
 ```bash
-cp -r path/to/vps-scaffold/server-template/ server-myserver
-cd server-myserver
-git init
-git submodule add git@github.com:yourorg/vps-scaffold.git scaffold
-git add .
-git commit -m "chore: initialise server repo"
+git submodule add https://github.com/uppertoe/vps-base-template.git scaffold
 ```
 
 Then fill in:
@@ -46,6 +48,8 @@ server-myserver/
 ├── docker-compose.yml           ← includes scaffold base + each app
 ├── docker-compose.override.yml.example
 ├── .env.example                 ← committed: DOMAIN, ACME_EMAIL
+├── .sops.yaml                   ← SOPS recipients (docs/13)
+├── secrets/                     ← SOPS-encrypted env files, rendered at deploy
 ├── .gitignore
 └── ansible/
     └── hosts.example
@@ -97,7 +101,7 @@ container that skips them shows up as a finding. The rules:
 
 | Control | Why |
 |---------|-----|
-| `image: …@sha256:` digest, never `:latest` | reproducible, tamper-evident pulls (weekly digest-freshness check flags drift; enable the Renovate app for automated bump PRs) |
+| `image: …@sha256:` digest, never `:latest` | reproducible, tamper-evident pulls (weekly digest-freshness check flags drift; Renovate, run by the fleet's self-hosted runner, opens the bump pull requests) |
 | `user:` non-root | a container escape lands as an unprivileged user |
 | `cap_drop: [ALL]` (+ minimal `cap_add`) | remove kernel capabilities the app never uses |
 | `security_opt: [no-new-privileges:true]` | block setuid privilege escalation (also a daemon default) |
@@ -420,23 +424,28 @@ docker-compose.override.yml
 
 ## Where Secrets Live
 
-There are two secret workflows in the current template:
+Where secrets live depends on whether the server has adopted SOPS
+([13-secrets.md](13-secrets.md)).
 
-- Runtime secrets are server-local:
-  - `.env`
-  - `apps/*/.env`
-  Edit these in `/opt/deploy` on the VPS, because Docker Compose reads them
-  directly from the deployed checkout.
+- On a SOPS server, every secret is an age-encrypted file in the repo:
+  `secrets/.env.sops` becomes `.env`, `secrets/apps/<app>/.env.sops` becomes
+  `apps/<app>/.env`, and `secrets/backup/` holds the restic configuration.
+  Change a secret with `sops secrets/apps/<app>/.env.sops` on your laptop,
+  commit it signed and push; the next deploy, including the automatic one,
+  renders the `.env` files on the box, and any edit made on the box is
+  overwritten. Under the release tree there is no writable checkout at all.
+  The renderer also installs `secrets/backup/` into `/etc/restic/`, so the
+  backup playbook is not needed for a change to the restic configuration.
 
-- Backup secrets are Ansible-managed:
-  - `backup/config.env`
-  - `backup/services/*.env`
-  Edit these locally in your server repo on your laptop, then run the backup
-  playbook so Ansible copies them to `/etc/restic/` on the server.
+- On a server that has not adopted SOPS, the runtime secrets (`.env` and
+  `apps/*/.env`) are edited in `/opt/deploy` on the box, because Compose
+  reads them from the deployed checkout, and the backup secrets
+  (`backup/config.env`, `backup/services/*.env`) are edited in the server
+  repo on your laptop and reach `/etc/restic/` through the backup playbook.
 
-The deploy helper enforces this split on every run: the `.env` set above is
-locked to mode 600, and everything else containers consume from the checkout
-(`apps/`, `scaffold/`, `.generated/`, `Caddyfile`) is normalised to
+The deploy helper enforces the same split on every run: the `.env` set above
+is locked to mode 600, and everything else containers consume from the
+checkout (`apps/`, `scaffold/`, `.generated/`, `Caddyfile`) is normalised to
 world-readable. The second half matters because containers run as dedicated
 non-root uids: a file created under the host's hardened umask is otherwise
 unreadable inside any container whose uid differs from the deploy user's, and

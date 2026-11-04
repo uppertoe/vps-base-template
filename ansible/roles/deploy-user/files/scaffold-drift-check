@@ -19,7 +19,7 @@ if [[ -L /opt/deploy ]]; then
   applied="$(cat /var/lib/vps-site-applied 2>/dev/null || echo none)"
   if [[ "$applied" != "$checked_out" ]]; then
     /usr/local/bin/vps-notify "Host play due: scaffold ${checked_out:0:7} deployed, ${applied:0:7} applied" \
-      "Run site-quick.yml so roles, timers and scripts match the deployed scaffold (scaffold/docs/04-server-repo.md)." \
+      "Run site-quick.yml so roles, timers and scripts match the deployed scaffold (scaffold/docs/12-applying-scaffold-updates.md)." \
       default package || true
   fi
   behind="$(/usr/local/sbin/vps-release scaffold-behind)"
@@ -35,7 +35,7 @@ checked_out="$(runuser -u deploy -- git rev-parse HEAD)"
 applied="$(cat /var/lib/vps-site-applied 2>/dev/null || echo none)"
 if [[ "$applied" != "$checked_out" ]]; then
   /usr/local/bin/vps-notify "Host play due: scaffold ${checked_out:0:7} checked out, ${applied:0:7} applied" \
-    "Run site-quick.yml so roles, timers and scripts match the checked-out scaffold (scaffold/docs/04-server-repo.md)." \
+    "Run site-quick.yml so roles, timers and scripts match the checked-out scaffold (scaffold/docs/12-applying-scaffold-updates.md)." \
     default package || true
 fi
 

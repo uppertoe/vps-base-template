@@ -78,8 +78,9 @@ From the root of this repo:
 ansible-galaxy collection install -r ansible/requirements.yml
 ```
 
-This installs the `devsec.hardening` and `community.general` collections that
-the roles depend on.
+In a server repo the file is at `scaffold/ansible/requirements.yml`. It
+installs the `devsec.hardening`, `community.general`, `community.docker` and
+`ansible.posix` collections that the roles depend on.
 
 ## 5. Docker Desktop (for local testing)
 
@@ -95,7 +96,7 @@ docker info
 ## 6. Molecule (for local testing)
 
 ```bash
-pip3 install --user molecule molecule-plugins[docker]
+pip3 install --user -r requirements.txt   # the pinned molecule, plugins and ansible-lint CI uses
 
 # Verify
 molecule --version

@@ -39,7 +39,8 @@ On a branch in `vps-base-template`:
    `grep -ri '24\.04\|noble' --exclude-dir=.git .` — expected hits: docs
    (01/03/08), CI workflow images, Molecule platform images,
    `scripts/render-compliance-pages.sh` (the `OS_EOL_DATE` constant),
-   `.github/workflows/maintenance-day.yml` (EOL text), `ansible/hosts.example`.
+   `server-files/.github/workflows/maintenance-day.yml` (EOL text; the
+   canonical copy every server carries, docs/14), `ansible/hosts.example`.
 4. Optionally run CI as a matrix over both releases while instances straddle
    the transition.
 
@@ -58,7 +59,15 @@ passing monthly self-test IS the evidence the release runs unattended.
    the DNS TTL a day ahead.
 2. Provision a fresh VPS on the new release from the SAME instance repo (new
    IP in the inventory), with the scaffold pointer bumped to the enabled
-   commit: `bootstrap.yml` → `site-first-run.yml` → `./deploy`.
+   commit. Follow docs/09 in its order, which is what `restore.sh` runs:
+   bootstrap, site-first-run, the `/opt/deploy` clone, the secrets, the
+   backup playbook, and only then `./deploy`. On a SOPS server the new box
+   has a new age key: `restore.sh --from-sops` puts its public key from
+   `/etc/vps-scaffold/age/key.pub` on `.sops.yaml`, runs `sops updatekeys`
+   on every file under `secrets/` and commits, and that commit must reach
+   `main` before the first deploy can render anything. A restricted-mode
+   inventory is set back to default mode for the rebuild and restored at the
+   end (docs/09).
 3. Data cutover: quiesce writes on the old box → final backup run → restic
    restore into the new box's volumes → verify.
 4. Repoint the dead-man's switch and ntfy subscriptions at the NEW box

@@ -33,16 +33,28 @@ loader.exec_module(render)
 
 STUB = textwrap.dedent("""\
     #!/usr/bin/env python3
-    import sys
+    import base64, json, sys
     assert sys.argv[-1] == "/dev/stdin", sys.argv
     data = sys.stdin.buffer.read()
     if b"FAIL" in data:
         sys.stderr.write("invalid dotenv input line: " + data.decode() + "\\n")
         sys.exit(1)
+    if "binary" in sys.argv:
+        # The stand-in for a binary-type file keeps the plaintext base64 in
+        # the data field, where real sops keeps the ciphertext.
+        enc = json.loads(data)["data"]
+        sys.stdout.buffer.write(base64.b64decode(enc.split("data:", 1)[1].split(",", 1)[0]))
+        sys.exit(0)
     body = data.split(b"\\n", 1)[1]
     sys.stdout.buffer.write(b"".join(l for l in body.splitlines(True) if not l.startswith(b"sops_")))
     """)
 META = "sops_mac=ENC[AES256_GCM,data:x,iv:y,tag:z,type:str]\nsops_version=3.13.3\n"
+FILE_META = {
+    "mac": "ENC[AES256_GCM,data:x,iv:y,tag:z,type:str]",
+    "version": "3.13.3",
+    "lastmodified": "2026-11-04T00:00:00Z",
+    "age": [{"recipient": "age1test", "enc": "-----BEGIN AGE ENCRYPTED FILE-----\nx\n-----END AGE ENCRYPTED FILE-----\n"}],
+}
 
 
 class Base(unittest.TestCase):
@@ -69,8 +81,21 @@ class Base(unittest.TestCase):
             f.write("ENCRYPTED\n" + body + META)
         return path
 
+    def whole(self, rel, content: bytes, meta=None, fail=False):
+        """A stand-in binary-type sops document for a whole file."""
+        import base64, json
+        path = os.path.join(self.repo, "secrets", rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        iv = "FAIL" if fail else "y"
+        doc = {"data": f"ENC[AES256_GCM,data:{base64.b64encode(content).decode()},iv:{iv},tag:z,type:str]",
+               "sops": FILE_META if meta is None else meta}
+        with open(path, "w") as f:
+            json.dump(doc, f)
+        return path
+
     def run_render(self, *extra):
-        argv = ["--repo", self.repo, "--sops", self.sops, "--key", self.key, "--owner", ME, *extra]
+        argv = ["--repo", self.repo, "--sops", self.sops, "--key", self.key, "--owner", ME,
+                "--state-dir", os.path.join(self.tmp, "state"), *extra]
         return render.main(argv)
 
     def read(self, rel):
@@ -259,6 +284,181 @@ class RenderTests(Base):
         self.assertFalse(self.exists(".env"))
 
 
+class WholeFileTests(Base):
+    """Whole files: a secrets file whose name does not end in .env.sops is a
+    binary-type sops document, written back byte for byte below a
+    subdirectory of its app."""
+
+    def setUp(self):
+        super().setUp()
+        os.makedirs(os.path.join(self.repo, "apps", "authelia", "config"))
+
+    def read_bytes(self, rel):
+        with open(os.path.join(self.repo, rel), "rb") as f:
+            return f.read()
+
+    def test_a_whole_file_is_rendered_byte_for_byte_with_mode_600(self):
+        content = b"-----BEGIN PRIVATE KEY-----\n\x00\xff\r\nno trailing newline"
+        self.whole("apps/authelia/config/oidc.pem.sops", content)
+        self.secret("apps/planka/.env.sops", "A=1\n")
+        self.assertEqual(self.run_render(), 0)
+        self.assertEqual(self.read_bytes("apps/authelia/config/oidc.pem"), content)
+        st = os.stat(os.path.join(self.repo, "apps/authelia/config/oidc.pem"))
+        self.assertEqual(stat.S_IMODE(st.st_mode), 0o600)
+        self.assertEqual(self.read("apps/planka/.env"), "A=1\n")
+        leftovers = [n for n in os.listdir(os.path.join(self.repo, "apps/authelia/config")) if "vps-secrets" in n]
+        self.assertEqual(leftovers, [])
+
+    def test_the_dotenv_guards_do_not_apply_to_a_whole_file(self):
+        # A user list may well contain text that the dotenv guard refuses.
+        content = b"users:\n  a:\n    note: COMPOSE_FILE=x\r\n"
+        self.whole("apps/authelia/config/users_database.yml.sops", content)
+        self.assertEqual(self.run_render(), 0)
+        self.assertEqual(self.read_bytes("apps/authelia/config/users_database.yml"), content)
+
+    def test_an_unchanged_whole_file_is_not_rewritten(self):
+        self.whole("apps/authelia/config/oidc.pem.sops", b"key")
+        self.run_render()
+        path = os.path.join(self.repo, "apps/authelia/config/oidc.pem")
+        before = os.stat(path)
+        self.assertEqual(self.run_render(), 0)
+        after = os.stat(path)
+        self.assertEqual((before.st_ino, before.st_ctime_ns), (after.st_ino, after.st_ctime_ns))
+
+    def test_a_whole_file_at_an_app_top_level_or_outside_apps_is_refused(self):
+        for rel in ("apps/authelia/oidc.pem.sops", "apps/authelia/deploy.sh.sops",
+                    "apps/authelia/docker-compose.yml.sops", "backup/restic.key.sops",
+                    "oidc.pem.sops", "apps/authelia/config/.hidden.sops",
+                    "apps/authelia/../x/oidc.pem.sops"):
+            with self.subTest(rel=rel):
+                with self.assertRaises(render.RenderError):
+                    render.target_for(rel)
+        self.whole("apps/authelia/deploy.sh.sops", b"#!/bin/sh\n")
+        self.secret(".env.sops", "A=1\n")
+        self.assertEqual(self.run_render(), 1)
+        self.assertFalse(self.exists("apps/authelia/deploy.sh"))
+        self.assertFalse(self.exists(".env"))
+
+    def test_a_whole_file_that_is_not_a_sops_document_is_refused(self):
+        path = os.path.join(self.repo, "secrets", "apps", "authelia", "config", "oidc.pem.sops")
+        os.makedirs(os.path.dirname(path))
+        for raw in (b"-----BEGIN PRIVATE KEY-----\nplain\n", b'{"data": "plain", "sops": {"mac": "x"}}',
+                    b'{"data": "ENC[AES256_GCM,data:eA==,iv:y,tag:z,type:str]"}',
+                    b'{"data": "ENC[AES256_GCM,data:eA==,iv:y,tag:z,type:str]", "sops": {"version": "3.13.3"}}',
+                    b'["ENC[AES256_GCM,data:eA==,iv:y,tag:z,type:str]"]', b"\xff\xfe"):
+            with self.subTest(raw=raw[:20]):
+                with open(path, "wb") as f:
+                    f.write(raw)
+                self.assertEqual(self.run_render(), 1)
+                self.assertFalse(self.exists("apps/authelia/config/oidc.pem"))
+
+    def test_a_whole_file_naming_another_key_source_is_refused(self):
+        for extra in ("kms", "gcp_kms", "azure_kv", "hc_vault", "pgp"):
+            with self.subTest(extra=extra):
+                meta = dict(FILE_META, **{extra: [{"arn": "x"}]})
+                self.whole("apps/authelia/config/oidc.pem.sops", b"key", meta=meta)
+                self.assertEqual(self.run_render(), 1)
+                self.assertFalse(self.exists("apps/authelia/config/oidc.pem"))
+
+    def test_an_empty_whole_file_is_refused(self):
+        self.whole("apps/authelia/config/oidc.pem.sops", b"")
+        self.secret(".env.sops", "A=1\n")
+        self.assertEqual(self.run_render(), 1)
+        self.assertFalse(self.exists(".env"))
+
+    def test_one_failed_whole_file_writes_nothing(self):
+        self.whole("apps/authelia/config/oidc.pem.sops", b"key", fail=True)
+        self.secret(".env.sops", "A=1\n")
+        self.assertEqual(self.run_render(), 1)
+        self.assertFalse(self.exists(".env"))
+        self.assertFalse(self.exists("apps/authelia/config/oidc.pem"))
+
+    def test_a_planted_link_at_a_whole_file_target_is_replaced_not_followed(self):
+        victim = os.path.join(self.tmp, "victim")
+        with open(victim, "w") as f:
+            f.write("untouched\n")
+        os.symlink(victim, os.path.join(self.repo, "apps/authelia/config/oidc.pem"))
+        self.whole("apps/authelia/config/oidc.pem.sops", b"key")
+        self.assertEqual(self.run_render(), 0)
+        with open(victim) as f:
+            self.assertEqual(f.read(), "untouched\n")
+        path = os.path.join(self.repo, "apps/authelia/config/oidc.pem")
+        self.assertFalse(os.path.islink(path))
+        self.assertEqual(self.read_bytes("apps/authelia/config/oidc.pem"), b"key")
+
+    def test_a_linked_subdirectory_is_refused_and_nothing_is_written(self):
+        elsewhere = os.path.join(self.tmp, "elsewhere")
+        os.makedirs(elsewhere)
+        os.symlink(elsewhere, os.path.join(self.repo, "apps", "authelia", "linked"))
+        self.whole("apps/authelia/linked/oidc.pem.sops", b"key")
+        self.secret(".env.sops", "A=1\n")
+        self.assertEqual(self.run_render(), 1)
+        self.assertEqual(os.listdir(elsewhere), [])
+        self.assertFalse(self.exists(".env"))
+
+    def test_a_whole_file_is_removed_when_its_secrets_file_is_deleted(self):
+        self.whole("apps/authelia/config/oidc.pem.sops", b"key")
+        self.whole("apps/authelia/config/users_database.yml.sops", b"users: {}\n")
+        self.secret("apps/planka/.env.sops", "A=1\n")
+        self.assertEqual(self.run_render(), 0)
+        os.unlink(os.path.join(self.repo, "secrets/apps/authelia/config/users_database.yml.sops"))
+        self.assertEqual(self.run_render(), 0)
+        self.assertFalse(self.exists("apps/authelia/config/users_database.yml"))
+        self.assertTrue(self.exists("apps/authelia/config/oidc.pem"))
+        self.assertTrue(self.exists("apps/planka/.env"))
+        # A second run finds nothing more to remove.
+        self.assertEqual(self.run_render(), 0)
+
+    def test_a_dotenv_file_is_not_removed_when_its_secrets_file_is_deleted(self):
+        self.secret("apps/planka/.env.sops", "A=1\n")
+        self.whole("apps/authelia/config/oidc.pem.sops", b"key")
+        self.assertEqual(self.run_render(), 0)
+        os.unlink(os.path.join(self.repo, "secrets/apps/planka/.env.sops"))
+        self.assertEqual(self.run_render(), 0)
+        self.assertTrue(self.exists("apps/planka/.env"))
+
+    def test_removal_covers_an_emptied_secrets_directory(self):
+        self.whole("apps/authelia/config/oidc.pem.sops", b"key")
+        self.assertEqual(self.run_render(), 0)
+        shutil.rmtree(os.path.join(self.repo, "secrets"))
+        self.assertEqual(self.run_render(), 0)
+        self.assertFalse(self.exists("apps/authelia/config/oidc.pem"))
+
+    def test_removal_leaves_a_link_or_someone_elses_file_alone(self):
+        self.whole("apps/authelia/config/oidc.pem.sops", b"key")
+        self.assertEqual(self.run_render(), 0)
+        os.unlink(os.path.join(self.repo, "secrets/apps/authelia/config/oidc.pem.sops"))
+        victim = os.path.join(self.tmp, "victim")
+        with open(victim, "w") as f:
+            f.write("untouched\n")
+        path = os.path.join(self.repo, "apps/authelia/config/oidc.pem")
+        os.unlink(path)
+        os.symlink(victim, path)
+        self.assertEqual(self.run_render(), 0)
+        self.assertTrue(os.path.islink(path))
+        self.assertTrue(os.path.exists(victim))
+
+    def test_check_mode_writes_no_whole_file_and_records_nothing(self):
+        self.whole("apps/authelia/config/oidc.pem.sops", b"key")
+        self.assertEqual(self.run_render("--check"), 0)
+        self.assertFalse(self.exists("apps/authelia/config/oidc.pem"))
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "state")))
+
+    def test_the_record_is_root_only_and_drops_vanished_repositories(self):
+        self.whole("apps/authelia/config/oidc.pem.sops", b"key")
+        self.assertEqual(self.run_render(), 0)
+        state_dir = os.path.join(self.tmp, "state")
+        self.assertEqual(stat.S_IMODE(os.stat(state_dir).st_mode), 0o700)
+        record = os.path.join(state_dir, render.STATE_FILE)
+        self.assertEqual(stat.S_IMODE(os.stat(record).st_mode), 0o600)
+        with open(record, "a") as f:
+            f.write(f"{self.tmp}/gone-release\tapps/x/y/z\n")
+        self.assertEqual(self.run_render(), 0)
+        with open(record) as f:
+            lines = f.read().splitlines()
+        self.assertEqual(lines, [f"{os.path.realpath(self.repo)}\tapps/authelia/config/oidc.pem"])
+
+
 @unittest.skipUnless(shutil.which("sops") and shutil.which("age-keygen"), "real sops/age not installed")
 class ResticInstallTests(Base):
     """--restic-dir: the rendered backup set is installed for restic and a
@@ -350,6 +550,57 @@ class RealSopsTests(Base):
         argv = ["--repo", self.repo, "--sops", shutil.which("sops"), "--key", self.key, "--owner", ME]
         self.assertEqual(render.main(argv), 0)
         self.assertEqual(self.read("apps/planka/.env"), "SECRET_KEY=s3cret\nDB_PASSWORD=p4ss\n")
+
+    def test_a_whole_file_round_trips_with_real_encryption(self):
+        os.unlink(self.key)
+        subprocess.run(["age-keygen", "-o", self.key], check=True, capture_output=True)
+        pub = subprocess.run(["age-keygen", "-y", self.key], check=True, capture_output=True, text=True).stdout.strip()
+        content = os.urandom(1704) + b"\n-----END-----"  # a key-sized blob, no trailing newline
+        plain = os.path.join(self.tmp, "oidc.pem")
+        with open(plain, "wb") as f:
+            f.write(content)
+        enc = subprocess.run(
+            ["sops", "--encrypt", "--age", pub, "--input-type", "binary", "--output-type", "binary", plain],
+            check=True, capture_output=True,
+        ).stdout
+        self.assertNotIn(content[:16], enc)
+        path = os.path.join(self.repo, "secrets", "apps", "authelia", "config", "oidc.pem.sops")
+        os.makedirs(os.path.dirname(path))
+        os.makedirs(os.path.join(self.repo, "apps", "authelia", "config"))
+        with open(path, "wb") as f:
+            f.write(enc)
+        argv = ["--repo", self.repo, "--sops", shutil.which("sops"), "--key", self.key, "--owner", ME,
+                "--state-dir", os.path.join(self.tmp, "state")]
+        self.assertEqual(render.main(argv), 0)
+        with open(os.path.join(self.repo, "apps/authelia/config/oidc.pem"), "rb") as f:
+            self.assertEqual(f.read(), content)
+        # The same document is refused as a dotenv file and a dotenv document
+        # as a whole file: the name decides the mode, and sops holds it to it.
+        os.rename(path, os.path.join(self.repo, "secrets", "apps", "authelia", "config", "wrong.env.sops"))
+        self.assertEqual(render.main(argv), 1)
+
+    def test_a_tampered_whole_file_fails_cleanly(self):
+        import json
+        os.unlink(self.key)
+        subprocess.run(["age-keygen", "-o", self.key], check=True, capture_output=True)
+        pub = subprocess.run(["age-keygen", "-y", self.key], check=True, capture_output=True, text=True).stdout.strip()
+        plain = os.path.join(self.tmp, "u.yml")
+        with open(plain, "w") as f:
+            f.write("users: {}\n")
+        enc = json.loads(subprocess.run(
+            ["sops", "--encrypt", "--age", pub, "--input-type", "binary", "--output-type", "binary", plain],
+            check=True, capture_output=True,
+        ).stdout)
+        enc["data"] = enc["data"][:-6] + "AAAA" + enc["data"][-6:]
+        path = os.path.join(self.repo, "secrets", "apps", "authelia", "config", "users_database.yml.sops")
+        os.makedirs(os.path.dirname(path))
+        os.makedirs(os.path.join(self.repo, "apps", "authelia", "config"))
+        with open(path, "w") as f:
+            json.dump(enc, f)
+        argv = ["--repo", self.repo, "--sops", shutil.which("sops"), "--key", self.key, "--owner", ME,
+                "--state-dir", os.path.join(self.tmp, "state")]
+        self.assertEqual(render.main(argv), 1)
+        self.assertFalse(self.exists("apps/authelia/config/users_database.yml"))
 
     def test_a_file_encrypted_to_another_key_fails_cleanly(self):
         other = os.path.join(self.tmp, "other.txt")

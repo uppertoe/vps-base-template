@@ -17,8 +17,14 @@ while IFS=$'\t' read -r src rw; do
   # under scaffold/ is tracked when the scaffold's own git tracks it.
   repo=/opt/deploy path="$rel"
   if [[ "$rel" == scaffold/* ]]; then repo=/opt/deploy/scaffold path="${rel#scaffold/}"; fi
-  if ! runuser -u deploy -- git -C "$repo" ls-files --error-unmatch -- "$path" >/dev/null 2>&1; then
-    echo "untracked path bound from the deploy tree: $rel"; bad=1
+  if runuser -u deploy -- git -C "$repo" ls-files --error-unmatch -- "$path" >/dev/null 2>&1; then
+    continue
   fi
+  # A whole file rendered from secrets/ (docs/13 "Whole files") is not tracked
+  # itself; its ciphertext is, and the release renders it in the same place.
+  if [[ "$repo" == /opt/deploy ]] && runuser -u deploy -- git -C /opt/deploy ls-files --error-unmatch -- "secrets/$rel.sops" >/dev/null 2>&1; then
+    continue
+  fi
+  echo "untracked path bound from the deploy tree: $rel"; bad=1
 done < <(printf '%s\n' "$ids" | xargs -r docker inspect --format '{{range .Mounts}}{{if eq .Type "bind"}}{{.Source}}{{"\t"}}{{.RW}}{{"\n"}}{{end}}{{end}}' | grep '^/opt/deploy/' | sort -u)
 exit "$bad"

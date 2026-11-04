@@ -107,6 +107,33 @@ takes its "newer than" mark at the start of a run; `vps-deploy` reads
 
 ---
 
+## 2026-11-04 — Whole files in SOPS: the renderer carries a key or a user list, not only env files
+
+A secrets file whose name does not end in `.env.sops` is now a whole file
+(docs/13 "Whole files"): `vps-secrets-render` decrypts it with sops' binary
+type and writes it byte for byte to its mirrored path, mode `0600`, below a
+subdirectory of its app (`apps/<app>/<dir>/<file>`). The deploy's
+world-readable permission pass skips these files, the release tree's bind
+check accepts a bind of one, and a rendered whole file whose secrets file has
+left the repo is removed at the next render (the record lives in
+`/var/lib/vps-secrets-render/`, root-only). A secrets file that would be
+rendered over a tracked file is refused by CI, by the wrapper and by
+`vps-release`. `check-secrets-encrypted.sh` accepts the binary document.
+
+**Operator actions:**
+
+1. Re-run the site play (`site-quick.yml`) to install the new renderer,
+   wrapper and `deploy` script. Nothing changes until a whole-file secret is
+   committed.
+2. To carry a file this way, encrypt it on the server with
+   `sops --encrypt --filename-override secrets/<path>.sops --input-type binary --output-type binary <path>`
+   and commit the ciphertext as `secrets/<path>.sops`; the file must not be
+   tracked itself. The container that mounts it must run as the rendered
+   file's owner (the deploy account in checkout mode, root under the release
+   tree), because the file is `0600`.
+
+---
+
 ## 2026-11-03 — Restricted mode requires the release tree and the signature gate; the wrapper refuses rewinds
 
 From the 2026-11-03 review (docs/05 "The Repo-to-Root Trust Boundary").

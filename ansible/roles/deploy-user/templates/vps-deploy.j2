@@ -425,6 +425,18 @@ if [[ -d secrets ]]; then
       echo "vps-deploy: ${f#./} is not tracked by git — refusing to decrypt an unreviewed secrets file." >&2
       exit 1
     fi
+    # A whole file (docs/13 "Whole files") is rendered to its mirrored path.
+    # That path must not be a tracked file: the render would replace the
+    # reviewed content with content no reviewer could read.
+    case "$f" in
+      ./secrets/recovery.sops|*.env.sops) ;;
+      *.sops)
+        target="${f#./secrets/}"; target="${target%.sops}"
+        if rootgit --literal-pathspecs ls-files --error-unmatch -- "$target" >/dev/null 2>&1; then
+          echo "vps-deploy: ${f#./} would be rendered over $target, which git tracks — a rendered file never replaces a reviewed one; refusing to deploy." >&2
+          exit 1
+        fi ;;
+    esac
   done < <(find ./secrets -type f -print0)
   /usr/local/sbin/vps-secrets-render --repo /opt/deploy --restic-dir /etc/restic
 fi
@@ -452,9 +464,16 @@ runuser -u {{ deploy_user }} -- find . \
 # user's — readability must not depend on that coincidence. Normalise the
 # container-consumed tree to world-readable, conditionally for the same
 # ctime/AIDE reason as above. Secrets are exactly the .env set locked to 600
-# above and are excluded here.
+# above and the whole files rendered from secrets/ (docs/13 "Whole files",
+# named after their secrets file without ".sops"), and are excluded here.
+rendered_prune=()
+if [[ -d secrets ]]; then
+  while IFS= read -r -d '' f; do
+    rendered_prune+=(-o -path "./${f#./secrets/}")
+  done < <(find ./secrets -type f -name '*.sops' ! -name '*.env.sops' ! -path './secrets/recovery.sops' -print0 | sed -z 's/\.sops$//')
+fi
 runuser -u {{ deploy_user }} -- find ./apps ./scaffold ./.generated ./Caddyfile \
-  \( -name '.env' -o -name '.env.*' \) -prune \
+  \( -name '.env' -o -name '.env.*' "${rendered_prune[@]}" \) -prune \
   -o -type f ! -perm -0004 -exec chmod o+r {} + \
   -o -type d ! -perm -0005 -exec chmod o+rx {} + \
   || echo "vps-deploy: not every container-read file could be made world-readable (a file not owned by {{ deploy_user }}?)" >&2
@@ -496,6 +515,10 @@ changed="$(changed_paths "$old_head" "$new_head")"
 if [[ "$old_scaffold" != "$new_scaffold" ]]; then
   changed="${changed}"$'\n'"scaffold"
 fi
+# A changed secrets file is rendered to its mirrored path (docs/13), which a
+# service may bind-mount (a whole file such as a signing key): count the
+# rendered path as changed too, so that service is recreated.
+changed="${changed}"$'\n'"$(printf '%s\n' "$changed" | sed -n 's#^secrets/\(.*\)\.sops$#\1#p')"
 recreate=()
 if [[ -n "${changed//[[:space:]]/}" ]]; then
   while IFS=$'\t' read -r svc rel; do

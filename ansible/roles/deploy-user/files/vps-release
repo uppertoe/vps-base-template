@@ -174,6 +174,18 @@ do_prepare() {
   check_links "$tmp"
   chown -R root:root "$tmp"
   if [[ -d "$tmp/secrets" ]]; then
+    # A whole file (docs/13 "Whole files") is rendered to its mirrored path,
+    # which must not be a file the commit tracks: the render would replace
+    # reviewed content with content no reviewer could read.
+    while IFS= read -r -d '' f; do
+      case "$f" in secrets/recovery.sops|*.env.sops) continue ;; esac
+      target="${f#secrets/}"; target="${target%.sops}"
+      if rgit --git-dir="$MIRROR" cat-file -e "$commit:$target" 2>/dev/null; then
+        rm -rf -- "$tmp"
+        echo "vps-release: $f would be rendered over $target, which the commit tracks; a rendered file never replaces a reviewed one" >&2
+        exit 1
+      fi
+    done < <(cd "$tmp" && find secrets -type f -name '*.sops' -print0)
     # Its progress lines go to stderr: this function's stdout is the path.
     # --restic-dir: a backup set under secrets/backup/ is installed into
     # /etc/restic by the same step, as in checkout mode (docs/13, Decision 2).

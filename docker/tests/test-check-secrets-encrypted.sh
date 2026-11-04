@@ -87,6 +87,43 @@ d="$(case_repo)"; mkdir -p "$d/secrets"; touch "$d/.sops.yaml"
 printf '%s\nsops_kms__list_0__map_arn=arn:aws:kms:x\n%s\n' "$enc_line" "$meta" > "$d/secrets/.env.sops"
 expect fail "a non-age key source" "$d"
 
+# Whole files (docs/13 "Whole files"): the JSON document SOPS writes for a
+# binary-type file, below a subdirectory of an app.
+whole_doc='{"data":"ENC[AES256_GCM,data:abc=,iv:def=,tag:ghi=,type:str]","sops":{"age":[{"recipient":"age1abc","enc":"x"}],"lastmodified":"2026-11-04T00:00:00Z","mac":"ENC[AES256_GCM,data:m=,iv:a=,tag:b=,type:str]","version":"3.13.3"}}'
+
+d="$(case_repo)"; mkdir -p "$d/secrets/apps/authelia/config"; touch "$d/.sops.yaml"
+printf '%s\n' "$whole_doc" > "$d/secrets/apps/authelia/config/oidc.pem.sops"
+expect pass "an encrypted whole file" "$d"
+
+d="$(case_repo)"; mkdir -p "$d/secrets/apps/authelia/config"; touch "$d/.sops.yaml"
+printf -- '-----BEGIN PRIVATE KEY-----\nplaintext\n' > "$d/secrets/apps/authelia/config/oidc.pem.sops"
+expect fail "a plaintext key named as a whole file" "$d"
+
+d="$(case_repo)"; mkdir -p "$d/secrets/apps/authelia/config"; touch "$d/.sops.yaml"
+printf '{"data":"plaintext","sops":{"mac":"ENC[x]","version":"3.13.3"}}\n' > "$d/secrets/apps/authelia/config/oidc.pem.sops"
+expect fail "a whole-file document whose data is not encrypted" "$d"
+
+d="$(case_repo)"; mkdir -p "$d/secrets/apps/authelia/config"; touch "$d/.sops.yaml"
+printf '%s\n' "${whole_doc/\"age\":/\"kms\":[{\"arn\":\"x\"}],\"age\":}" > "$d/secrets/apps/authelia/config/oidc.pem.sops"
+expect fail "a whole file naming a non-age key source" "$d"
+
+d="$(case_repo)"; mkdir -p "$d/secrets/apps/authelia"; touch "$d/.sops.yaml"
+printf '%s\n' "$whole_doc" > "$d/secrets/apps/authelia/oidc.pem.sops"
+expect fail "a whole file at an app's top level" "$d"
+
+d="$(case_repo)"; mkdir -p "$d/secrets/backup"; touch "$d/.sops.yaml"
+printf '%s\n' "$whole_doc" > "$d/secrets/backup/restic.key.sops"
+expect fail "a whole file outside apps/" "$d"
+
+d="$(case_repo)"; mkdir -p "$d/secrets/apps/authelia/config" "$d/apps/authelia/config"; touch "$d/.sops.yaml"
+printf '%s\n' "$whole_doc" > "$d/secrets/apps/authelia/config/users_database.yml.sops"
+printf 'users: {}\n' > "$d/apps/authelia/config/users_database.yml"
+expect fail "a whole file whose rendered path git tracks" "$d"
+
+d="$(case_repo)"; mkdir -p "$d/secrets"; touch "$d/.sops.yaml"
+printf '%s\n' "$whole_doc" > "$d/secrets/recovery.sops"
+expect fail "a recovery file in the binary form (it is a dotenv file)" "$d"
+
 d="$(case_repo)"; printf 'X=1\n' > "$d/.env.local"; git -C "$d" add -f .env.local
 expect fail "a tracked .env.local" "$d"
 

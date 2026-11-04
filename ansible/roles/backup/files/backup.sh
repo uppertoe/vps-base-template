@@ -674,7 +674,9 @@ backup_service() {
   # backup-freshness, which alerts when a backup silently stops.
   if [[ "$DRY_RUN" != "true" ]]; then
     local stamps="${BACKUP_STAMP_DIR:-/var/lib/vps-backup/success}"
-    mkdir -p "$stamps" 2>/dev/null && date -u +%s > "$stamps/$SERVICE_NAME" 2>/dev/null || true
+    if mkdir -p "$stamps" 2>/dev/null; then
+      date -u +%s > "$stamps/$SERVICE_NAME" 2>/dev/null || true
+    fi
   fi
 }
 

@@ -145,31 +145,9 @@ EOF
 
 bash scaffold/docker/render-caddy-routes.sh
 
-echo "Validating standard compose config"
-"${BASE_COMPOSE[@]}" config >/dev/null
-
-echo "Starting caddy with production config"
-"${BASE_COMPOSE[@]}" up -d caddy >/dev/null
-wait_for_caddy
-wait_for_caddy_healthy
-"${BASE_COMPOSE[@]}" exec -T caddy grep -F 'encode zstd gzip' /tmp/Caddyfile >/dev/null
-# shellcheck disable=SC2016  # literal Caddy placeholder, not a shell variable
-"${BASE_COMPOSE[@]}" exec -T caddy grep -F 'ci.{$DOMAIN}' /tmp/Caddyfile >/dev/null
-assert_http_redirect "ci.example.com"
-
-echo "Validating local override config"
-cp docker-compose.override.yml.example docker-compose.override.yml
-docker compose -f docker-compose.yml -f "$CI_OVERRIDE_FILE" -f docker-compose.override.yml config >/dev/null
-
-echo "Restarting caddy with local override"
-docker compose -f docker-compose.yml -f "$CI_OVERRIDE_FILE" -f docker-compose.override.yml up -d caddy >/dev/null
-wait_for_caddy
-wait_for_caddy_healthy
-"${BASE_COMPOSE[@]}" exec -T caddy grep -F 'encode zstd gzip' /tmp/Caddyfile >/dev/null
-"${BASE_COMPOSE[@]}" exec -T caddy grep -F 'local_certs' /tmp/Caddyfile >/dev/null
-assert_https_body "ci.example.com"
-
-echo "Booting the stock-image data tier with dummy env values"
+# Every compose call from here on interpolates ${VARS}; an app may mark one
+# as required (${VAR:?...}), which fails the very first `config` unless the
+# stubs exist, so they are written before anything runs.
 # Compose interpolates ${VARS} from the project .env; the real values are
 # gitignored secrets. Any var referenced by the compose files gets a dummy so
 # the db/cache tier can actually BOOT in CI — the point is catching
@@ -193,6 +171,30 @@ for example in apps/*/.env.example apps/*/*/.env.example; do
   sed -E 's/^([A-Za-z_][A-Za-z0-9_]*)=$/\1=cidummy0/' "$example" > "$app_env"
   GENERATED_APP_ENVS="$GENERATED_APP_ENVS $app_env"
 done
+
+echo "Validating standard compose config"
+"${BASE_COMPOSE[@]}" config >/dev/null
+
+echo "Starting caddy with production config"
+"${BASE_COMPOSE[@]}" up -d caddy >/dev/null
+wait_for_caddy
+wait_for_caddy_healthy
+"${BASE_COMPOSE[@]}" exec -T caddy grep -F 'encode zstd gzip' /tmp/Caddyfile >/dev/null
+# shellcheck disable=SC2016  # literal Caddy placeholder, not a shell variable
+"${BASE_COMPOSE[@]}" exec -T caddy grep -F 'ci.{$DOMAIN}' /tmp/Caddyfile >/dev/null
+assert_http_redirect "ci.example.com"
+
+echo "Validating local override config"
+cp docker-compose.override.yml.example docker-compose.override.yml
+docker compose -f docker-compose.yml -f "$CI_OVERRIDE_FILE" -f docker-compose.override.yml config >/dev/null
+
+echo "Restarting caddy with local override"
+docker compose -f docker-compose.yml -f "$CI_OVERRIDE_FILE" -f docker-compose.override.yml up -d caddy >/dev/null
+wait_for_caddy
+wait_for_caddy_healthy
+"${BASE_COMPOSE[@]}" exec -T caddy grep -F 'encode zstd gzip' /tmp/Caddyfile >/dev/null
+"${BASE_COMPOSE[@]}" exec -T caddy grep -F 'local_certs' /tmp/Caddyfile >/dev/null
+assert_https_body "ci.example.com"
 
 # The deployment's accepted-exceptions register is keyed by PROD container
 # names (deploy-*); remap to this CI project's names so the same documented

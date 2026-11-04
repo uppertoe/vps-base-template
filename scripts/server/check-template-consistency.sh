@@ -42,17 +42,33 @@ require_file "scripts/provision.sh"
 require_file "scripts/restore.sh"
 require_file "scripts/check-server-files.sh"
 require_file "scaffold/scripts/server/lib/orchestrate.sh"
-require_file "apps/auth/docker-compose.yml"
-require_file "apps/auth/auth.caddy"
-require_file "apps/auth/.env.example"
 
 require_contains "docker-compose.yml" "  - scaffold/docker/caddy.base.yml"
 require_contains "docker-compose.yml" "  - .generated/caddy/networks.yml"
-# apps/auth is enabled on most servers and shipped commented out by the
-# template; either way the include line must be present, so turning the
-# gateway on is a one-character change and never a forgotten app.
-grep -qE '^  (# )?- apps/auth/docker-compose.yml$' docker-compose.yml \
-  || fail "docker-compose.yml must list apps/auth/docker-compose.yml (live or commented)"
+
+# The scaffold gateway (apps/auth) is required unless this server has opted
+# out of it. A server whose .scaffold-server.yml sets gateway_chain: false
+# runs no scaffold gateway at all (its identity source is elsewhere), and a
+# commented include would still render the auth routes, so nothing under
+# apps/auth is required there. The value is read the way the shared CI reads
+# it (docs/14): the first word after the key on a line that starts with the
+# key, so a comment cannot set it. A server without the file is a gateway
+# server, as every server was before the file existed.
+gateway_required=1
+if [[ -f .scaffold-server.yml ]] \
+  && ! grep -qE '^gateway_chain:[[:space:]]*true([[:space:]#]|$)' .scaffold-server.yml; then
+  gateway_required=0
+fi
+if (( gateway_required )); then
+  require_file "apps/auth/docker-compose.yml"
+  require_file "apps/auth/auth.caddy"
+  require_file "apps/auth/.env.example"
+  # apps/auth is enabled on most servers and shipped commented out by the
+  # template; either way the include line must be present, so turning the
+  # gateway on is a one-character change and never a forgotten app.
+  grep -qE '^  (# )?- apps/auth/docker-compose.yml$' docker-compose.yml \
+    || fail "docker-compose.yml must list apps/auth/docker-compose.yml (live or commented)"
+fi
 require_contains ".env.example" "DOMAIN=myserver.example.com"
 require_contains "Caddyfile.local" "    local_certs"
 require_contains "docker-compose.override.yml.example" "      - ./Caddyfile.local:/etc/caddy/Caddyfile:ro"

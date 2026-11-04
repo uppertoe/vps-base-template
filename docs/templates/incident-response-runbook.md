@@ -26,10 +26,15 @@ notices.
 
 ## 3. Containment (class A/D)
 
+Connect as the `admin` account: the deploy account cannot run `sudo` or
+`docker compose` in restricted mode.
+
 ```
 # Freeze inbound except your own admin IP, keep the box for forensics:
 sudo ufw insert 1 allow from ⟨admin IP⟩ to any port 22 proto tcp
 sudo ufw delete allow 80/tcp && sudo ufw delete allow 443/tcp && sudo ufw delete allow 443/udp
+# Freeze the deploy chain, so neither the timer nor a push ping starts a deploy:
+sudo systemctl stop auto-deploy.timer deploy-trigger.service && sudo systemctl mask auto-deploy.service
 # Stop the app stack (containers are disposable; volumes hold the data):
 cd /opt/deploy && docker compose down
 ```
@@ -57,12 +62,18 @@ databases, `/var/lib/vuln-scan`, `docker inspect` of all containers; record
 
 ## 6. Recovery
 
-Reprovision from the scaffold (bootstrap → site-first-run → deploy), restore
-data per `restore.sh` (drill-tested — latest RPO/RTO in
-`/var/lib/backup-drill/latest.txt`), rotate **all** credentials (SSH keys,
-auth `.env` secrets, S3 keys, SES, registry tokens), re-run the audit
-playbooks, then post-incident review within ⟨2 weeks⟩ — findings feed the
-control matrix and this runbook.
+Rebuild the box by the scaffold's docs/09 runbook, in its order: bootstrap,
+site-first-run, the `/opt/deploy` clone, the secrets, the backup playbook,
+deploy, then the data restore from a restic snapshot that predates the
+incident (`scripts/restore.sh`, drill-tested — latest RPO/RTO in
+`/var/lib/backup-drill/latest.txt`). Rotate **all** credentials before the
+stack is redeployed: SSH keys, the gateway's `SESSION_SECRET` and every other
+app secret, S3 keys, SES, ntfy and registry tokens. On a SOPS server
+(⟨yes/no⟩) each secret is changed with `sops` in the server repo and pushed as
+a signed commit, and the old server age key is retired (docs/13); a value
+edited in `.env` on the box is overwritten by the next deploy. Re-run the
+audit playbooks, then post-incident review within ⟨2 weeks⟩ — findings feed
+the control matrix and this runbook.
 
 ## 7. Annual test
 

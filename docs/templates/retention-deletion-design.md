@@ -24,7 +24,7 @@ database retains the record.
 |---|---|---|---|---|
 | ⟨app⟩ | ⟨clinical records⟩ | 7yr/age-25 (HPP 4.2) | ⟨app admin function / none — records kept indefinitely⟩ | ⟨where the app writes HPP 4.3 logs⟩ |
 | auth service | accounts, session data | operational — removed when access revoked | admin removal + key rotation | quarterly access review entries |
-| host logs | auditd/auth/access | 12 months (ISM-1988) ⟨pending off-host shipping, B3⟩ | age-based rotation | n/a (not health records) |
+| host logs | auditd/auth/access | 12 months (ISM-1988) in the Object-Locked log bucket written by the `log-export` role | age-based rotation on the box; bucket lifecycle off it | n/a (not health records) |
 
 ## Decommissioning
 

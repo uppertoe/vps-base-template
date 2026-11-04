@@ -151,8 +151,8 @@ CIS with something else. What the Victorian stack adds is:
 | OS hardened to vendor/ASD guidance (ISM-1409; VPDSS E11.090) | CIS L1 (opt-in L2) via devsec + baseline-hardening; OpenSCAP + tailoring file; exceptions register | ✅ strong — cite USG/CIS chain in SSP |
 | Container/daemon hardening (CIS Docker) | §1–4 docker-bench, §5 audit-compose + KICS; digest-pinned caddy | ✅ (benchmark version refresh pending) |
 | Key-only SSH, no root, protected keys (ISM-0484/0485/1449) | Enforced; root locked; single `deploy` user | ✅ |
-| MFA for privileged users (ISM-1173; E8 ML2) | SSH key-only; auth tier email-OTP single factor; admin TOTP **off by default** | ⚠️ gap — WS-B4 |
-| Admin privilege lifecycle (E8 ML2: 12-month revalidation, 45-day dormancy) | Single high-trust `deploy` account, no review cadence | ⚠️ document + WS-A6 |
+| MFA for privileged users (ISM-1173; E8 ML2) | SSH key-only for host admin; app admins email-OTP **plus TOTP**, on by default (docs/07); regular users email-OTP by design | ✅ (WS-B4 shipped) |
+| Admin privilege lifecycle (E8 ML2: 12-month revalidation, 45-day dormancy) | Deploy and admin split built behind `deploy_restricted_mode` and in force on both production servers (docs/05); quarterly access review cadence in docs/05 | ✅ (WS-B10 and WS-A6 shipped) |
 | Patch SLAs 48h/2wk + daily scanning (ISM; E8 ML1) | unattended-upgrades + patch-window reboots + daily vuln-scan timer + PATCH-SLA journal | ✅ (WS-B2 shipped) |
 | Logs searchable 12 months, off-host, tamper-protected (ISM-1988/1815) | log-export → write-only Object-Locked S3 ≥12 months; weekly digest = automated review | ✅ (WS-B3 shipped) |
 | Encryption at rest (HPP 4 "reasonable steps"; VPDSS E11.140) | swap encrypted (random key/boot); root + data volumes still plain | ⚠️ WS-B1.2–3 (next provision) |
@@ -214,14 +214,15 @@ generic templates in the scaffold (`docs/templates/`).
 - **A7 · Supplier-assessment pack.** Pre-answered security questionnaire (ISO
   27001-*aligned* program description mapped to the SSP, pen-test/vuln posture = the
   evidence bundle, SDLC = CI gates), so a hospital procurement/security review can be
-  answered in a day. Generalise into
-  `docs/compliance-handover-template.md` (roadmap P2-2 absorbs into this).
+  answered in a day. A general handover template is still to be written
+  (roadmap P2-2 absorbs into this); `docs/templates/README.md` is the index
+  of the templates that exist.
 
 ### WS-B · Technical controls (scaffold changes; each lands with its evidence artifact)
 
 - **B1 · Encryption at rest** *(roadmap P0-1; HPP 4, VPDSS E11.140)* —
-  1. **Now:** encrypted swap by default (`/etc/crypttab` random-key
-     `aes-xts-plain64`, or zram) in `os-hardening`; closes the PII-in-swap hole on
+  1. **Now (shipped):** encrypted swap by default (`/etc/crypttab` random-key
+     `aes-xts-plain64`, behind a zram device) in the `common` role; closes the PII-in-swap hole on
      existing boxes. 2. **Opt-in:** LUKS-on-loopback/gocryptfs data-volume mount for
      app/DB volumes (`host_encrypt_data_dir`). 3. **Next provision:** provider-level
      encrypted volumes or LUKS root with remote unlock — a *provisioning-path decision*;
@@ -262,7 +263,7 @@ generic templates in the scaffold (`docs/templates/`).
   unrelated app containers sharing a proxy network unnecessarily. Turns an ISM control into a CI
   gate. Evidence: audit-compose report.
 - **B7 · External dead-man's switch** *(VPDSS Std 7; roadmap P1-5)* — `notify`-role
-  timer curling Healthchecks.io/UptimeRobot (`deadman_switch_url`, opt-in). Evidence:
+  timer curling a Gatus or Healthchecks endpoint (`notify_deadman_url`; required by the play unless `notify_deadman_accept_none` is set). Evidence:
   monitor history screenshot/export in the bundle.
 - **B8 · One-command evidence bundle** *(roadmap P2-2, upgraded)* — `audit-all.yml`:
   OpenSCAP (L2 profile for this deployment profile), docker-bench, audit-compose,
@@ -276,12 +277,12 @@ generic templates in the scaffold (`docs/templates/`).
   auth/ntfy images by digest; watch items recorded in the exceptions register: SSG
   profiles still track CIS Ubuntu 24.04 **v1.0.0** (catalogue now v2.0.0, June 2026)
   and docker-bench trails CIS Docker **v1.8.0** — adopt as upstream content lands.
-- **B10 · Deploy/admin privilege split** *(E8 restrict-admin; docs/05 target model)* —
-  implement the documented-but-unbuilt split: `deploy` loses passwordless-ALL sudo and
-  the docker group in `deploy_restricted_mode`; `admin` break-glass account.
-  De-prioritised below B1–B8 (single-operator reality; auditd already records sudo),
-  but it closes the loudest finding in docs/05 and the `sudo_require_authentication`
-  L2 exception shrinks with it.
+- **B10 · Deploy/admin privilege split** *(E8 restrict-admin; docs/05)* —
+  **shipped and in force on both production servers:** `deploy` loses
+  passwordless-ALL sudo and the docker group in `deploy_restricted_mode`, which
+  requires the release tree and signed deploys (docs/15); `admin` is the
+  break-glass account with a dedicated key. The `sudo_require_authentication`
+  L2 exception now applies to `admin` only on those hosts.
 
 ### WS-C · Per-deployment decisions (documented, not coded)
 
@@ -340,11 +341,12 @@ generic templates in the scaffold (`docs/templates/`).
 | **1 · Ship what's started** (days) | Commit audit-vuln + daily timer (B2), restore drill (B5), digest-pin CI gate (B9), dead-man's switch (B7) | Low | Roadmap "now" items, already half-built on this branch |
 | **2 · Evidence layer** (1–2 weeks) | Control matrix + SSP (A1), asset register/BIL (A2), jurisdiction record (A3/C1), IR runbook (A5), retention note (A4), scope determination (C3) | Low–Med, mostly writing | Highest audit leverage per hour; unblocks any review happening *now* |
 | **3 · Control gaps** (2–4 weeks) | Encrypted swap (B1.1), off-host logs Tier 1 (B3), TOTP default + access-model docs (B4, A6), tier-separation gate (B6), audit-all bundle (B8) | Med | The four named-control gaps auditors will actually cite |
-| **4 · Structural** (next provision / org dependency) | Volume/FDE encryption (B1.2–3), SIEM forwarding Tier 2 (B3), EDR decision (C2), privilege split (B10), supplier pack (A7) | Med–High | Need a rebuild, an external destination, or a counterparty |
+| **4 · Structural** (next provision / org dependency) | Volume/FDE encryption (B1.2–3), SIEM forwarding Tier 2 (B3), EDR decision (C2), supplier pack (A7); the privilege split (B10) has since shipped | Med–High | Need a rebuild, an external destination, or a counterparty |
 
 > Status note (2026-07-05): Phases 1 and 3 shipped (feat/security-audit-remediation);
 > a filled worked example of the WS-A pack lives in server-instance-template
-> `docs/compliance-pack/`. Outstanding: B4 (TOTP flip), B1.2–3, C1/C2 decisions, A7.
+> `docs/compliance-pack/`. Outstanding: B1.2–3, C1/C2 decisions, A7. B4 (TOTP
+> on by default) and B10 (the privilege split) have since shipped.
 >
 > Keep this plan, the [roadmap](compliance-roadmap.md), and the docs/08 exceptions
 > register in lock-step as items land. Re-verify the fast-moving facts at each audit:

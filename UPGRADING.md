@@ -1,10 +1,59 @@
 # Upgrading an existing instance
 
-Server repos pin this scaffold as a git submodule, so **nothing changes on a
-live VPS until you bump the pointer and re-run the site play**. The mechanics
-are always the same; what varies is the *operator actions* that accompany a
-given range of scaffold changes — that's what this file records.
+Server repos pin this scaffold as a git submodule. Renovate bumps the pointer
+and the automatic deploy ships the compose and Caddy parts of a change; the
+host layer (roles, timers, scripts) changes only when an operator re-runs the
+site play. The mechanics are always the same (docs/12); what varies is the
+*operator actions* that accompany a given range of scaffold changes — that's
+what this file records.
 
+## How to upgrade
+
+1. Note your current pointer date: `git -C scaffold log -1 --format=%cs`
+2. Bump the pointer, unless Renovate already has. By hand:
+   `git -C scaffold fetch && git -C scaffold checkout <commit>`, then
+   `bash scaffold/scripts/server/check-server-files.sh --fix` and
+   `bash scaffold/docker/render-caddy-routes.sh`, review `git status`, and
+   commit `scaffold`, `scripts`, `.github`, `.gitignore`, `.generated` and
+   any other file the check wrote (`git add -A`). CI fails on drift if the
+   workflow callers or the rendered routes do not match the new commit
+   (docs/14 "Bumping the pointer").
+3. **Read every entry below dated after your old pointer** and collect the
+   operator actions.
+4. Re-run the site play (`site-quick.yml`, or `site-first-run.yml` when an
+   entry says so), then the entry-specific actions. On a restricted-mode
+   server the inventory connects as `admin`; the deploy account cannot run a
+   site play.
+5. Re-baseline evidence: `ansible-playbook -i ansible/hosts
+   scaffold/ansible/audit-all.yml`, and acknowledge the expected AIDE delta
+   (`sudo aide-rebaseline` records the diff to the journal first).
+
+Entries are newest-first. Skipping several versions is fine — apply the union
+of the actions, once.
+
+---
+
+## 2026-11-04 — Documentation brought into line with restricted mode, SOPS and the release tree
+
+No code lands with this entry. The docs now describe the platform as it runs:
+the rebuild and LTS runbooks say that `restore.sh` and `provision.sh` assume
+default mode and a checkout, docs/04 and docs/07 say where a secret is changed
+on a SOPS server (`sops` on the laptop, never `.env` on the box), docs/12
+says that Renovate bumps the pointer, docs/11 freezes `deploy-trigger.service`
+as well as the timer, and the compliance templates cite SOPS, TOTP-on and
+restricted mode as the controls.
+
+**Operator actions:**
+
+1. `restore.sh` now stops when the recovered inventory sets
+   `deploy_restricted_mode` or `deploy_release_tree`. For a rebuild, set both
+   to `false` with `ansible_user=deploy`, complete the drill, then restore
+   the settings and run `site-quick.yml` as `admin` (docs/09).
+2. In each server repo's `compliance/` pack, re-read control-matrix rows 5,
+   16, 24 to 27 and the incident-response recovery section against the
+   updated templates, and bring the filled copies up to date.
+
+---
 
 ## 2026-11-04 — Ansible corrections from the 2026-11-03 review
 
@@ -147,38 +196,29 @@ to `/opt/deploy-legacy` and makes `/opt/deploy` a link to the release. See
 1. Every file the running stack reads from `/opt/deploy` must be tracked, and
    no container may write into `/opt/deploy`. The play checks this and lists
    any offending bind mount.
-2. Set `deploy_repo_url` if the checkout's `origin` is not the server repo's
-   GitHub URL.
+2. In restricted mode, set `deploy_repo_url` and `deploy_verify_signature:
+   true` in the inventory; the play refuses the release tree without them,
+   because root must not deploy whatever a URL read from the deploy account's
+   checkout serves. In default mode, set `deploy_repo_url` if the checkout's
+   `origin` is not the server repo's GitHub URL.
 3. Move any hand-placed file out of `/opt/deploy` (into SOPS, a volume, or
    elsewhere): a release contains only what git tracks.
+4. The read-only deploy key must exist at `/home/deploy/.ssh/github-deploy`
+   (`deploy_release_key_source`); the play copies it to
+   `/etc/vps-scaffold/deploy-key` for root's fetches.
 
-**After the first release deploy:** `vps-deploy --rollback` switches back to
-the previous release; `sudo vps-git log` reads root's mirror; remove
-`/opt/deploy-legacy` once the server has deployed cleanly from releases.
-
----
-
-## How to upgrade
-
-1. Note your current pointer date: `git -C scaffold log -1 --format=%cs`
-2. Bump: `git submodule update --remote --merge scaffold && git add scaffold
-   && git commit -m "chore: update scaffold" && git push`
-3. **Read every entry below dated after your old pointer** and collect the
-   operator actions.
-4. Re-run the site play (`site-quick.yml`, or `site-first-run.yml` when an
-   entry says so), then the entry-specific actions.
-5. Re-baseline evidence: `ansible-playbook -i ansible/hosts
-   scaffold/ansible/audit-all.yml`, and acknowledge the expected AIDE delta
-   (`sudo aide-rebaseline` records the diff to the journal first).
-
-Entries are newest-first. Skipping several versions is fine — apply the union
-of the actions, once.
+**After the first release deploy:** `sudo vps-deploy --rollback` as admin
+switches back to the previous release; `sudo vps-git log` reads root's
+mirror; remove `/opt/deploy-legacy` once the server has deployed cleanly from
+releases.
 
 ---
 
 ## 2026-11-03 — A deploy recreates only what changed
 
-**What lands automatically on the next `site-quick.yml`:** `vps-deploy` no
+**What lands automatically on the next `site-quick.yml`:** `vps-deploy`,
+which every automatic deploy and every restricted-mode or release-tree
+`./deploy` runs, no
 longer runs `docker compose up --force-recreate` for the whole stack. Compose
 recreates a container itself when its image, definition or environment (env
 file contents included) changed; the wrapper additionally recreates the
@@ -191,7 +231,9 @@ health deadline because every other app is starting beside it (prod-rch-vps,
 
 **What to check:** a hook that relied on the full recreate (none known) must
 recreate its own service. A file read once at start-up that is NOT
-bind-mounted from the repo is unaffected, as before.
+bind-mounted from the repo is unaffected, as before. A hand-run `./deploy` on
+a default-mode server in the checkout layout does not go through the wrapper
+and still recreates every container.
 
 ---
 
@@ -355,7 +397,7 @@ and the SOPS encryption check, each switched by `.scaffold-server.yml`.
   sat in `system.slice` until now will fail the audit until the server repo
   places them.
 
-**Operator actions:**
+**Operator actions (memory tiers):**
 
 1. In the server repo, give every container that has no `cgroup_parent` one:
    `cgroup_parent: vps-data.slice` for Postgres, Redis and the apps the
@@ -401,6 +443,24 @@ and the SOPS encryption check, each switched by `.scaffold-server.yml`.
   box and a network console is the remaining option; see docs/09.
 - Do not test with `echo c > /proc/sysrq-trigger` on a production host. The
   recipe for a throwaway VM is in docs/09 §"The crash record".
+
+---
+
+## 2026-11-02 — Secrets phase 1: age, sops and the server key land on every host
+
+**What lands automatically on the next `site-quick.yml`:** the deploy-user
+role installs `age` from the Ubuntu archive, the pinned and checksum-verified
+`sops` release (`deploy_secrets_sops_version`, 3.13.3) and
+`vps-secrets-render`, creates the server's age key in
+`/etc/vps-scaffold/age/` (root `0400`) and prints its public key. Nothing is
+decrypted until the server repo carries a `secrets/` directory.
+
+**Operator actions:** none until the server adopts SOPS; the adoption steps
+are in docs/13 "Adopting on a server".
+
+---
+
+## 2026-10-11 — Deploy wrapper executes only the verified HEAD; off-host Caddy logs; audit rules load at boot
 
 **What lands automatically on the next `site-quick.yml`:**
 
@@ -448,8 +508,6 @@ and the SOPS encryption check, each switched by `.scaffold-server.yml`.
 
 ---
 
-## 2026-10-11 — Deploy wrapper executes only the verified HEAD; off-host Caddy logs; audit rules load at boot
-
 ## 2026-07-04 — Hands-off update fast path
 
 **What lands automatically on the next `site-quick.yml`:** the
@@ -468,8 +526,10 @@ require an operator (they carry the actions in this file) — the weekly
 
 1. Enable the fast path per host: `deploy_auto_update=true` in
    `ansible/hosts`, re-run `site-quick.yml`.
-2. Install the Mend Renovate app on your server repo (and the scaffold, if
-   you fork it) — automerge does nothing until Renovate is opening PRs.
+2. Have Renovate run against your server repo (and the scaffold, if you fork
+   it) — automerge does nothing until Renovate is opening PRs. (This entry
+   named the Mend app; Renovate has run on the fleet's self-hosted runner
+   since 2026-07-11.)
 3. First run by hand to see the loop end-to-end:
    `sudo systemctl start auto-deploy.service` (no-op when already current).
 
@@ -526,7 +586,8 @@ next bump.
 7. Evidence: copy [docs/templates/](docs/templates/) into the server repo's
    `compliance/` and fill them in; run `audit-all.yml` for the baseline
    bundle; update the docs/08 register verification log with the date.
-8. Optional: enable the Mend Renovate app (configs are ready in both repos);
+8. Optional: have Renovate run against the repo (configs are ready in both
+   repos; the fleet's self-hosted runner has replaced the Mend app since);
    the weekly digest-freshness workflow covers drift detection either way.
 
 **Watch-outs:** the encrypted-swap conversion prefers a quiet window; the

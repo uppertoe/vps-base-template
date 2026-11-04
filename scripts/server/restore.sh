@@ -117,6 +117,18 @@ run inv_set_hostline ansible_host "$NEW_IP"
 run ssh-keygen -R "$NEW_IP"
 SSH_TARGET="$(inv_get ansible_user)@$NEW_IP"; [[ "$SSH_TARGET" == "@$NEW_IP" ]] && SSH_TARGET="deploy@$NEW_IP"
 export SSH_TARGET
+# The rebuild below clones /opt/deploy as the connecting account and runs
+# ./deploy from its home, which is the default access model with a checkout
+# (docs/09). A restricted-mode or release-tree inventory would make it clone
+# as admin into a directory the deploy account owns, so stop here and say what
+# to change; the settings go back once the box serves.
+for flag in deploy_restricted_mode deploy_release_tree; do
+  case "$(inv_get "$flag" | tr '[:upper:]' '[:lower:]')" in
+    true|yes|1)
+      die "ansible/hosts sets $flag. restore.sh rebuilds in the default access model with a checkout at /opt/deploy: set deploy_restricted_mode and deploy_release_tree to false and ansible_user=deploy for the rebuild, then restore them and run site-quick.yml as admin once the box serves (scaffold/docs/09-recovery.md)." ;;
+  esac
+done
+[[ "$SSH_TARGET" == "deploy@$NEW_IP" ]] || die "ansible_user is '${SSH_TARGET%@*}'; restore.sh clones /opt/deploy and runs ./deploy as the deploy account, so set ansible_user=deploy for the rebuild (scaffold/docs/09-recovery.md)."
 ok "host $HOST_ALIAS -> $NEW_IP (ssh as $SSH_TARGET)"
 
 # --- 3/10 bootstrap (prompt #2) -------------------------------------------

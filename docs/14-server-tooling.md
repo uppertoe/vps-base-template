@@ -67,8 +67,22 @@ submodule for the same reason.
 git -C scaffold fetch && git -C scaffold checkout <commit>
 bash scaffold/scripts/server/check-server-files.sh --fix   # the shims may be new
 bash scaffold/docker/render-caddy-routes.sh                # the renderer may have changed
-git add scaffold scripts .github .gitignore .generated && git commit
+git status                                                 # review what the check wrote
+git add -A && git commit
 ```
+
+`git add -A` after reviewing `git status`, because besides `scaffold`,
+`scripts`, `.github` and `.generated` the check may also write root files
+such as `ansible.cfg`, `Caddyfile.local`,
+`docker-compose.override.yml.example` and the `.gitignore` block, and seed
+`.scaffold-server.yml`; a file left unstaged fails CI on drift.
+
+On a server where Renovate manages the submodule, its scaffold bump runs the
+same `check-server-files.sh --fix` as a post-upgrade task in the branch
+(`renovate.json5` in the server repo, allow-listed on the fleet runner), so
+the pull request carries the refreshed files. Renovate does not run the
+renderer; if a bump changes the rendered routes, CI reports the drift and the
+re-render is committed by hand.
 
 ## Adding a shared script
 

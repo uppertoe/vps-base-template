@@ -26,8 +26,8 @@ Each layer has one governing benchmark and one tool that measures it. Nothing is
 | **Host OS** | CIS Ubuntu 24.04 LTS **Level 1 – Server** (v1.0.0) | `os-hardening`, `ssh-hardening`, `baseline-hardening`, `common`, `firewall` roles (devsec.hardening + custom) | `audit-openscap.yml` (OpenSCAP + SSG + tailoring) |
 | **Host (2nd opinion)** | Lynis hardening index (not a benchmark — a drift signal) | same roles | `audit-lynis.yml` |
 | **Docker daemon / host** | CIS Docker Benchmark **§1–4** | `docker` + `firewall` + `baseline-hardening` roles | `audit-docker.yml` (docker-bench-security) |
-| **Containers (runtime)** | CIS Docker Benchmark **§5** | per-service compose declarations (`caddy.base.yml`, `apps/*/docker-compose.yml`) | `audit-compose.yml` + CI compose-lint (KICS) |
-| **Images (supply chain)** | Trivy CVE policy + Dockle best-practice | digest pins + weekly freshness check (Renovate app optional for auto-PRs) | CI (`Trivy`, `Dockle`) |
+| **Containers (runtime)** | CIS Docker Benchmark **§5** | per-service compose declarations (`caddy.base.yml`, `apps/*/docker-compose.yml`) | `audit-compose.yml` + the server repo's compose smoke test; KICS lints the scaffold's own compose files in `compliance-audits.yml` |
+| **Images (supply chain)** | Trivy CVE policy + Dockle best-practice | digest pins + weekly freshness check + Renovate bump PRs (self-hosted runner) | server repos: Trivy in the container-security workflow; scaffold: Trivy and Dockle in `compliance-audits.yml` |
 
 ### Why these tools, and the version reality
 
@@ -100,7 +100,7 @@ quantity, not an open question. Verified live on the staging host 2026-07-05
 | Ports 80/443 open; bound to all interfaces (UFW + KICS) | A public reverse proxy must listen publicly. (Docker Bench 5.8, KICS privileged-ports / host-interface.) |
 | `net.ipv4.ip_forward=1` | Docker requires IP forwarding. |
 | UFW kept instead of nftables | The scaffold uses UFW + Docker-aware `DOCKER-USER` filtering deliberately. |
-| `deploy` user in the `docker` group (Docker Bench 1.1.2) | One half of a single accepted risk: **in default mode, `deploy` is root-equivalent** (docker group here + passwordless sudo, see the L2 `sudo_require_authentication` row — same risk, one entry in spirit). Compensating: key-only SSH, single operator, auditd on sudo/docker paths, quarterly access review. **Closure implemented:** `deploy_restricted_mode` (docs/05) removes both grants; flip before any second operator is added. |
+| `deploy` user in the `docker` group (Docker Bench 1.1.2), default mode only | One half of a single accepted risk: **in default mode, `deploy` is root-equivalent** (docker group here + passwordless sudo, see the L2 `sudo_require_authentication` row — same risk, one entry in spirit). Compensating: key-only SSH, single operator, auditd on sudo/docker paths, quarterly access review. **Closed on both production servers:** `deploy_restricted_mode` (docs/05) removes both grants and is in force on RCH and MCH; the exception applies only to a server still in default mode, and is to be closed before any second operator is added there. |
 | Caddy keeps `cap_add: NET_BIND_SERVICE` | Single retained capability so Caddy binds 80/443 as a non-root user. It still `cap_drop: ALL` first. |
 | ufw logging off (`host_ufw_logging`) | Per-packet `[UFW BLOCK]` lines (582 in two hours on a live host, all background internet noise) were the largest single consumer of the journal budget that bounds on-box retention. The rules, their counters (`iptables -nvL`) and the evidence capture (`ufw status verbose`) are unaffected, and fail2ban logs its own bans from sshd. Blocked packets are then recorded nowhere: the auditd rule set does not cover netfilter. Set `"low"` on a host that wants them in the journal and the hourly export. |
 | `log_martians` lines from Docker bridges | `net.ipv4.conf.all.log_martians=1` is kept for the benchmark. Containers' gratuitous ARP on the `172.x` bridge networks at start trips it (about 400 lines per boot on a twenty-container host); these are the stack's own interfaces, not spoofed traffic, and are accepted as noise rather than silenced, since the sysctl is per-interface and the bridges are ephemeral. |
@@ -163,23 +163,32 @@ ansible-playbook -i ansible/hosts scaffold/ansible/audit-openscap.yml \
 
 ### Secrets handling (design position)
 
-Secrets are **file-based by design**: per-app `.env` files (gitignored, forced
-to 0600, owner-only), root-owned config under `/etc/restic` and
-`/etc/vps-scaffold` (0600). No secrets manager is used — a deliberate call,
-not an omission:
+On a server that has adopted SOPS ([13-secrets.md](13-secrets.md)), which
+every production server has, secrets are kept in the server repo as
+age-encrypted files and rendered into the `.env` files at deploy by the
+root-run wrapper, root-owned under the release tree. The recovery root is the
+offline recovery key together with `secrets/recovery.sops`, which holds the
+inventory, and `secrets/backup/`, which holds the restic configuration. No
+hosted secrets manager is used: SOPS with age gives a reviewed history of
+every change, per-server keys, and a rebuild from the repo and one key, which
+is what a manager would have been for at this scale. On a server that has not
+adopted SOPS, the per-app `.env` files (gitignored, forced to 0600) and the
+`env-files` restic backup remain the arrangement. Root-owned configuration
+under `/etc/restic` and `/etc/vps-scaffold` is 0600 in both cases.
 
 | Aspect | Treatment |
 |--------|-----------|
-| At rest on host | 0600 file perms + single-operator access model (restricted mode confines readers to root/admin); disk-level encryption is the open B1 register item and is the real at-rest control. Swap is zram first (compressed pages held in RAM, nothing written) with the random-key encrypted swapfile as overflow, so paged-out secrets never persist. |
-| In containers | Compose `env_file:` puts values in container env, visible to `docker inspect` / `/proc/*/environ`. **Accepted**: only root/admin (and the daemon) can inspect; apps publish no ports and log via journald (no env dumps). Improvement path when images support `*_FILE`: Compose file-based `secrets:`. |
-| Change detection | The deploy tree (incl. `.env` files) is AIDE-monitored with content hashing (`DeployConf`); auditd records writes. |
-| Off-host / DR | The `env-files` files-only restic service (server template) keeps client-side-encrypted copies; its repository+passphrase pair is the **recovery root**, held in the operator's password manager — the one secret deliberately kept off-box. Backups add no marginal on-box exposure (root already reads the live files) and are ciphertext off-box. Note: rotated secrets persist in old snapshots until retention prunes them — rotation must revoke the credential at its issuer, not merely replace the file. |
+| In git | Ciphertext only; CI (`check-secrets-encrypted.sh`, switched by `secrets_sops` in `.scaffold-server.yml`) fails on any plaintext env file or any line left unencrypted. The signed-commit gate covers the secrets as it covers every other file. |
+| At rest on host | Rendered files 0600, root-owned in a release; the server's age key is root `0400`. Restricted mode confines readers to root/admin. Disk-level encryption is the open B1 register item and is the real at-rest control. Swap is zram first (compressed pages held in RAM, nothing written) with the random-key encrypted swapfile as overflow, so paged-out secrets never persist. |
+| In containers | Compose `env_file:` puts values in container env, visible to `docker inspect` / `/proc/*/environ`. **Accepted**: only root/admin (and the daemon) can inspect; apps publish no ports and log via journald (no env dumps). Improvement path (docs/13 phase 2, not built): Compose file-based `secrets:` where images support `*_FILE`. |
+| Change detection | A release never changes after its export; `vps-release verify` (daily timer, `OnFailure` alert) checks the live release, rendered secrets included, against the manifest written when it was prepared, and AIDE leaves `/opt/deploy-releases` alone so a deploy no longer forces a whole-host re-baseline. In the checkout layout the deploy tree including the `.env` files is AIDE-monitored with content hashing (`DeployConf`). auditd records writes in both. |
+| Off-host / DR | SOPS server: the repository on GitHub plus the recovery key in the password manager rebuild the box (`restore.sh --from-sops`); the old server key is treated as exposed after a rebuild, because git history keeps ciphertext it can open, so every value is rotated rather than re-encrypted. Server without SOPS: the `env-files` restic service keeps client-side-encrypted copies, and its repository+passphrase pair is the recovery root in the password manager. In both cases rotated secrets persist in old snapshots until retention prunes them, so rotation must revoke the credential at its issuer, not merely replace the file. |
 | Rotation | Quarterly access review (docs/05): rotate anything unexplained or older than 12 months; app-level secrets (SESSION_SECRET etc.) per their app docs. |
 | In-app | The auth service envelope-encrypts reversible secrets (AES-256-GCM) rather than trusting file perms alone; AWS credentials are minted least-privilege per function (backup RW-scoped; log export write-only). |
 
-A secrets manager is re-evaluated when any of: a second operator (per-person
-access + audit trail), a second host (central rotation), or an app requiring
-dynamic credentials.
+A hosted secrets manager is re-evaluated if an app comes to need dynamic
+credentials, or if per-person access to secrets is required; the estate
+already has several hosts, and SOPS covers them from one owner key.
 
 ### Benchmark version lag (watch items)
 
@@ -204,6 +213,11 @@ events here:
   data tier (`memory_tier` audit control); desktop-era and Ubuntu Pro apt
   hooks masked; ufw logging off and `log_martians` bridge noise accepted
   (rows above); the weekly prune removes unused tagged images by ID.
+- **2026-11-03** — Restricted mode on the release tree with the signature
+  gate is in force on prod-rch-vps and the MCH server; on those hosts the
+  docker-group and `sudo_require_authentication` exceptions no longer apply
+  to the deploy account. Secrets are SOPS files rendered at deploy on both,
+  and the recovery bundle is retired there.
 - **2026-07-03** — AIDE exceptions narrowed (blanket `/var/lib` removed),
   pre-re-baseline recording added, deploy root-equivalence closure
   (`deploy_restricted_mode`) implemented; restricted posture proven by
@@ -294,6 +308,19 @@ autotailor \
   xccdf_org.ssgproject.content_profile_cis_level1_server
 ```
 
+The list above is not complete. The current tailoring file also deselects
+`aide_build_database`, the standalone-nftables rules
+(`package_nftables_installed`, `service_nftables_disabled`,
+`set_nftables_base_chain`), `sysctl_net_ipv4_ip_forward` and
+`package_ufw_removed` in the L1 profile, and regenerating from the list above
+alone would re-select them, after which the register overclaims. Before
+regenerating, list every rule the file deselects and pass one `-u` line for
+each:
+
+```bash
+grep -o 'idref="[^"]*" selected="false"' ansible/files/openscap/ssg-ubuntu2404-tailoring.xml
+```
+
 Then re-add the header comment (XML comments must not contain `--`) and confirm
 with `oscap info ssg-ubuntu2404-tailoring.xml`. Add or remove `-u` lines to match
-the host-OS exceptions table above.
+the host-OS exceptions tables above, which the `grep` must agree with.

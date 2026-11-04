@@ -25,16 +25,21 @@ provides everything specific to that VPS.
 | Path | Purpose |
 |------|---------|
 | `ansible/roles/common` | Base packages, auto-updates, fail2ban, swap (zram + encrypted file), monitoring, earlyoom |
-| `ansible/roles/deploy-user` | Non-root deploy user, SSH key, sudoers |
+| `ansible/roles/deploy-user` | The deploy and admin accounts, sudoers, the root-owned wrappers (`vps-deploy`, `vps-release`, `vps-secrets-render`), the server's age key |
 | `ansible/roles/ssh-hardening` | Hardens sshd (wraps dev-sec.io) |
 | `ansible/roles/os-hardening` | Kernel-level hardening (wraps dev-sec.io) |
+| `ansible/roles/baseline-hardening` | auditd and its rule sets, AIDE, AppArmor, sysctls, the CIS closures devsec leaves open |
 | `ansible/roles/docker` | Docker CE + compose plugin, memory tier slices, weekly prune timer |
 | `ansible/roles/firewall` | UFW + Docker-aware filtering for published ports |
-| `ansible/roles/backup` | Hourly PostgreSQL → Restic backups + off-hour weekly verification |
-| `ansible/bootstrap.yml` | Run once as root — creates deploy user |
+| `ansible/roles/backup` | Hourly PostgreSQL → Restic backups + off-hour weekly verification + monthly restore drill |
+| `ansible/roles/vuln-scan` | Daily Trivy scan of the running images, with the fixable-CRITICAL alert |
+| `ansible/roles/log-export` | Hourly journal, audit and Caddy log export to an Object-Locked bucket |
+| `ansible/roles/notify` | ntfy delivery, dead-man's switch, panic guard, crash record, weekly digest |
+| `ansible/bootstrap.yml` | Run once as root — creates the deploy and admin users |
 | `ansible/site-first-run.yml` | Heavier first-run/compliance pass — includes safe upgrade + AIDE init |
 | `ansible/site-quick.yml` | Explicit fast day-to-day apply path |
-| `ansible/audit-*.yml` | Lynis, OpenSCAP, docker-bench security audits |
+| `ansible/audit-*.yml` | `audit-all` (the evidence bundle), OpenSCAP, Lynis, docker-bench, `audit-compose` (CIS Docker §5), `audit-vuln` (Trivy) |
+| `scripts/` | Repo tooling, the compliance page renderer |
 | `docker/caddy.base.yml` | Base Caddy service — included by server repos |
 | `scripts/server/`, `server-files/`, `.github/workflows/server-*.yml` | The server repos' CI checks, operator scripts and reusable workflows; servers carry shims kept in step by `check-server-files.sh` (docs/14) |
 | `molecule/default/` | Role deployment tests — Ubuntu 24.04 |
@@ -55,14 +60,22 @@ a submodule and includes the backup configuration structure.
 | [docs/02-local-testing.md](docs/02-local-testing.md) | Molecule test suite + backup integration tests |
 | [docs/03-provisioning-a-server.md](docs/03-provisioning-a-server.md) | Full provisioning walkthrough |
 | [docs/04-server-repo.md](docs/04-server-repo.md) | Server repo structure and conventions |
-| [docs/05-access-model.md](docs/05-access-model.md) | Future split-trust deploy/admin access model |
+| [docs/05-access-model.md](docs/05-access-model.md) | The deploy and admin access model, restricted mode, and the repo-to-root trust boundary |
 | [docs/06-auditing.md](docs/06-auditing.md) | How to run each audit tool (OpenSCAP, Lynis, docker-bench, audit-compose) |
 | [docs/07-auth.md](docs/07-auth.md) | Passwordless email one-time-code login for apps (forward_auth) |
 | [docs/08-security-model.md](docs/08-security-model.md) | Security model: which benchmark governs each layer + the exceptions register |
+| [docs/09-recovery.md](docs/09-recovery.md) | Rebuilding a lost box, the rebuild drill and RTO log, the panic guard and crash record |
+| [docs/10-lts-migration.md](docs/10-lts-migration.md) | Moving instances to the next Ubuntu release |
+| [docs/11-incident-response.md](docs/11-incident-response.md) | Containment, evidence, notification duties and rebuild after a suspected compromise |
+| [docs/12-applying-scaffold-updates.md](docs/12-applying-scaffold-updates.md) | How scaffold changes reach an existing box (the two lanes, the site play) |
+| [docs/13-secrets.md](docs/13-secrets.md) | SOPS-encrypted secrets in git, rendered at deploy |
+| [docs/14-server-tooling.md](docs/14-server-tooling.md) | The shared server tooling and CI workflows, carried by the pointer |
+| [docs/15-release-tree.md](docs/15-release-tree.md) | The release tree: root fetches, verifies and exports each deploy |
 
 ## CI
 
-GitHub Actions runs three checks on pushes to `main` and on pull requests:
+GitHub Actions runs four jobs on pushes to `main` and on pull requests:
+- lint (shellcheck, python, the renderer and secrets checks, playbook syntax)
 - Molecule `default`
 - Molecule `backup`
 - `backup/tests/integration/run_tests.sh`
@@ -83,18 +96,25 @@ vps-base-template/
 ├── ansible/
 │   ├── roles/
 │   │   ├── common/          # base packages, auto-updates, fail2ban, swap (zram + encrypted file), monitoring, earlyoom
-│   │   ├── deploy-user/     # non-root user + SSH key + sudoers
+│   │   ├── deploy-user/     # deploy + admin accounts, sudoers, root-owned wrappers, server age key
 │   │   ├── ssh-hardening/   # wraps dev-sec.io ssh_hardening
 │   │   ├── os-hardening/    # wraps dev-sec.io os_hardening
+│   │   ├── baseline-hardening/  # auditd, AIDE, AppArmor, sysctls, CIS closures
 │   │   ├── docker/          # Docker CE + compose plugin, memory tier slices, weekly prune timer
 │   │   ├── firewall/        # ufw + Docker-aware published-port filtering
-│   │   └── backup/          # hourly PostgreSQL → Restic backups + off-hour weekly verification
+│   │   ├── backup/          # hourly PostgreSQL → Restic backups + weekly verification + restore drill
+│   │   ├── vuln-scan/       # daily Trivy scan of running images
+│   │   ├── log-export/      # hourly off-host log export (Object-Locked bucket)
+│   │   └── notify/          # ntfy, dead-man's switch, panic guard, crash record, digest
 │   ├── bootstrap.yml
 │   ├── site-first-run.yml
 │   ├── site-quick.yml
+│   ├── audit-all.yml
 │   ├── audit-lynis.yml
 │   ├── audit-openscap.yml
 │   ├── audit-docker.yml
+│   ├── audit-compose.yml
+│   ├── audit-vuln.yml
 │   ├── group_vars/all.yml
 │   └── requirements.yml
 ├── backup/
@@ -106,7 +126,9 @@ vps-base-template/
 │   ├── Caddyfile.example
 │   └── Caddyfile.local.example
 ├── molecule/
-│   ├── default/             # Ubuntu 24.04 — all roles
+│   ├── default/             # Ubuntu 24.04 — all roles, restricted mode
 │   └── backup/              # Ubuntu 24.04 — backup role deployment
+├── scripts/                 # repo tooling; scripts/server/ is the servers' shared tooling (docs/14)
+├── server-files/            # canonical copies of what every server repo carries
 └── docs/
 ```

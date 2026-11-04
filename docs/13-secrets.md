@@ -1,7 +1,7 @@
 # Secrets: SOPS-encrypted in git, Docker secrets at runtime
 
-**Status (2026-11-02): phase 1 is built in the scaffold; no server has adopted
-it yet.** The owner has made both decisions below. Phase 2 is not built.
+**Status (2026-11-04): phase 1 is built and in use on MCH, RCH and markbot.**
+The owner has made both decisions below. Phase 2 is not built.
 
 ## The problem this solves
 
@@ -97,10 +97,12 @@ In default mode, `./deploy` runs the same render step through `sudo`, since
 only root can read the server key. The automatic deploy always uses the root
 wrapper.
 
-The outputs stay gitignored and keep today's owner (the deploy user, mode
-`600`), because default-mode deploys and some app hooks read them as that
-user. The server key therefore protects nothing the deploy user cannot already
-read once rendered; never encrypt a root-only secret to it.
+The outputs stay gitignored. In checkout mode they keep the deploy user as
+owner, mode `600`, because default-mode deploys and some app hooks read them
+as that user; under the release tree (docs/15) `vps-release` renders them
+root-owned, mode `600`, inside the release. In checkout mode the server key
+therefore protects nothing the deploy user cannot already read once rendered;
+never encrypt a root-only secret to it.
 
 The render step runs as root inside a checkout the deploy user owns. In
 restricted mode that user is not root-equivalent, so the step is built not to
@@ -127,7 +129,10 @@ let them write, read or hang anything they could not already
   under `secrets/` is not a SOPS-encrypted dotenv file in which every line is
   encrypted, empty or SOPS' age metadata, if `secrets/` exists without
   `.sops.yaml`, or if git tracks a plain env file (`.env`, `*.env`, `.env.*`).
-  A server repo adds it to `static-checks`, so it adds no minutes.
+  A server repo turns it on with `secrets_sops: true` in its
+  `.scaffold-server.yml`; the shared CI (docs/14) then runs the check in its
+  static checks, so it adds no minutes. The server's `ci.yml` is a canonical
+  copy and is not edited directly.
 - **Tracked files only (built):** the wrapper refuses an untracked file under
   `secrets/`.
 - **Pre-commit (not built):** the same check as an optional hook for the
@@ -240,8 +245,9 @@ ciphertext travels to the laptop to be committed.
 
    Every line should read `same`, apart from files where dead values were
    removed on purpose.
-5. **Switch.** Add `bash scaffold/docker/check-secrets-encrypted.sh` to the
-   server repo's `static-checks`, then deploy. The first deploy reports each
+5. **Switch.** Set `secrets_sops: true` in the server repo's
+   `.scaffold-server.yml`, so the shared CI runs
+   `check-secrets-encrypted.sh`, then deploy. The first deploy reports each
    file as `written` (the blank-line normalisation); later deploys report
    `unchanged`.
 6. **From then on,** change a secret with `sops secrets/apps/<app>/.env.sops`
@@ -277,16 +283,17 @@ with a custom entrypoint.
 
 ## What this does not protect against
 
-- **A deploy-user race against the whole deploy (pre-existing).** The wrapper
-  checks a checkout the deploy user can still write to, then uses it. In
-  restricted mode, a deploy user who edits the tree during a run gets past the
+- **A deploy-user race against the whole deploy, in the checkout layout.** The
+  checkout-mode wrapper checks a checkout the deploy user can still write to,
+  then uses it. A deploy user who edits the tree during a run gets past the
   clean-tree, tracked-file and signature checks: changing an app hook or a
   compose file after the checks already gives root execution, without any of
   this feature. The render step adds no new way through, because it reads each
-  file once through no-follow handles. The lasting fix is for root to deploy
-  from a root-owned snapshot of the verified commit (for example `git archive`
-  into `/run`) rather than the live checkout. That is an architecture decision
-  for the owner, recorded here and not yet made.
+  file once through no-follow handles. The release tree (docs/15) closes this
+  window: root fetches, verifies and exports each commit into a tree the
+  deploy account cannot write, and renders the secrets into it. Restricted
+  mode requires the release tree for that reason, and both production servers
+  run on it. On a server still in the checkout layout, the window remains.
 
 - Root on a server can read that server's key and every secret in use. That is
   no change, since root could read them from the running containers anyway.

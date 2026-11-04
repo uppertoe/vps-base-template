@@ -77,12 +77,19 @@ investigating at leisure.
 2. **Cut inbound exposure** at the provider firewall/console (all ports, or
    all but your own IP for SSH). Prefer the provider layer: it works even if
    the host firewall is attacker-controlled.
-3. **Freeze the deploy chain** — the repo is a root-execution path:
-   `systemctl stop auto-deploy.timer`, and disable Renovate automerge (or lock
-   `main`) until the incident is closed. If GitHub account compromise is
+3. **Freeze the deploy chain** — the repo is a root-execution path. As
+   `admin`, run `sudo systemctl stop auto-deploy.timer deploy-trigger.service`
+   and `sudo systemctl mask auto-deploy.service`, so that neither the timer
+   nor a push ping from the server repo's workflow can start a deploy
+   (`deploy-trigger` starts `auto-deploy.service` on every ping, so stopping
+   the timer alone is not a freeze). Then disable Renovate automerge, or lock
+   `main`, until the incident is closed. If GitHub account compromise is
    plausible, rotate its credentials and review recent merges NOW.
 4. **Break-glass access** is the `admin` account (docs/05). Assume `deploy`
-   and any app-level identity are burned.
+   and any app-level identity are burned. If the admin key is the same as the
+   deploy key (`deploy_admin_key_allow_shared`, or the default before a
+   dedicated key was set), treat `admin` as burned too and work from the
+   provider console.
 5. If health information exposure is possible, treat containment steps as
    evidence too — screenshot provider console actions into the incident log.
 
@@ -149,9 +156,14 @@ Before cutover:
 
 1. Rotate **everything in the recovery set** (inventory tokens, `.env`
    secrets, backup credentials, SMTP, ntfy tokens) and the auth service's
-   `SESSION_SECRET` (invalidates all sessions). On a SOPS server that is an
-   edit to the files under `secrets/`, committed and deployed; on a bundle
-   server re-run `make-recovery-bundle.sh` afterwards.
+   `SESSION_SECRET` (invalidates all sessions). On a SOPS server, change each
+   value with `sops` on the laptop and commit signed; `restore.sh --from-sops`
+   puts the rebuilt box's new server key on `.sops.yaml` and re-encrypts the
+   files to it, and that commit must be on `main` before the first deploy.
+   Treat the old server's age key as exposed: git history still holds
+   ciphertext it can open, which is why every value is rotated rather than
+   re-encrypted (docs/13). On a bundle server, re-run
+   `make-recovery-bundle.sh` as `admin` once the rotation is done.
 2. Rotate SSH keys and GitHub credentials if the vector is unclear.
 3. Repoint the dead-man's switch and ntfy at the new box before DNS cutover.
 4. Close the vector: the fix lands as a PR (scaffold or instance), with the
@@ -163,6 +175,9 @@ Before cutover:
   made, fix. Store it with the instance's compliance evidence.
 - Record the recovery time in docs/09's RTO log — real incidents are the
   drill nobody wanted.
-- Re-enable auto-deploy and automerge once `main` is trusted again.
+- Re-enable the deploy chain once `main` is trusted again: as `admin`,
+  `sudo systemctl unmask auto-deploy.service` and
+  `sudo systemctl start auto-deploy.timer deploy-trigger.service`, then turn
+  Renovate automerge back on.
 - If any control failed silently (an alert that should have fired and
   didn't), that's a scaffold bug — fix it upstream so every instance gets it.

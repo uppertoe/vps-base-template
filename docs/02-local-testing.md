@@ -4,7 +4,7 @@ Two test layers cover different things:
 
 | Layer | What it tests | Tool |
 |-------|---------------|------|
-| Molecule `default` | All roles deploy correctly on Ubuntu + Debian | Molecule + Docker |
+| Molecule `default` | All roles deploy correctly on Ubuntu 24.04, in restricted mode | Molecule + Docker |
 | Molecule `backup` | Backup role deploys scripts/config with correct permissions | Molecule + Docker |
 | Integration tests | `backup.sh` and `restore.sh` actually work end-to-end | Bash + Docker |
 
@@ -17,14 +17,18 @@ running anything on a real server. No VPS needed.
 
 ### What the `default` scenario covers
 
-Runs all roles against **Ubuntu 24.04** and **Debian 12** and verifies:
-- The `deploy` user exists with the correct SSH key and sudo access
+Runs every role against **Ubuntu 24.04**, the one platform in
+`molecule/default/molecule.yml`. The scenario converges in **restricted mode**
+(`deploy_restricted_mode: true` with the signature gate in `converge.yml`), so
+CI continuously proves the posture both production servers run. It verifies:
+- The `deploy` user exists with the correct SSH key
 - The deployed SSH key matches the configured `ansible_ssh_private_key_file`
 - `authorized_keys`, sudoers, and the deploy helper script have the expected ownership and permissions
+- Deploy's sudoers is the wrapper-only allowlist (`vps-deploy`, `vps-app-manage`, `vps-app-logs`) and carries no `NOPASSWD:ALL`
+- Deploy is not in the `docker` group; `admin` exists with full sudo and the docker group
 - SSH password authentication is disabled
-- Root SSH login is disabled and SSH is restricted to `deploy`
+- Root SSH login is disabled and SSH is restricted to `deploy` and `admin`
 - Docker and the compose plugin are installed
-- The deploy user is in the `docker` group
 - UFW is active and exposes exactly the expected ports
 - `/opt/deploy` exists and is owned by `deploy`
 
@@ -50,13 +54,6 @@ molecule converge && molecule verify
 
 # Log in to a container for inspection
 molecule login --host ubuntu-2404
-```
-
-### Targeting a single distro
-
-```bash
-molecule test -- -l ubuntu-2404
-molecule test -- -l debian-12
 ```
 
 ### What the `backup` scenario covers
@@ -99,7 +96,6 @@ molecule converge -- -vvv    # very verbose
 
 ```bash
 docker pull geerlingguy/docker-ubuntu2404-ansible:latest
-docker pull geerlingguy/docker-debian12-ansible:latest
 ```
 
 **A verify assertion fails**

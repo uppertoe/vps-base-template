@@ -5,6 +5,11 @@
 > accepted-exceptions register, and how to interpret each tool for *this* kind of
 > host. This page covers *how to run* each tool.
 
+On a server in restricted mode the inventory must connect as `admin`
+(`ansible_user=admin`), because the deploy account cannot become root; every
+audit playbook below needs that, and the `ssh <host> 'sudo …'` commands are
+run through the admin alias. In default mode the deploy alias serves.
+
 Complementary tools give you confidence that the server is hardened to an
 industry standard — not just "custom scripts that seem reasonable":
 
@@ -126,12 +131,19 @@ servers. Level 2 is stricter and appropriate for high-security environments.
 | `cis_level2_server` | High-security environments |
 | `stig` | US government / DISA compliance |
 
-To change profile, set the variable at run time:
+Tailoring is on by default, and a tailored scan uses
+`openscap_tailoring_profile`, so to measure Level 2 pass the tailored L2
+profile:
 
 ```bash
-ansible-playbook -i ansible/inventory/myserver ansible/audit-openscap.yml \
-  -e "openscap_profile=xccdf_org.ssgproject.content_profile_cis_level2_server"
+ansible-playbook -i ansible/hosts scaffold/ansible/audit-openscap.yml \
+  -e openscap_tailoring_profile=xccdf_org.ssgproject.content_profile_cis_level2_server_cloud_vps
 ```
+
+`openscap_profile` takes effect only when `openscap_tailoring_file` is set to
+an empty string, which scans against the untailored benchmark and reports the
+accepted exceptions as failures. Overriding `openscap_profile` alone changes
+nothing, and the report it produces is still Level 1.
 
 ### Interpreting failures
 
@@ -142,8 +154,11 @@ public web server. Common intentional failures to understand and document:
 |-------------|------------------------|
 | Disable IPv6 | May be required by your hosting provider or future tooling |
 | Restrict `su` to wheel group | Our deploy user uses sudo, not su |
-| Audit framework (auditd) | Not installed by default — consider adding if compliance requires it |
 | `/tmp` on separate partition | Requires partitioning at VPS creation time |
+
+auditd is installed and enabled by the `baseline-hardening` role
+(`os_auditd_enabled: true`), with the full CIS L2 rule set on hosts that set
+`baseline_cis_l2_audit_rules`.
 
 For each failure, decide: fix it, accept the risk (and document why), or note
 it as a known trade-off. The HTML report includes the rationale for each rule.
@@ -174,8 +189,8 @@ explicit maintenance run, or accepted as an intentional exception.
 (`ansible/files/openscap/ssg-ubuntu2404-tailoring.xml`). It covers the
 separate-partition mount options and GRUB passwords (deselected as cloud-N/A), plus
 public-web-server and Docker exceptions (`ip_forward`, UFW-over-nftables, the
-`deploy` user in the `docker` group, ports 80/443, and Caddy's single retained
-capability).
+`deploy` user in the `docker` group in default mode only, ports 80/443, and
+Caddy's single retained capability).
 
 > Note: `/tmp` and `/var/tmp` are no longer exceptions — the `os-hardening` role now
 > mounts them as size-capped tmpfs with `nodev,nosuid,noexec`, so the corresponding
@@ -259,8 +274,11 @@ ansible-playbook -i ansible/inventory/myserver ansible/audit-compose.yml
 Findings map to the app's `docker-compose.yml` (see
 [04-server-repo.md](04-server-repo.md) for the §5 block). Accept a control with
 `audit_compose_exceptions` and record it in
-[08-security-model.md](08-security-model.md). The same controls are linted in CI
-(KICS) and verified against the live caddy in the server repo's compose smoke test.
+[08-security-model.md](08-security-model.md). The same controls are verified
+against the live caddy in the server repo's compose smoke test; the
+container-security workflow scans the images with Trivy. KICS and Dockle run
+only in the scaffold's own `compliance-audits.yml`, against the scaffold's
+compose files.
 
 ---
 
@@ -286,7 +304,7 @@ updates sit unapplied despite unattended-upgrades.
 # Ad-hoc, with artifacts fetched into reports/
 ansible-playbook -i ansible/inventory/myserver ansible/audit-vuln.yml
 
-# Evidence trail on the host
+# Evidence trail on the host (through the admin alias in restricted mode)
 ssh <host> 'ls /var/lib/vuln-scan/ && cat /var/lib/vuln-scan/$(date -u +%F)/summary.txt'
 journalctl -u pending-security-updates --grep PATCH-SLA
 ```
@@ -306,12 +324,14 @@ default) and achieved **RTO** (restore duration). Any failure fires the
 `OnFailure=notify@` push.
 
 ```bash
-# On demand (all services, or one)
-ssh <host> 'sudo /opt/backup/restore-drill.sh'
-ssh <host> 'sudo /opt/backup/restore-drill.sh --service myapp'
+# On demand (all services, or one). On a restricted-mode server run these
+# through the admin alias: the deploy account cannot use sudo for them, and
+# /var/lib/backup-drill is mode 0750, so it cannot read the reports either.
+ssh <admin-alias> 'sudo /opt/backup/restore-drill.sh'
+ssh <admin-alias> 'sudo /opt/backup/restore-drill.sh --service myapp'
 
 # Latest evidence
-ssh <host> 'cat /var/lib/backup-drill/latest.txt'
+ssh <admin-alias> 'sudo cat /var/lib/backup-drill/latest.txt'
 ```
 
 ---

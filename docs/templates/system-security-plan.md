@@ -18,7 +18,7 @@ held: ⟨e.g. BIL-2 / OFFICIAL: Sensitive — identifiable health information⟩
 
 ⟨Diagram or description: single Ubuntu 24.04 VPS · Docker Compose stack ·
 Caddy reverse proxy terminating TLS on 80/443 (only published ports) ·
-per-app containers on the `caddy` network · per-app PostgreSQL where used ·
+each app on its own proxy network, which only Caddy shares · per-app PostgreSQL where used ·
 restic backups to ⟨S3 destination + region⟩ · ntfy alerting + external
 dead-man's-switch monitor ⟨name⟩.⟩
 
@@ -57,15 +57,22 @@ Model: [docs/05-access-model.md](../05-access-model.md). Current holders:
 
 | Access | Who | Factor(s) | Reviewed |
 |---|---|---|---|
-| SSH (`deploy`) | ⟨names⟩ | ed25519 key (passphrase-protected) | ⟨date⟩ |
+| SSH (`deploy`): deploys only (wrapper-only sudo in restricted mode) | ⟨names⟩ | ed25519 key (passphrase-protected) | ⟨date⟩ |
+| SSH (`admin`): break-glass, full sudo | ⟨names⟩ | dedicated ed25519 key (passphrase-protected) | ⟨date⟩ |
 | App admin | ⟨emails⟩ | email OTP + TOTP | ⟨date⟩ |
 | Backup S3 credentials | on-host root config | — | ⟨date⟩ |
 | Registry / GitHub | ⟨names⟩ | ⟨MFA type⟩ | ⟨date⟩ |
 
-**Secrets classes and rotation** (docs/08 “Secrets handling”): ⟨list per
-class — app `.env` secrets, restic passphrases, AWS keys, ntfy/deadman tokens —
-with owner, storage, rotation cadence (≤12 months or on personnel change), and
-the recovery-root password-manager entry for the `env-files` repository⟩.
+Access model in force: ⟨restricted mode on the release tree with signed
+deploys / default mode⟩.
+
+**Secrets classes and rotation** (docs/08 “Secrets handling”, docs/13): ⟨list
+per class — app secrets, restic passphrases, AWS keys, ntfy/deadman tokens,
+and the age keys that protect the SOPS files (the server key on the box, the
+owner key on the operator's laptop, the recovery key offline) — with owner,
+storage location, rotation cadence (≤12 months or on personnel change), and
+the password-manager entry for the recovery key (or, on a server without
+SOPS, the recovery-root entry for the `env-files` repository)⟩.
 
 Quarterly access review entries: ⟨link to review log in server repo⟩.
 

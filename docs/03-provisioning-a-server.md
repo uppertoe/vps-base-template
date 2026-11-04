@@ -5,8 +5,9 @@ A full walkthrough from creating a VPS to a hardened, Docker-ready server.
 ## Fast path — `./provision.sh`
 
 Your server repo ships `scripts/provision.sh`, a re-runnable orchestrator that
-chains every step below — bootstrap → hardening → AWS → backups → deploy →
-alerting → recovery set → strict verify — into one idempotent command:
+chains every step below — bootstrap → hardening → AWS → clone and secrets →
+backups → deploy → alerting → recovery set → strict verify — into one
+idempotent command:
 
 ```bash
 scripts/provision.sh <host>              # <host> = your inventory alias
@@ -21,14 +22,22 @@ buckets in the same pass with `--aws-backup-bucket/--aws-backup-user` and
 `--aws-logs-bucket/--aws-logs-user` (needs an AWS admin profile via
 `--aws-profile`). You still create the VPS and cut DNS over yourself.
 
+`provision.sh` assumes the default access model and a checkout at
+`/opt/deploy`: it connects as the inventory's `ansible_user` and runs `sudo`,
+`docker compose` and `./deploy` through that account. Provision a new server
+in default mode, and switch to restricted mode as the last step (Step 14),
+once the box serves.
+
 The manual step-by-step below is the reference — what `provision.sh` runs in
-order, and the fallback when a stage needs hand-holding.
+order, and the fallback when a stage needs hand-holding. Every command is run
+from the server repo root, where `ansible.cfg` applies the transport settings
+for a slow or lossy link.
 
 ## Step 1 — Create a VPS
 
 At your hosting provider (Hetzner, DigitalOcean, Vultr, etc.):
 
-1. Choose **Ubuntu 24.04 LTS** (or Debian 12)
+1. Choose **Ubuntu 24.04 LTS**
 2. Choose your server size (smallest works fine for a start)
 3. **Paste your SSH public key** when prompted — this is how you'll connect:
    ```bash
@@ -50,11 +59,10 @@ ssh root@YOUR_SERVER_IP
 
 ## Step 2 — Create an inventory file
 
-In your server repo (or temporarily in this scaffold for testing), create an
-inventory file from the example:
+In your server repo, create the inventory from the example:
 
 ```bash
-cp ansible/inventory/production.example ansible/inventory/myserver
+cp ansible/hosts.example ansible/hosts
 ```
 
 `myserver` is just an example alias. Rename it if you like, but use the same
@@ -72,6 +80,10 @@ ansible_ssh_private_key_file=~/.ssh/id_ed25519
 ansible_python_interpreter=/usr/bin/python3
 ```
 
+`ansible/hosts` is gitignored. On a server that keeps its secrets in SOPS
+([13-secrets.md](13-secrets.md)) the inventory is also stored encrypted in
+`secrets/recovery.sops`, which is what a rebuild reads it back from.
+
 ## Step 3 — Install Ansible dependencies
 
 If you haven't already:
@@ -82,10 +94,11 @@ ansible-galaxy collection install -r scaffold/ansible/requirements.yml
 
 ## Step 4 — Run the bootstrap playbook (once, as root)
 
-This creates the `deploy` user and installs base packages. Connects as root.
+This creates the `deploy` and `admin` users and installs base packages.
+Connects as root.
 
 ```bash
-ansible-playbook -i ansible/inventory/myserver ansible/bootstrap.yml
+ansible-playbook -i ansible/hosts scaffold/ansible/bootstrap.yml
 ```
 
 Expected output: a series of green `ok` and yellow `changed` lines. No red
@@ -93,16 +106,18 @@ Expected output: a series of green `ok` and yellow `changed` lines. No red
 
 > **If your provider gave you a root password instead of SSH key access:**
 > ```bash
-> ansible-playbook -i ansible/inventory/myserver ansible/bootstrap.yml --ask-pass
+> ansible-playbook -i ansible/hosts scaffold/ansible/bootstrap.yml --ask-pass
 > ```
 > You'll be prompted for the root password.
 
 **What this does:**
 - Updates all packages
 - Installs common tools (curl, git, fail2ban, etc.)
-- Creates the `deploy` user
-- Copies your SSH public key into `/home/deploy/.ssh/authorized_keys`
-- Grants `deploy` passwordless sudo
+- Creates the `deploy` user and the `admin` break-glass user
+- Copies your SSH public key into each account's `authorized_keys`
+- Grants `deploy` passwordless sudo (default mode) and `admin` full sudo
+- Creates the server's age key and prints its public half (also kept in
+  `/etc/vps-scaffold/age/key.pub`)
 
 ## Step 5 — Verify deploy user access
 
@@ -134,20 +149,20 @@ This applies SSH hardening, OS hardening, installs Docker, configures the
 firewall, and enables the slower first-run/compliance tasks.
 
 ```bash
-ansible-playbook -i ansible/inventory/myserver ansible/site-first-run.yml
+ansible-playbook -i ansible/hosts scaffold/ansible/site-first-run.yml
 ```
 
 Use the quick path for routine updates later:
 
 ```bash
-ansible-playbook -i ansible/inventory/myserver ansible/site-quick.yml
+ansible-playbook -i ansible/hosts scaffold/ansible/site-quick.yml
 ```
 
 **What this does:**
-- Hardens SSH (disables root login, password auth, restricts to deploy user)
+- Hardens SSH (disables root login, password auth, restricts to deploy and admin)
 - Applies OS-level kernel hardening (dev-sec.io)
 - Installs Docker CE and the compose plugin
-- Adds `deploy` to the `docker` group
+- Adds `deploy` to the `docker` group (default mode)
 - Configures UFW: allow 22, 80, 443 (TCP); 443 (UDP for HTTP/3)
 
 ## Step 7 — Verify the result
@@ -173,26 +188,89 @@ The quick site playbook is safe to re-run at any time. Changes to roles or
 variables will be applied on the next run:
 
 ```bash
-ansible-playbook -i ansible/inventory/myserver ansible/site-quick.yml
+ansible-playbook -i ansible/hosts scaffold/ansible/site-quick.yml
 ```
 
 To re-run the heavier first-run/compliance pass:
 
 ```bash
-ansible-playbook -i ansible/inventory/myserver ansible/site-first-run.yml
+ansible-playbook -i ansible/hosts scaffold/ansible/site-first-run.yml
 ```
 
 To apply only specific roles:
 
 ```bash
 # Only Docker-related tasks
-ansible-playbook -i ansible/inventory/myserver ansible/site-quick.yml --tags docker
+ansible-playbook -i ansible/hosts scaffold/ansible/site-quick.yml --tags docker
 
 # Only hardening tasks
-ansible-playbook -i ansible/inventory/myserver ansible/site-quick.yml --tags hardening
+ansible-playbook -i ansible/hosts scaffold/ansible/site-quick.yml --tags hardening
 ```
 
-## Step 8 — Alerting and availability
+## Step 8 — Clone the server repo and place the secrets
+
+The site play creates `/opt/deploy` but does not clone into it. Clone the
+server repo there as the deploy account. A private repo needs a read-only
+deploy key on the box: create one at `/home/deploy/.ssh/github-deploy`
+(the path the release tree later expects, `deploy_release_key_source`) and
+register its public half as a deploy key on the repo in GitHub.
+
+```bash
+ssh myserver 'git clone --recurse-submodules <server-repo> /opt/deploy'
+```
+
+Then the secrets. Where they come from depends on whether the server keeps
+them in SOPS ([13-secrets.md](13-secrets.md)):
+
+- On a SOPS server the box renders its own `.env` files from `secrets/` at
+  every deploy, so nothing is copied to it. Put the server's public key from
+  Step 4 on the secrets rule in `.sops.yaml`; if the repo already carries
+  encrypted files (a rebuild), run `sops updatekeys -y` on every file under
+  `secrets/` except `recovery.sops`, and if it does not yet, encrypt them as
+  described in [13-secrets.md](13-secrets.md) "Adopting on a server". Commit
+  signed and push. Do not edit `.env` on the box: the next deploy overwrites it.
+- On a server without SOPS, copy the server `.env` and each `apps/*/.env`
+  into `/opt/deploy` on the box, owned by `deploy`, mode `600`.
+
+## Step 9 — Backups and off-host logs
+
+The AWS resources are created from your laptop, then land via Ansible:
+
+```bash
+pip install boto3
+# Backup bucket + scoped IAM user → values into backup/config.env
+python3 scripts/aws-backup-setup.py --profile my-aws-admin --bucket myserver-backups --iam-user myserver-backup
+# Object-locked log bucket + WRITE-ONLY IAM user → log_export_* vars into ansible/hosts
+python3 scripts/aws-logs-setup.py --profile my-aws-admin --bucket myserver-logs --iam-user myserver-log-writer
+```
+
+On a SOPS server the restic configuration lives in `secrets/backup/`
+(`config.env.sops` and `services/<name>.env.sops`), and the renderer installs
+it into `/etc/restic` at every deploy; encrypt `backup/config.env` and each
+service file with `sops` and commit them. On a server without SOPS, keep
+`backup/config.env` and `backup/services/*.env` on your laptop in the server
+repo, including the `env-files` service that backs up the `.env` files
+themselves, and install them with the backup playbook:
+
+```bash
+cp backup/services/env-files.env.example backup/services/env-files.env
+$EDITOR backup/services/env-files.env
+# >>> This service's RESTIC_REPOSITORY + RESTIC_PASSWORD is the recovery root
+# >>> after a total loss. Step 12 packages it, with every other secret that is
+# >>> not in git, into one encrypted bundle. That step is not optional.
+
+ansible-playbook -i ansible/hosts scaffold/ansible/site-quick.yml
+ansible-playbook -i ansible/hosts ansible/backup.yml
+```
+
+The backup playbook is run in both cases on a fresh box: it installs restic
+and the backup units. Then deploy the stack:
+
+```bash
+ssh myserver ./deploy
+```
+
+## Step 10 — Alerting and availability
 
 ```bash
 # On the server: mint an ntfy publish token, then set it in the inventory
@@ -202,64 +280,18 @@ ssh myserver 'cd /opt/deploy && docker compose exec ntfy ntfy token add admin'
 # Dead-man's switch (host-down alarm) — Gatus external endpoint or
 # Healthchecks URL; see ansible/hosts.example for both dialects:
 #   notify_deadman_url=...   notify_deadman_token=...   (Gatus)
-ansible-playbook -i ansible/inventory/myserver ansible/site-quick.yml
-```
-
-## Step 9 — Backups, secret recovery, off-host logs
-
-All three run from your laptop against AWS, then land via Ansible:
-
-```bash
-pip install boto3
-# Backup bucket + scoped IAM user → values into backup/config.env
-python3 scripts/aws-backup-setup.py --profile my-aws-admin --bucket myserver-backups --iam-user myserver-backup
-# Object-locked log bucket + WRITE-ONLY IAM user → log_export_* vars into ansible/hosts
-python3 scripts/aws-logs-setup.py --profile my-aws-admin --bucket myserver-logs --iam-user myserver-log-writer
-
-# Secret recovery (the .env files exist only on the box otherwise):
-cp backup/services/env-files.env.example backup/services/env-files.env
-$EDITOR backup/services/env-files.env
-# >>> This service's RESTIC_REPOSITORY + RESTIC_PASSWORD is the recovery root
-# >>> after a total loss. You do not have to hand-copy it: Step 13 packages it
-# >>> (and every other not-in-git secret) into one encrypted bundle. Do that
-# >>> step — it is not optional.
-
 ansible-playbook -i ansible/hosts scaffold/ansible/site-quick.yml
-ansible-playbook -i ansible/hosts ansible/backup.yml
 ```
 
-## Step 10 — Auth tier (if any app needs a login wall)
+## Step 11 — Auth tier (if any app needs a login wall)
 
-Uncomment the `apps/auth` include, create `apps/auth/.env` (keep
+Uncomment the `apps/auth` include, create the gateway's settings (keep
 `TOTP_ENABLED=true` — admins get email-OTP **plus** TOTP), and guard routes
-with `import protected <upstream>`. See [07-auth.md](07-auth.md).
+with `import protected <upstream>`. On a SOPS server the settings are
+`secrets/apps/auth/.env.sops`; on a server without SOPS they are
+`apps/auth/.env` on the box. See [07-auth.md](07-auth.md).
 
-## Step 11 — Restricted access mode (staged)
-
-The `admin` break-glass account exists from bootstrap. Once you have verified
-`ssh admin@host 'sudo -n true && docker ps'`, flip
-`deploy_restricted_mode=true` + `ansible_user=admin` per the runbook in
-[05-access-model.md](05-access-model.md). Reversible; retires the register's
-biggest exception.
-
-## Step 12 — Evidence baseline
-
-```bash
-# Mode-aware end-to-end smoke test. --strict also fails on a missing/stale
-# recovery set (Step 13) or an unconfigured alerting/log-export layer:
-bash scripts/post-provision-smoke-test.sh myserver --require-backup --strict
-# Full audit bundle (OpenSCAP L1+L2, docker-bench, compose audit, Trivy,
-# Lynis, host captures with a control-tagged INDEX):
-ansible-playbook -i ansible/hosts scaffold/ansible/audit-all.yml
-# Fire the timers once, eyeball their output:
-ssh myserver 'sudo systemctl start vuln-scan.service restore-drill.service log-export.service'
-```
-
-Copy [templates/](templates/) into the server repo's `compliance/` directory
-and fill them in — that pack plus the `reports/` bundle is what you hand a
-reviewer (see [compliance-plan-vic-health.md](compliance-plan-vic-health.md)).
-
-## Step 13 — Recovery set (do this last, and after any secret change)
+## Step 12 — Recovery set (after any secret change)
 
 The box is not "set-and-forget" until a total loss is survivable. Everything
 NOT in git in plain form — `ansible/hosts`, the server `.env`, every
@@ -290,16 +322,59 @@ Then store the **bundle** and its **passphrase** in your password manager as
 two separate entries (split across two places — losing either loses
 everything), and keep the bundle somewhere that survives your laptop. A
 success drops a `/opt/deploy/.recovery-bundle-last` marker; the `--strict`
-smoke test (Step 12) reports the bundle **stale** whenever a captured secret is
-newer than it — so **re-run this after any credential rotation.** The full
-rebuild drill and RTO log are in [09-recovery.md](09-recovery.md).
+smoke test (Step 13) reports the bundle **stale** whenever a captured secret is
+newer than it — so **re-run this after any credential rotation.** Once the
+server is in restricted mode (Step 14), run the bundle commands through the
+admin alias instead, and copy the file from admin's home. The full rebuild
+drill and RTO log are in [09-recovery.md](09-recovery.md).
+
+## Step 13 — Evidence baseline
+
+```bash
+# Mode-aware end-to-end smoke test. --strict also fails on a missing/stale
+# recovery set (Step 12) or an unconfigured alerting/log-export layer:
+bash scripts/post-provision-smoke-test.sh myserver --require-backup --strict
+# Full audit bundle (OpenSCAP L1+L2, docker-bench, compose audit, Trivy,
+# Lynis, host captures with a control-tagged INDEX):
+ansible-playbook -i ansible/hosts scaffold/ansible/audit-all.yml
+# Fire the timers once, eyeball their output:
+ssh myserver 'sudo systemctl start vuln-scan.service restore-drill.service log-export.service'
+```
+
+Copy [templates/](templates/) into the server repo's `compliance/` directory
+and fill them in — that pack plus the `reports/` bundle is what you hand a
+reviewer (see [compliance-plan-vic-health.md](compliance-plan-vic-health.md)).
+
+## Step 14 — Restricted access mode (last)
+
+The `admin` break-glass account exists from bootstrap. Once the box serves and
+you have verified `ssh admin@host 'sudo -n true && docker ps'`, follow the
+runbook in [05-access-model.md](05-access-model.md): set
+`deploy_restricted_mode=true` with `deploy_release_tree=true` and
+`deploy_verify_signature=true` (the play refuses restricted mode without
+them; read [15-release-tree.md](15-release-tree.md) first) and switch
+`ansible_user=admin`. The release tree copies the deploy key from
+`/home/deploy/.ssh/github-deploy` (Step 8) to root's configuration, so that
+file must exist before the play runs. Restricted mode retires the register's
+biggest exception.
+
+From then on the deploy account can run only `./deploy`. Everything above
+that used `sudo` or `docker compose` through the deploy alias is run through
+the admin alias instead: the smoke test (pass the admin alias, so it detects
+the mode from the account it connects as), the timers, the ntfy token, and
+the recovery bundle on a server without SOPS. The site plays run as `admin`
+from the inventory.
 
 ## Upgrading an existing instance
 
-Scaffold changes reach instances only when you bump the submodule pointer.
-The mechanics plus the **per-change operator actions** live in
-[../UPGRADING.md](../UPGRADING.md) — read every entry newer than your current
-pointer before re-running the site play.
+Renovate bumps the `scaffold` pointer in the server repo and the automatic
+deploy ships the compose and Caddy parts; the host layer (roles, timers,
+scripts) changes only when you run a site play, and the "Host play due"
+alert says when one is waiting. The runbook is
+[12-applying-scaffold-updates.md](12-applying-scaffold-updates.md); the
+**per-change operator actions** live in [../UPGRADING.md](../UPGRADING.md) —
+read every entry newer than your current pointer before re-running the site
+play.
 
 ---
 

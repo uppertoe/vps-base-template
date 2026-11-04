@@ -67,6 +67,10 @@ secrets_sops: true         # secrets/*.sops must be encrypted; no env file track
 ```
 
 The forward-auth test runs whenever `apps/auth/auth.caddy` exists. The
+template consistency check requires the gateway app (`apps/auth/` and its
+include line in `docker-compose.yml`, live or commented) only when
+`.scaffold-server.yml` is absent or sets `gateway_chain: true`; a server that
+sets it to `false` runs no scaffold gateway and may carry no `apps/auth/`. The
 optional workflows (CodeQL, Scorecard, update-pipeline freshness) run on a
 server only if that server carries the file; a server short of Actions
 minutes leaves them out, and the check still verifies the ones it has.

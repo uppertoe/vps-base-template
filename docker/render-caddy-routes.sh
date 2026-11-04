@@ -133,7 +133,11 @@ if [[ -d "$repo_root/apps" ]]; then
         # as code, and a handle_errors block is not a door. The check is
         # settled when the site block closes, once it is known whether the
         # site has a guard at all; a site with no guard is covered by the
-        # public marker above.
+        # public marker above. The site block itself is the outermost frame:
+        # a reverse_proxy, file_server or respond written at the top level of the
+        # site, beside a guard that sits only inside a handle, answers every
+        # path that handle does not match, so it needs a guard or a marker at
+        # the top level just as a handle would (2026-11-03 review, B-M4).
         if (in_site && depth > 0) {
           if (substr(trimmed, 1, 1) == "#") {
             if (trimmed ~ /scaffold-lint: open-path/) {
@@ -153,12 +157,15 @@ if [[ -d "$repo_root/apps" ]]; then
             frame_exempt[nframes] = (trimmed ~ /^handle_errors/) || (nframes > 1 && frame_exempt[nframes - 1])
           } else if (trimmed != "" && substr(trimmed, 1, 1) != "@") {
             if (pending_open) {
-              if (nframes > 0) { frame_marker[nframes] = 1 }
+              if (nframes > 0) { frame_marker[nframes] = 1 } else { top_marker = 1 }
               pending_open = 0
             }
             if (nframes > 0) {
               if (trimmed ~ /^(reverse_proxy|file_server|respond)([[:space:]]|\{|$)/) { frame_code[nframes] = 1 }
               if (trimmed ~ /^import (protected|auth_gate)/ || trimmed ~ /^forward_auth([[:space:]]|$)/) { frame_guard[nframes] = 1 }
+            } else if (depth == 1) {
+              if (trimmed ~ /^(reverse_proxy|file_server|respond)([[:space:]]|\{|$)/ && !top_code) { top_code = 1; top_code_line = FNR }
+              if (trimmed ~ /^import (protected|auth_gate)/ || trimmed ~ /^forward_auth([[:space:]]|$)/) { top_guard = 1 }
             }
           }
         }
@@ -279,8 +286,10 @@ if [[ -d "$repo_root/apps" ]]; then
           # A route block runs its directives and falls through, so a guard
           # inside it also guards what follows in the enclosing block. A
           # handle block answers only the requests it matched, so its guard
-          # says nothing about its siblings.
+          # says nothing about its siblings. A route block at the top level of
+          # the site guards the top level the same way.
           if (nframes > 1 && frame_route[nframes] && frame_guard[nframes]) { frame_guard[nframes - 1] = 1 }
+          if (nframes == 1 && frame_route[1] && frame_guard[1]) { top_guard = 1 }
           nframes--
         }
         if (depth == 0 && in_site && FNR != site_line) {
@@ -293,8 +302,13 @@ if [[ -d "$repo_root/apps" ]]; then
               printf "ERROR: %s:%d: site %s has a gate, but this block serves without one: import a gateway guard, or declare the open path with a comment \"# scaffold-lint: open-path -- <paths>: <reason>\" so route-access.tsv lists it\n", FILENAME, open_line[k], site_addr > "/dev/stderr"
               bad = 1
             }
+            if (top_code && !top_guard && !top_marker) {
+              printf "ERROR: %s:%d: site %s has a gate, but this block serves without one: this directive at the top level of the site answers every path the guarded handle does not match; import a gateway guard beside it, or declare the open paths with a comment \"# scaffold-lint: open-path -- <paths>: <reason>\" so route-access.tsv lists them\n", FILENAME, top_code_line, site_addr > "/dev/stderr"
+              bad = 1
+            }
           }
           nopen = 0; nframes = 0; pending_open = 0
+          top_code = 0; top_code_line = 0; top_guard = 0; top_marker = 0
           in_site = 0
         }
         if (depth == 0) { target = "" }

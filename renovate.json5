@@ -19,14 +19,26 @@
   },
   "github-actions": {
     "enabled": true,
+    // The canonical server workflows under server-files/ are copied byte for
+    // byte into every server repo (docs/14), where the drift check refuses any
+    // edit, so each server's Renovate skips them (ignorePaths). Their action
+    // digests are therefore bumped HERE, in the canonical copy, and reach the
+    // servers through the scaffold bump plus check-server-files.sh --fix. The
+    // manager's default pattern covers only .github/ at the repository root,
+    // so the server-files copies are added to it.
+    "managerFilePatterns": [
+      "/^\\.github/workflows/.+\\.ya?ml$/",
+      "/^server-files/\\.github/workflows/.+\\.ya?ml$/",
+    ],
   },
   "customManagers": [
     {
       "customType": "regex",
-      "description": "Digest-pinned images outside compose files: Ansible vars (Trivy scanner) and docker-run lines in workflows — keeps A6-class pins fresh",
+      "description": "Digest-pinned images outside compose files: Ansible vars (Trivy scanner) and docker-run lines in workflows, the canonical server copies included — keeps A6-class pins fresh",
       "managerFilePatterns": [
         "/^ansible/.+\\.ya?ml$/",
         "/^\\.github/workflows/.+\\.ya?ml$/",
+        "/^server-files/\\.github/workflows/.+\\.ya?ml$/",
       ],
       "matchStrings": [
         "(?<depName>[a-z0-9][a-z0-9._/-]*?):(?<currentValue>[a-zA-Z0-9][a-zA-Z0-9._-]*)@(?<currentDigest>sha256:[a-f0-9]{64})",

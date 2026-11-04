@@ -24,7 +24,7 @@ cleanup() {
     # shellcheck disable=SC2086  # a space-separated list, split on purpose
     rm -f $GENERATED_APP_ENVS
   fi
-  rm -f docker-compose.rehearsal.yml /tmp/ci-smoke-config-{old,new}.json
+  rm -f docker-compose.rehearsal.yml /tmp/ci-smoke-config-{old,new,static}.json /tmp/ci-audit-exceptions.json
   if [[ -n "${REHEARSAL_TREE:-}" ]]; then
     git worktree remove --force "$REHEARSAL_TREE" >/dev/null 2>&1 || true
     rm -rf "$REHEARSAL_TREE"
@@ -194,6 +194,36 @@ for example in apps/*/.env.example apps/*/*/.env.example; do
   GENERATED_APP_ENVS="$GENERATED_APP_ENVS $app_env"
 done
 
+# The deployment's accepted-exceptions register is keyed by PROD container
+# names (deploy-*); remap to this CI project's names so the same documented
+# exceptions apply to the same services here, in both checks below.
+python3 - "$COMPOSE_PROJECT" > /tmp/ci-audit-exceptions.json <<'PY'
+import json, re, sys
+import yaml
+project = sys.argv[1]
+try:
+    with open("ansible/audit-exceptions.yml") as f:
+        reg = yaml.safe_load(f) or {}
+except FileNotFoundError:  # fresh template repos have no register yet
+    reg = {}
+exceptions = reg.get("audit_compose_exceptions", {}) or {}
+print(json.dumps({re.sub(r"^deploy-", f"{project}-", name): controls
+                  for name, controls in exceptions.items()}))
+PY
+
+# --- CIS Docker section 5, as declared -----------------------------------------
+# The runtime check at the end of this script sees only the containers CI
+# starts (Caddy and the data tier), so an app whose compose file lacks the
+# section 5 block (non-root user, cap_drop ALL, no-new-privileges, read-only
+# root, memory and pids limits, a healthcheck, a memory tier) would reach the
+# live host before any audit noticed. The same checker reads the resolved
+# compose config here and applies the same controls to every declared service.
+echo "Checking CIS Docker section 5 controls declared in the compose files"
+"${BASE_COMPOSE[@]}" config --format json > /tmp/ci-smoke-config-static.json
+python3 scaffold/ansible/files/compose-audit/check-compose-hardening.py \
+  --compose-config /tmp/ci-smoke-config-static.json \
+  --compose-project "$COMPOSE_PROJECT" --exceptions /tmp/ci-audit-exceptions.json
+
 # --- Database upgrade rehearsal (state-transition rigour) --------------------
 # A db-image bump must prove the NEW image starts on data the OLD image wrote
 # — booting fresh volumes proves only "vN+1 starts", which is how the pg18
@@ -345,21 +375,5 @@ PY
 fi
 
 echo "Verifying CIS Docker section 5 runtime controls on the running stack"
-# The deployment's accepted-exceptions register is keyed by PROD container
-# names (deploy-*); remap to this CI project's names so the same documented
-# exceptions apply to the same services here.
-python3 - "$COMPOSE_PROJECT" > /tmp/ci-audit-exceptions.json <<'PY'
-import json, re, sys
-import yaml
-project = sys.argv[1]
-try:
-    with open("ansible/audit-exceptions.yml") as f:
-        reg = yaml.safe_load(f) or {}
-except FileNotFoundError:  # fresh template repos have no register yet
-    reg = {}
-exceptions = reg.get("audit_compose_exceptions", {}) or {}
-print(json.dumps({re.sub(r"^deploy-", f"{project}-", name): controls
-                  for name, controls in exceptions.items()}))
-PY
 python3 scaffold/ansible/files/compose-audit/check-compose-hardening.py \
   --compose-project "$COMPOSE_PROJECT" --exceptions /tmp/ci-audit-exceptions.json

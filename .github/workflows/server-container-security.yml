@@ -22,6 +22,14 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      # The scaffold's pinned Caddy is the one internet-facing container on
+      # every server, so it is scanned beside the apps.
+      - name: Sync scaffold submodule
+        run: |
+          git config --global url."https://github.com/".insteadOf git@github.com:
+          git submodule sync --recursive
+          git submodule update --init --recursive
+
       - name: Prepare reports directory
         run: mkdir -p reports/container-security
 
@@ -34,13 +42,13 @@ jobs:
           USER: ${{ secrets.GHCR_READ_TOKEN && 'uppertoe' || github.actor }}
         run: echo "$TOKEN" | docker login ghcr.io -u "$USER" --password-stdin
 
-      # Image CVE scan of every app image: report-only so an unfixable upstream
-      # CVE does not block deploys. The summary leads with a per-image count
-      # table so findings cannot hide behind a green tick, and an image Trivy
-      # could not scan is flagged, not skipped silently.
-      - name: Trivy image scan (app images)
+      # Image CVE scan of every app image and the scaffold's Caddy: report-only
+      # so an unfixable upstream CVE does not block deploys. The summary leads
+      # with a per-image count table so findings cannot hide behind a green
+      # tick, and an image Trivy could not scan is flagged, not skipped silently.
+      - name: Trivy image scan (app images and the proxy)
         run: |
-          images="$(grep -rhoE 'image:\s*\S+' apps/*/docker-compose.yml | awk '{print $2}' | sort -u)"
+          images="$(grep -rhoE 'image:\s*\S+' apps/*/docker-compose.yml scaffold/docker/caddy.base.yml | awk '{print $2}' | sort -u)"
           {
             echo "### Trivy HIGH/CRITICAL by image"
             echo

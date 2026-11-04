@@ -36,6 +36,25 @@ appear verbatim; the server may add lines, as it does for `.gitignore`),
 `optional` (if present, exact) and `seed` (copied once, then the server's
 own).
 
+Three things the check holds that `--fix` cannot write, because they are the
+server's own text. The `.gitignore` must still ignore the secret paths the
+canonical block exists for (`.env`, an app's `.env`, `backup/config.env`, a
+recovery bundle, the compose override, `ansible/hosts`) once the server's own
+lines below the block have been read; a later `!.env` is reported and must be
+removed by hand. A workflow under `.github/workflows/` that the manifest does
+not name is listed, with any write permission it asks for, and is refused if
+it runs on `pull_request_target`. And `.scaffold-server.yml` must carry only
+the four known keys, with `true` or `false` written exactly and a
+40-character commit for `gateway_ref` whenever `gateway_chain` is true,
+since the shared CI reads the file with a plain parser and a value it cannot
+read would turn a check off without a word.
+
+The shared CI runs every check from the scaffold submodule itself
+(`scaffold/scripts/server/<name>`, with `SERVER_ROOT` set to the server's
+checkout), never through the server's `scripts/` shims. The shims exist for
+operators at the keyboard; in CI they are files the drift check compares, and
+a shim edited in the pull request must not be what runs the drift check.
+
 ## How a server's CI chooses what to run
 
 The shared CI reads `.scaffold-server.yml` in the server repo:
@@ -51,6 +70,35 @@ The forward-auth test runs whenever `apps/auth/auth.caddy` exists. The
 optional workflows (CodeQL, Scorecard, update-pipeline freshness) run on a
 server only if that server carries the file; a server short of Actions
 minutes leaves them out, and the check still verifies the ones it has.
+
+The two callers that take a secret (`ci.yml` and `container-security.yml`)
+pass `GHCR_READ_TOKEN` by name and nothing else. The reusable workflows
+declare that one secret as optional, so a server without the token still
+runs them with the repository's own token, and the server's other secrets
+(deploy tokens, cloud keys) never reach a job that runs images from a pull
+request.
+
+The compose smoke test checks the CIS Docker section 5 block twice: once as
+declared, over every service in the resolved compose config, with the same
+checker and the same exceptions register `audit-compose.yml` uses on the
+host, and once at runtime on the containers it starts. A new app whose
+compose file lacks the block therefore fails the pull request, and the
+"every app container must carry the section 5 block" rule in a server's
+CLAUDE.md is enforced before merge rather than discovered by the first audit
+after deploy.
+
+## Action digests in the server workflows
+
+Every `uses:` in the canonical workflows is pinned to a commit digest.
+Renovate's GitHub Actions manager looks only under a repository's own
+`.github/`, so a server's Renovate would otherwise bump the digests in its
+copies, and the drift check would then refuse the pull request; each server's
+`renovate.json5` lists the managed workflow files under `ignorePaths` for
+that reason. The scaffold's own `renovate.json5` instead adds
+`server-files/.github/workflows/` to the manager's file patterns, so the
+digests are bumped once, in the canonical copy, with the same grouping and
+automerge as the scaffold's own workflows, and reach every server through the
+next scaffold bump and `check-server-files.sh --fix`.
 
 ## Why the workflow reference is a commit, not `main`
 

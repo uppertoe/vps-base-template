@@ -26,7 +26,7 @@ Each layer has one governing benchmark and one tool that measures it. Nothing is
 | **Host OS** | CIS Ubuntu 24.04 LTS **Level 1 – Server** (v1.0.0) | `os-hardening`, `ssh-hardening`, `baseline-hardening`, `common`, `firewall` roles (devsec.hardening + custom) | `audit-openscap.yml` (OpenSCAP + SSG + tailoring) |
 | **Host (2nd opinion)** | Lynis hardening index (not a benchmark — a drift signal) | same roles | `audit-lynis.yml` |
 | **Docker daemon / host** | CIS Docker Benchmark **§1–4** | `docker` + `firewall` + `baseline-hardening` roles | `audit-docker.yml` (docker-bench-security) |
-| **Containers (runtime)** | CIS Docker Benchmark **§5** | per-service compose declarations (`caddy.base.yml`, `apps/*/docker-compose.yml`) | `audit-compose.yml` + CI compose-lint (KICS) |
+| **Containers (runtime)** | CIS Docker Benchmark **§5** | per-service compose declarations (`caddy.base.yml`, `apps/*/docker-compose.yml`) | `audit-compose.yml` on the host; the same checker over the declared compose config in CI's compose smoke; CI compose-lint (KICS) |
 | **Images (supply chain)** | Trivy CVE policy + Dockle best-practice | digest pins + weekly freshness check (Renovate app optional for auto-PRs) | CI (`Trivy`, `Dockle`) |
 
 ### Why these tools, and the version reality
@@ -213,7 +213,9 @@ events here:
 
 Every app container must carry the §5 block (see
 [04-server-repo.md](04-server-repo.md)). `audit-compose.yml` inspects the running
-stack and fails if a non-excepted container is missing any of:
+stack, and a server's CI compose smoke runs the same checker over every
+service in the resolved compose config before merge; either fails if a
+non-excepted container is missing any of:
 
 - `5.4` not privileged · `5.3` `cap_drop: ALL` · `5.25` `no-new-privileges`
 - `5.12` read-only rootfs · `5.10` memory limit · `5.28` pids limit

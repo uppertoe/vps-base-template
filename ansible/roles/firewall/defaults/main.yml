@@ -3,6 +3,12 @@ firewall_default_incoming_policy: deny
 firewall_default_outgoing_policy: deny
 firewall_default_routed_policy: deny
 
+# The role adds a ufw rule for every port listed below and never deletes one.
+# A port removed from a list keeps its rule until an operator deletes it on
+# the box, for example `sudo ufw delete allow 8080/tcp` or
+# `sudo ufw delete allow out 25/tcp`. `sudo ufw status numbered` lists what is
+# in force. The Docker-aware chain is rebuilt from the lists on every run, so
+# container traffic follows the lists at once.
 firewall_allowed_tcp_ports:
   - "22"
   - "80"

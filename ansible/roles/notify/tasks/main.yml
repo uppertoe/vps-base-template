@@ -165,7 +165,6 @@
     - vps-boot-check.service
     - vps-panic-guard.service
     - vps-panic-guard-stable.service
-    - vps-panic-guard-stable.timer
     - vps-notify-selftest.service
     - vps-notify-selftest.timer
     - vps-log-digest.service
@@ -187,6 +186,17 @@
   ansible.builtin.template:
     src: vps-sqlite-watch.timer.j2
     dest: /etc/systemd/system/vps-sqlite-watch.timer
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd
+
+# Templated so that notify_panic_guard_stable_min sets the re-arm wait as well
+# as the message text; the shipped unit used to hard-code 30 minutes.
+- name: Install vps-panic-guard-stable.timer
+  ansible.builtin.template:
+    src: vps-panic-guard-stable.timer.j2
+    dest: /etc/systemd/system/vps-panic-guard-stable.timer
     owner: root
     group: root
     mode: "0644"

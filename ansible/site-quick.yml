@@ -51,15 +51,22 @@
   post_tasks:
     # The controller-side lookup works for laptop runs. An on-box run as admin
     # cannot read the deploy-owned .git, so fall back to a privileged read of
-    # the very checkout the play ran from (playbook_dir is inside it).
+    # the very checkout the play ran from (playbook_dir is inside it). Under
+    # the release tree (docs/15) the exported release has no .git at all, so
+    # the last resort is the scaffold commit recorded in /opt/deploy/.release.
     - name: Read the scaffold commit this play ran from (controller)
       ansible.builtin.set_fact:
         site_applied_commit: "{{ lookup('pipe', 'git -c safe.directory=* -C ' ~ playbook_dir ~ ' rev-parse HEAD 2>/dev/null || echo unknown') }}"
       tags: [always]
 
     - name: Read the scaffold commit this play ran from (target, privileged fallback)
-      ansible.builtin.command:
-        cmd: "git -c safe.directory=* -C {{ playbook_dir }} rev-parse HEAD"
+      ansible.builtin.shell:
+        cmd: >-
+          set -o pipefail;
+          git -c safe.directory=* -C {{ playbook_dir | quote }} rev-parse HEAD 2>/dev/null
+          || sed -n 's/^scaffold=\([0-9a-f]\{40\}\)$/\1/p' /opt/deploy/.release 2>/dev/null
+          | grep .
+        executable: /bin/bash
       register: site_applied_commit_target
       changed_when: false
       failed_when: false

@@ -117,10 +117,12 @@
         line: 'auth required pam_wheel.so use_uid group=sugroup'
         insertafter: '^auth\s+sufficient\s+pam_rootok\.so'
 
+# CIS account_disable_post_pw_expiration: accounts are disabled this many days
+# after password expiry (defence in depth; every scaffold account is key-only).
 - name: Set default inactive password lock for new users
   ansible.builtin.lineinfile:
     path: /etc/default/useradd
-    regexp: '^INACTIVE='
+    regexp: '^#?INACTIVE='
     line: "INACTIVE={{ baseline_password_inactive_days }}"
     create: true
     mode: "0644"
@@ -156,6 +158,12 @@
     block: |
       umask {{ baseline_shell_umask }}
 
+# The chmod runs as the account that owns the home directory, never as root:
+# the files sit in a directory that account can write, so between the listing
+# and the chmod it could swap one for a symlink to a root-owned file, and a
+# root chmod would follow the link (2026-11-03 review). Running as the owner,
+# chmod can only change files that account already owns. Only files owned by
+# the account are listed, and a path that has become a symlink is skipped.
 - name: Restrict interactive user initialization file permissions
   ansible.builtin.shell: |
     set -eu
@@ -172,15 +180,16 @@
           ;;
       esac
       [ -d "$home" ] || continue
-      find "$home" -maxdepth 1 -mindepth 1 \( -type f -o -type d \) -printf '%f\0' \
+      find "$home" -maxdepth 1 -mindepth 1 \( -type f -o -type d \) -user "$user" -printf '%f\0' \
         | grep -zP '{{ baseline_user_initialization_files_regex }}' \
         | while IFS= read -r -d '' file; do
-            printf '%s\0' "$home/$file"
+            printf '%s\0%s\0' "$user" "$home/$file"
           done
-    done < /etc/passwd | while IFS= read -r -d '' file; do
-      mode="$(stat -Lc '%a' "$file")"
+    done < /etc/passwd | while IFS= read -r -d '' user && IFS= read -r -d '' file; do
+      [ -L "$file" ] && continue
+      mode="$(stat -c '%a' "$file")"
       if [ $((8#$mode & 8#037)) -ne 0 ]; then
-        chmod u-s,g-wxs,o= "$file"
+        runuser -u "$user" -- chmod u-s,g-wxs,o= "$file"
         printf '%s\n' "$file"
       fi
     done
@@ -409,6 +418,9 @@
     # the exact SSG rule files captured from a remediated host, so the OVAL checks
     # pass. privileged.rules audits every setuid/setgid binary execution.
     # Changing them after the immutable flag loads needs a reboot to reload.
+    # Deployed only when the host opts in with baseline_cis_l2_audit_rules, as
+    # group_vars and docs/08 describe; until 2026-11-04 the task ran ungated, so
+    # Level 1 hosts carried the immutable flag and the setuid audit as well.
     - name: Deploy CIS L2 audit ruleset
       ansible.builtin.copy:
         src: "{{ item }}"
@@ -420,6 +432,24 @@
       loop_control:
         label: "{{ item | basename }}"
       notify: Restart auditd
+      when:
+        - os_auditd_enabled | bool
+        - baseline_cis_l2_audit_rules | bool
+
+    # A host that does not opt in loses the files. The loaded rules stay in
+    # the kernel while the immutable flag (-e 2) is set, so the removal takes
+    # effect at the next reboot; the files are gone at once.
+    - name: Remove the CIS L2 audit ruleset where the host has not opted in
+      ansible.builtin.file:
+        path: "/etc/audit/rules.d/{{ item | basename }}"
+        state: absent
+      loop: "{{ query('fileglob', 'cis-l2-audit.d/*.rules') }}"
+      loop_control:
+        label: "{{ item | basename }}"
+      notify: Restart auditd
+      when:
+        - os_auditd_enabled | bool
+        - not (baseline_cis_l2_audit_rules | bool)
 
     # SSG file_permissions_etc_audit_rulesd (ubuntu2404) demands 0600 — the
     # auditd package ships its default audit.rules at 0640. Runs after every
@@ -469,31 +499,47 @@
     line: 'SILENTREPORTS=no'
   when: baseline_enable_aide | bool
 
-# CIS account_disable_post_pw_expiration: disable accounts 30 days after
-# password expiry (defence in depth — all scaffold accounts are key-only).
-- name: Disable accounts 30 days after password expiry
-  ansible.builtin.lineinfile:
-    path: /etc/default/useradd
-    regexp: '^#?INACTIVE='
-    line: 'INACTIVE=30'
+# CIS account_disable_post_pw_expiration (INACTIVE in /etc/default/useradd) is
+# set once, above, from baseline_password_inactive_days; a second task that
+# wrote the literal 30 here fought it on every run for any other value.
 
 # CIS file_permission_user_init_files: user init (dot) files must be 0740 or
-# less permissive — Ubuntu's skel default is 0644 (world-readable).
-- name: Find user init files more permissive than 0740
+# less permissive — Ubuntu's skel default is 0644 (world-readable). Covers
+# every home under /home and root's own, whatever the account's shell. As
+# above, the chmod runs as the account that owns the home directory, so a
+# file swapped for a symlink between the listing and the chmod cannot carry a
+# root chmod outside the home. Files in a home that the owner does not own
+# are left alone and reported.
+- name: Restrict user init files to 0740 or stricter
   ansible.builtin.shell: |
-    set -eu
-    find /home -mindepth 2 -maxdepth 2 -type f -name '.*' -perm /0037 2>/dev/null || true
-    find /root -mindepth 1 -maxdepth 1 -type f -name '.*' -perm /0037 2>/dev/null || true
+    set -euo pipefail
+    fix() {
+      local owner="$1" file="$2"
+      [ -L "$file" ] && return 0
+      if [ "$(stat -c '%U' "$file")" != "$owner" ]; then
+        echo "left alone, not owned by $owner: $file" >&2
+        return 0
+      fi
+      if [ "$owner" = root ]; then
+        chmod g-w,o-rwx "$file"
+      else
+        runuser -u "$owner" -- chmod g-w,o-rwx "$file"
+      fi
+      printf '%s\n' "$file"
+    }
+    for home in /home/*/; do
+      [ -d "$home" ] || continue
+      owner="$(stat -c '%U' "$home")"
+      [ "$owner" != UNKNOWN ] || continue
+      find "$home" -mindepth 1 -maxdepth 1 -type f -name '.*' -perm /0037 -print0 2>/dev/null \
+        | while IFS= read -r -d '' file; do fix "$owner" "$file"; done
+    done
+    find /root -mindepth 1 -maxdepth 1 -type f -name '.*' -perm /0037 -print0 2>/dev/null \
+      | while IFS= read -r -d '' file; do fix root "$file"; done
   args:
     executable: /bin/bash
   register: baseline_lax_init_files
-  changed_when: false
-
-- name: Restrict user init files to 0740 or stricter
-  ansible.builtin.file:
-    path: "{{ item }}"
-    mode: "g-w,o-rwx"
-  loop: "{{ baseline_lax_init_files.stdout_lines }}"
+  changed_when: baseline_lax_init_files.stdout != ""
 
 # Bridge the wrapper's exit-0-on-change behaviour to the notify role's OnFailure
 # hook: an ExecStartPost that fails the unit when AIDE's latest report shows
@@ -924,14 +970,14 @@
       NTP={{ baseline_timesyncd_ntp_servers | join(' ') }}
       FallbackNTP={{ baseline_timesyncd_fallback_ntp_servers | join(' ') }}
 
-- name: Configure strong SSH MACs in a dedicated drop-in
-  ansible.builtin.copy:
-    dest: /etc/ssh/sshd_config.d/00-vps-scaffold-hardening.conf
-    owner: root
-    group: root
-    mode: "0600"
-    content: |
-      MACs {{ ssh_macs | join(',') }}
+# The MACs come from devsec's ssh_macs, rendered into /etc/ssh/sshd_config
+# itself. devsec writes that file without an Include line, so a drop-in under
+# sshd_config.d is never read; the one this role used to write here is
+# removed so that nobody takes it for the setting in force.
+- name: Remove the inert SSH MACs drop-in
+  ansible.builtin.file:
+    path: /etc/ssh/sshd_config.d/00-vps-scaffold-hardening.conf
+    state: absent
 
 - name: Normalize SSH server drop-in ownership and permissions
   ansible.builtin.shell: |

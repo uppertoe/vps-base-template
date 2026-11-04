@@ -282,11 +282,12 @@ To flip a live host to restricted mode **without locking yourself out**:
    `ssh admin@<host> 'sudo -n true && docker ps >/dev/null && echo ADMIN-OK'`
    (set a dedicated `deploy_admin_public_key` in the inventory first if you
    want separate key material — recommended).
-3. In the inventory: set `deploy_restricted_mode=true` as a host var, with
-   `deploy_release_tree=true` and `deploy_verify_signature=true` (the play
-   refuses restricted mode without them; see above), and switch
-   `ansible_user=admin`. The play also refuses to narrow deploy's sudo while
-   it is connected as the deploy account.
+3. In the inventory: set `deploy_restricted_mode=true` (as a host var or in
+   `[servers:vars]`; since 2026-11-04 the flag is a role default, so an
+   inventory group value is honoured), with `deploy_release_tree=true` and
+   `deploy_verify_signature=true` (the play refuses restricted mode without
+   them; see above), and switch `ansible_user=admin`. The play also refuses
+   to narrow deploy's sudo while it is connected as the deploy account.
 4. Re-run `site-quick.yml`. Deploy's sudoers becomes the wrapper allowlist and
    it leaves the docker group. The play also propagates any registry
    credentials from `~deploy/.docker/config.json` to root's docker config —
@@ -306,11 +307,9 @@ To flip a live host to restricted mode **without locking yourself out**:
    (idempotent in both directions). Update the docs/08 register entry with the
    flip date.
 
-Two inventory footguns when the plays run on the box itself (`-c local`, the
-sane path for a slow operator link): `deploy_restricted_mode` must be a HOST
-var (a playbook group_vars default of false outranks inventory group vars),
-and both `deploy_user_public_key` / `deploy_admin_public_key` must be set to
-LITERAL key strings — their defaults are file lookups of the connection key's
+One inventory footgun when the plays run on the box itself (`-c local`, the
+sane path for a slow operator link): both `deploy_user_public_key` /
+`deploy_admin_public_key` must be set to LITERAL key strings — their defaults are file lookups of the connection key's
 `.pub` on the controller, which is now the server, where your laptop's key
 files don't exist (and `deploy_user_public_key` manages deploy's
 authorized_keys, so a wrong fallback can swap deploy's key out from under
@@ -460,6 +459,15 @@ git config commit.gpgsign true          # per-repo, in the server repo
 
 Then add `"<committer-email> <key-type> <base64-key>"` to
 `deploy_allowed_signers` in the inventory and re-apply the deploy-user role.
+
+In an INI inventory, write the list without outer quotes:
+`deploy_allowed_signers=["<email> ssh-ed25519 AAAA..."]`. A value wrapped in
+single quotes is read as one string, which would render one character per
+line into `/etc/ssh/allowed_signers` and refuse every operator-signed deploy
+(web-flow merges still verify through the GPG keyring, so the fault is easy
+to miss). The deploy-user role fails the play on a string-valued
+`deploy_allowed_signers` or `deploy_github_webflow_fingerprints` instead of
+writing the file.
 Cutover order matters: sign a commit on main FIRST (or merge any PR via
 GitHub), then enable the gate — enabling it while HEAD is unsigned refuses
 every deploy until a verifiable commit lands.

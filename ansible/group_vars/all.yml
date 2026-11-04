@@ -114,11 +114,11 @@ ssh_host_key_files:
 # restricted mode it is also the identity the site plays run as).
 ssh_allow_users: "{{ deploy_user }} {{ deploy_admin_user | default('admin') }}"
 
-# Access model switch (docs/05-access-model.md): false = deploy keeps broad
-# sudo + docker group (current model); true = wrapper-only sudo, no docker
-# group, ansible_user must be the admin account. Flip per host in the
-# inventory once the restricted path is verified (see the migration runbook).
-deploy_restricted_mode: false
+# deploy_restricted_mode (docs/05-access-model.md) is DELIBERATELY not set
+# here either. Its default of false lives in the deploy-user and docker role
+# defaults, so an inventory may set it as a host var or in [servers:vars]. A
+# value in this file would outrank an inventory group var and silently leave
+# a host in the default model while the operator believed it restricted.
 
 # -----------------------------------------------------------------------------
 # OS hardening (passed to devsec.hardening.os_hardening)

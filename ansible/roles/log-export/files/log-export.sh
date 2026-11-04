@@ -3,7 +3,8 @@
 # log-export.sh — Ship a hash-chained log archive off-host (ISM-1988/1815).
 # =============================================================================
 #
-# Installed by the log-export role, run nightly by log-export.timer.
+# Installed by the log-export role, run by log-export.timer on its schedule
+# (hourly by default).
 #
 #   1. journalctl --cursor-file  → everything new in the journal since the
 #      last export (auditd, auth, sshd, sudo, app units — the lot).
@@ -64,10 +65,17 @@ WORK="$STATE_DIR/work"
 CHAIN="$STATE_DIR/hash-chain.log"
 CURSOR="$STATE_DIR/journal.cursor"
 NEWER_STAMP="$STATE_DIR/last-run.stamp"
+NEXT_STAMP="$NEWER_STAMP.next"
 
 mkdir -p "$PENDING" "$WORK"
 chmod 750 "$STATE_DIR" "$PENDING" "$WORK"
 rm -rf "${WORK:?}"/*
+
+# The next run's "newer than" mark is taken now, before the file trees are
+# read, and moved into place once this run has archived what it found. A mark
+# taken at the end would skip every file modified while the run was under
+# way, such as an audit.log rotated mid-run.
+touch "$NEXT_STAMP"
 
 # --- 1. journal since last export (cursor-file is created/advanced for us) ---
 journalctl --cursor-file="$CURSOR" -o export --no-pager > "$WORK/journal.export" || true
@@ -116,7 +124,7 @@ done
 
 if [[ ! -s "$WORK/journal.export" ]] && ! find "$WORK/files" -type f ! -name EXTRA_PATHS.txt -print -quit 2>/dev/null | grep -q .; then
   log "Nothing new to export."
-  touch "$NEWER_STAMP"
+  mv -f "$NEXT_STAMP" "$NEWER_STAMP"
   exit 0
 fi
 
@@ -151,7 +159,7 @@ if ! s3_upload "$CHAIN" "$HOST/hash-chain.log"; then
   fail=1
 fi
 
-touch "$NEWER_STAMP"
+mv -f "$NEXT_STAMP" "$NEWER_STAMP"
 rm -rf "${WORK:?}"/*
 
 if [[ $fail -ne 0 ]]; then

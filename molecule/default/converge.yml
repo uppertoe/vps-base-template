@@ -20,6 +20,9 @@
     deploy_verify_signature: true
     deploy_allowed_signers:
       - "molecule@example.invalid ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPMtNWyG0zp9l3S105PF90MMk2BlIHeKeIHYsCO3RGPb"
+    # Not the default, so verify can prove the re-arm timer is templated from
+    # the variable rather than shipped with a fixed 30 minutes.
+    notify_panic_guard_stable_min: 45
   pre_tasks:
     - name: Mark this as a Molecule test run (disables kernel-level hardening)
       ansible.builtin.set_fact:

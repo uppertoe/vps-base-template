@@ -378,7 +378,7 @@ for hook in ./apps/*/deploy.sh; do
     exit 1
   fi
 done
-{% if deploy_verify_signature | default(false) %}
+{% if deploy_verify_signature | default(false) | bool %}
 
 # Supply-chain gate (deploy_verify_signature): everything below runs as root
 # (compose up + app hooks). Refuse to apply a HEAD that is not a good signature

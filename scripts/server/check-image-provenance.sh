@@ -68,6 +68,14 @@ label() { # ref, label-key -> first non-empty value across platforms
 
 for ref in "${refs[@]}"; do
   name="${ref%@*}"
+  # A private package the token cannot pull reads as "no labels"; say so
+  # instead, because the fix is access, not the image's build.
+  if ! docker buildx imagetools inspect "$ref" >/dev/null 2>&1; then
+    echo "| \`$name\` | — | (image unreadable) | — | ⚠️ unverifiable |" >> "$summary"
+    echo "WARN: cannot read $name from the registry (a private package this token cannot pull?). Grant this repository read access to the package, or log in to ghcr.io before this check." >&2
+    [[ "$strict" == 1 ]] && fail=1
+    continue
+  fi
   rev="$(label "$ref" org.opencontainers.image.revision)"
   src="$(label "$ref" org.opencontainers.image.source)"
 

@@ -33,5 +33,26 @@ args=(-fsS --max-time 20
       -H "Tags: ${tags}")
 [ -n "${NTFY_TOKEN:-}" ] && args+=(-H "Authorization: Bearer ${NTFY_TOKEN}")
 
-printf '%s' "$message" | curl "${args[@]}" --data-binary @- "$NTFY_URL" >/dev/null 2>&1 || true
+# Retry a short outage, then spool the message for vps-notify-retry, and post
+# a bare notice to the fallback topic: the failure that matters most (Docker
+# down, the disk full, ntfy itself gone) is the one most likely to stop the
+# local ntfy (2026-11-04 review). The fallback carries the host and the title
+# only, never the detail, because it is a public ntfy.sh topic.
+if printf '%s' "$message" | curl "${args[@]}" --retry 2 --retry-delay 3 --retry-all-errors \
+     --data-binary @- "$NTFY_URL" >/dev/null 2>&1; then
+  exit 0
+fi
+SPOOL="${VPS_NOTIFY_SPOOL:-/var/spool/vps-notify}"
+if mkdir -p "$SPOOL" 2>/dev/null && [ -w "$SPOOL" ]; then
+  f="$(mktemp "$SPOOL/$(date -u +%Y%m%dT%H%M%SZ).XXXXXX" 2>/dev/null)" && {
+    chmod 600 "$f"
+    printf 'title=%s\npriority=%s\ntags=%s\n\n%s' "[${host}] ${title}" "$priority" "$tags" "$message" > "$f"
+  }
+fi
+if [ -n "${NTFY_FALLBACK_URL:-}" ]; then
+  curl -fsS --max-time 20 \
+    -H "Title: [${host}] ${title}" -H "Priority: ${priority}" -H "Tags: ${tags}" \
+    --data-binary "The usual alert channel could not be reached, so the details are held on ${host} and will be sent when it returns." \
+    "$NTFY_FALLBACK_URL" >/dev/null 2>&1 || true
+fi
 exit 0

@@ -6,6 +6,7 @@
 #   vps-release prepare        fetch, verify, export and render the tip; print its path
 #   vps-release switch DIR     point /opt/deploy at a prepared release
 #   vps-release recheck DIR    re-verify a kept release's commit (before a rollback)
+#   vps-release verify [DIR]   check a release's files against its manifest (default: the live one)
 #   vps-release previous       print the release deployed before the current one
 #   vps-release current        print the commit /opt/deploy points at
 #   vps-release prune          keep the newest $KEEP releases
@@ -184,12 +185,64 @@ do_prepare() {
       exit 1
     }
   fi
+  # Every file's mode and hash, rendered secrets included, so a change to
+  # the deployed tree outside a release is found by `vps-release verify`
+  # (daily) without AIDE re-hashing every new release. Root-only: the hashes
+  # of the secret files are not for anyone else to see.
+  write_manifest "$tmp" >"$tmp/.manifest"
+  chmod 0600 "$tmp/.manifest"
   printf 'commit=%s\nscaffold=%s\nexported=%s\n' "$commit" "${scaffold:-none}" "$(date -u +%FT%TZ)" >"$tmp/.release"
   chmod 0644 "$tmp/.release"
   rm -rf -- "$dest"
   mv -T -- "$tmp" "$dest"
   trap - ERR
   echo "$dest"
+}
+
+# write_manifest DIR prints one tab-separated line per file or link, sorted
+# by path:  F <mode> <sha256> <path>   or   L - <target> <path>
+write_manifest() {
+  local dir="$1" f
+  ( cd "$dir" && find . -mindepth 1 \( -type f -o -type l \) ! -path ./.release ! -path ./.manifest -print0 \
+      | LC_ALL=C sort -z \
+      | while IFS= read -r -d '' f; do
+          if [[ -L "$f" ]]; then
+            printf 'L\t-\t%s\t%s\n' "$(readlink -- "$f")" "$f"
+          else
+            printf 'F\t%s\t%s\t%s\n' "$(stat -c %a -- "$f")" "$(sha256sum -- "$f" | cut -d' ' -f1)" "$f"
+          fi
+        done )
+}
+
+# do_verify [DIR] compares a release with the manifest written when it was
+# prepared, and checks that /opt/deploy points at a prepared release. It
+# prints the paths that differ, never their contents, and fails on any.
+do_verify() {
+  local dest="${1:-}" fresh
+  if [[ -z "$dest" ]]; then
+    dest="$(current_dir)"
+    is_release "$dest" || { echo "vps-release: /opt/deploy does not point at a prepared release" >&2; exit 1; }
+  fi
+  is_release "$dest" || { echo "vps-release: $dest is not a prepared release" >&2; exit 1; }
+  if [[ ! -f "$dest/.manifest" ]]; then
+    echo "vps-release: $dest was prepared before manifests existed; the next release will have one"
+    return 0
+  fi
+  fresh="$(mktemp)"
+  write_manifest "$dest" >"$fresh"
+  if cmp -s "$dest/.manifest" "$fresh"; then
+    rm -f -- "$fresh"
+    echo "vps-release: $(basename "$dest") matches its manifest ($(wc -l <"$dest/.manifest") entries)"
+    return 0
+  fi
+  echo "vps-release: $(basename "$dest") differs from its manifest:" >&2
+  awk -F'\t' 'NR==FNR { m[$4] = $1 FS $2 FS $3; next }
+    !($4 in m) { print "  added: " $4; next }
+    m[$4] != ($1 FS $2 FS $3) { print "  changed: " $4 }
+    { delete m[$4] }
+    END { for (p in m) print "  removed: " p }' "$dest/.manifest" "$fresh" | head -40 >&2 || true
+  rm -f -- "$fresh"
+  exit 1
 }
 
 do_recheck() {
@@ -322,6 +375,7 @@ case "${1:-}" in
   prepare) do_prepare ;;
   switch) do_switch "${2:?release directory}" ;;
   recheck) do_recheck "${2:?release directory}" ;;
+  verify) do_verify "${2:-}" ;;
   current) do_current ;;
   previous) do_previous ;;
   prune) do_prune ;;
@@ -330,5 +384,5 @@ case "${1:-}" in
   held) if [[ -f "$HOLD" ]]; then cat "$HOLD"; fi ;;
   unhold) rm -f -- "$HOLD" ;;
   scaffold-behind) do_scaffold_behind ;;
-  *) echo "usage: vps-release fetch|prepare|switch DIR|recheck DIR|current|previous|prune|hold COMMIT|held|unhold|scaffold-behind" >&2; exit 2 ;;
+  *) echo "usage: vps-release fetch|prepare|switch DIR|recheck DIR|verify [DIR]|current|previous|prune|hold COMMIT|held|unhold|scaffold-behind" >&2; exit 2 ;;
 esac

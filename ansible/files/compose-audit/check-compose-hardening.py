@@ -34,6 +34,8 @@ CONTROLS = [
     ("5.31 no docker.sock / sensitive host mounts", "no_sensitive_mounts"),
     ("5.3 minimal cap_add (allowlist)", "cap_add_minimal"),
     ("5.9 no host network namespace", "no_host_network"),
+    ("5.21-5.22 default seccomp and AppArmor confinement", "confined"),
+    ("5.16-5.20 no host user, PID, IPC or UTS namespace", "no_host_namespaces"),
 ]
 
 INIT_CONTROLS = [
@@ -46,6 +48,8 @@ INIT_CONTROLS = [
     ("scaffold init: no network", "network_none"),
     ("5.31 init: no sensitive host mounts", "no_sensitive_mounts"),
     ("5.3 init: minimal cap_add", "cap_add_minimal"),
+    ("5.21-5.22 init: default confinement", "confined"),
+    ("5.16-5.20 init: no host namespaces", "no_host_namespaces"),
 ]
 
 # CIS 5.31 / host-fs escapes: a bind of the Docker socket (full daemon = host
@@ -243,6 +247,27 @@ def is_forbidden_uid(user, c=None):
     return r is not None and r in FORBIDDEN_UIDS
 
 
+def no_new_privileges(sec):
+    """True only when no-new-privileges is set on and never set off.
+
+    A substring test passed "no-new-privileges:false" (2026-11-04 review).
+    """
+    on = {"no-new-privileges", "no-new-privileges:true", "no-new-privileges=true"}
+    vals = [s.strip().lower() for s in sec]
+    if any(v.startswith("no-new-privileges") and v not in on for v in vals):
+        return False
+    return any(v in on for v in vals)
+
+
+def confined(sec):
+    """False when seccomp or AppArmor is unconfined, or SELinux labelling is off."""
+    for s in sec:
+        v = s.strip().lower().replace("=", ":")
+        if v in ("seccomp:unconfined", "apparmor:unconfined", "label:disable", "systempaths:unconfined"):
+            return False
+    return True
+
+
 def evaluate(c):
     host = c.get("HostConfig") or {}
     cfg = c.get("Config") or {}
@@ -255,7 +280,7 @@ def evaluate(c):
     return {
         "privileged": not host.get("Privileged", False),
         "cap_drop_all": "ALL" in cap_drop,
-        "no_new_privileges": any("no-new-privileges" in s for s in sec),
+        "no_new_privileges": no_new_privileges(sec),
         "read_only": bool(host.get("ReadonlyRootfs", False)),
         "mem_limit": (host.get("Memory") or 0) > 0,
         "pids_limit": (host.get("PidsLimit") or 0) > 0,
@@ -265,6 +290,10 @@ def evaluate(c):
         "no_sensitive_mounts": not sensitive_mounts(c),
         "cap_add_minimal": cap_add_ok(c),
         "no_host_network": host.get("NetworkMode") != "host",
+        "confined": confined(sec),
+        "no_host_namespaces": all(
+            (host.get(k) or "") != "host" for k in ("UsernsMode", "PidMode", "IpcMode", "UTSMode", "CgroupnsMode")
+        ),
     }
 
 

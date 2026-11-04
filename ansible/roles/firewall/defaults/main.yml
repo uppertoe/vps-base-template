@@ -37,5 +37,8 @@ docker_firewall_enabled: true
 docker_firewall_bridge_interfaces:
   - docker0
   - br+
-docker_firewall_allowed_outbound_tcp_ports: "{{ firewall_allowed_outbound_tcp_ports }}"
+# The host's outbound ports, less SSH: the host pulls over SSH, but no
+# container needs to, and outbound SSH from a compromised container is a
+# ready tunnel (2026-11-04 review; RCH's counters on this rule were zero).
+docker_firewall_allowed_outbound_tcp_ports: "{{ firewall_allowed_outbound_tcp_ports | map('string') | reject('equalto', '22') | list }}"
 docker_firewall_allowed_outbound_udp_ports: "{{ firewall_allowed_outbound_udp_ports }}"

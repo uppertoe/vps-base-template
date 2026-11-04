@@ -1,0 +1,48 @@
+#!/bin/bash
+# backup-freshness — alert when a service's backups have silently stopped.
+#
+# backup.sh records each service's last successful backup in
+# /var/lib/vps-backup/success/<service>. A failed run already alerts through
+# OnFailure; this catches the quieter failures: a timer that stopped firing, a
+# run that hangs, a service that no longer reaches its backup step. Every
+# configured service that is not OPTIONAL must have succeeded within
+# BACKUP_STALE_HOURS (config.env; default 3). Installed by the backup role.
+set -u
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+CONF_DIR="${BACKUP_CONFIG_DIR:-/etc/restic}"
+STAMPS="${BACKUP_STAMP_DIR:-/var/lib/vps-backup/success}"
+SINCE="$STAMPS/.watching-since"
+hours="$(sed -n 's/^BACKUP_STALE_HOURS=//p' "$CONF_DIR/config.env" 2>/dev/null | tail -1)"
+[[ "$hours" =~ ^[0-9]+$ ]] || hours=3
+limit=$((hours * 3600))
+now="$(date -u +%s)"
+mkdir -p "$STAMPS"
+[[ -f "$SINCE" ]] || echo "$now" > "$SINCE"
+since="$(cat "$SINCE")"
+
+stale=()
+for env in "$CONF_DIR"/services/*.env; do
+  [[ -f "$env" ]] || continue
+  name="$(sed -n 's/^SERVICE_NAME=//p' "$env" | tail -1 | tr -d "\"'")"
+  optional="$(sed -n 's/^OPTIONAL=//p' "$env" | tail -1 | tr -d "\"'")"
+  [[ -n "$name" && "$optional" != "true" ]] || continue
+  if [[ -f "$STAMPS/$name" ]]; then
+    last="$(cat "$STAMPS/$name")"
+    [[ "$last" =~ ^[0-9]+$ ]] || last=0
+    age=$((now - last))
+    if (( age > limit )); then
+      stale+=("$name (last success $((age / 3600)) h ago)")
+    fi
+  elif (( now - since > limit )); then
+    stale+=("$name (no successful backup recorded)")
+  fi
+done
+
+if (( ${#stale[@]} > 0 )); then
+  msg="These services have no successful backup in the last ${hours} h: $(printf '%s; ' "${stale[@]}")Check: systemctl status backup.service; journalctl -u backup.service."
+  echo "$msg"
+  /usr/local/bin/vps-notify "Backups are stale" "$msg" high warning || true
+  exit 1
+fi
+echo "backup-freshness: every required service backed up within ${hours} h"

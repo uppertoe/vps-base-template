@@ -1,0 +1,7 @@
+# Managed by Ansible (notify role) -- resend alerts vps-notify could not deliver.
+[Unit]
+Description=Resend undelivered alerts
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/vps-notify-retry
+Nice=10

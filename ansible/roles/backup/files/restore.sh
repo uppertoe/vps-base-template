@@ -127,6 +127,41 @@ run() {
   fi
 }
 
+# place_sqlite_copies SERVICE moves the consistent SQLite copies that
+# backup.sh staged (SQLITE_STAGING_DIR/<service>/<original path>) back to their
+# original paths, keeping the existing file's owner and mode, and removes any
+# stale -wal/-shm/-journal beside them so SQLite cannot replay an old log
+# onto the restored database.
+place_sqlite_copies() {
+  local stage="${SQLITE_STAGING_DIR:-/var/lib/vps-backup/sqlite}/$1"
+  [[ -d "$stage" ]] || return 0
+  python3 - "$stage" <<'PY'
+import os, shutil, sys
+stage = os.path.abspath(sys.argv[1])
+for root, _, files in os.walk(stage):
+    for name in files:
+        src = os.path.join(root, name)
+        dest = src[len(stage):]
+        parent = os.path.dirname(dest)
+        os.makedirs(parent, exist_ok=True)
+        ref = dest if os.path.exists(dest) else parent
+        st = os.stat(ref)
+        tmp = dest + ".restore-tmp"
+        shutil.copyfile(src, tmp)
+        os.chmod(tmp, (st.st_mode & 0o777) if ref == dest else 0o644)
+        try:
+            os.chown(tmp, st.st_uid, st.st_gid)
+        except PermissionError:
+            pass
+        for side in ("-wal", "-shm", "-journal"):
+            if os.path.exists(dest + side):
+                os.remove(dest + side)
+        os.replace(tmp, dest)
+        print("placed " + dest)
+PY
+  rm -rf -- "$stage"
+}
+
 resolve_container_name() {
   local requested="$1"
 
@@ -354,6 +389,7 @@ restore_service() {
 
     info "[$SERVICE_NAME] Restoring file paths (latest snapshot)..."
     restic restore latest --tag "${SERVICE_NAME}-files" --target /
+    place_sqlite_copies "$SERVICE_NAME"
     info "[$SERVICE_NAME] File paths restored."
 
     info "================================================================="
@@ -439,6 +475,7 @@ restore_service() {
     if [[ "$file_snap_count" -gt 0 ]]; then
       info "[$SERVICE_NAME] Restoring file paths (latest snapshot)..."
       restic restore latest --tag "${SERVICE_NAME}-files" --target /
+      place_sqlite_copies "$SERVICE_NAME"
       info "[$SERVICE_NAME] File paths restored."
     else
       warn "[$SERVICE_NAME] No file snapshots found — skipping file restore."

@@ -392,12 +392,17 @@ is_members_app() {
     for app in "${enabled_apps[@]}"; do
       printf '  %s:\n' "$app"
       printf '    networks:\n'
-      printf '      - %s_proxy\n' "$app"
-      if [[ "$app" == auth ]]; then
-        for m in "${members_apps[@]+"${members_apps[@]}"}"; do
-          printf '      - %s_members\n' "$m"
+      if [[ "$app" == auth && ${#members_apps[@]} -gt 0 ]]; then
+        # On each members network the gateway answers to auth-members: it
+        # binds its members listener (:8081) only to the addresses that name
+        # resolves to, and its public :8080 refuses connections on them.
+        printf '      auth_proxy: {}\n'
+        for m in "${members_apps[@]}"; do
+          printf '      %s_members:\n        aliases:\n          - auth-members\n' "$m"
         done
+        continue
       fi
+      printf '      - %s_proxy\n' "$app"
       if is_members_app "$app"; then
         printf '      - %s_members\n' "$app"
       fi

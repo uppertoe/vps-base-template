@@ -17,13 +17,14 @@ cch = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(cch)
 
 
-def mk(binds=None, mounts=None, capadd=None, netmode="bridge"):
+def mk(binds=None, mounts=None, capadd=None, netmode="bridge", sec=None, **host):
     return {
-        "HostConfig": {
+        "HostConfig": dict({
             "Binds": binds or [],
             "CapAdd": capadd or [],
             "NetworkMode": netmode,
-        },
+            "SecurityOpt": sec if sec is not None else ["no-new-privileges:true"],
+        }, **host),
         "Mounts": mounts or [],
         "Config": {},
     }
@@ -46,6 +47,18 @@ CASES = [
     ("no caps", mk(), "cap_add_minimal", True),
     ("host network", mk(netmode="host"), "no_host_network", False),
     ("bridge network", mk(netmode="bridge"), "no_host_network", True),
+    ("no-new-privileges:true", mk(), "no_new_privileges", True),
+    ("bare no-new-privileges", mk(sec=["no-new-privileges"]), "no_new_privileges", True),
+    ("no-new-privileges:false", mk(sec=["no-new-privileges:false"]), "no_new_privileges", False),
+    ("true then false", mk(sec=["no-new-privileges:true", "no-new-privileges:false"]), "no_new_privileges", False),
+    ("no security options", mk(sec=[]), "no_new_privileges", False),
+    ("default confinement", mk(), "confined", True),
+    ("seccomp unconfined", mk(sec=["no-new-privileges:true", "seccomp=unconfined"]), "confined", False),
+    ("apparmor unconfined", mk(sec=["apparmor:unconfined"]), "confined", False),
+    ("label disable", mk(sec=["label:disable"]), "confined", False),
+    ("userns host", mk(UsernsMode="host"), "no_host_namespaces", False),
+    ("pid host", mk(PidMode="host"), "no_host_namespaces", False),
+    ("private namespaces", mk(), "no_host_namespaces", True),
 ]
 
 

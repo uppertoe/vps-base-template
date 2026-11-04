@@ -72,6 +72,8 @@ host_monitoring_packages:
 host_earlyoom_enabled: true
 host_earlyoom_min_free_mem_percent: 5
 host_earlyoom_min_free_swap_percent: 10
+# Seconds between earlyoom memory reports in the journal (0 disables them).
+host_earlyoom_report_interval: 3600
 
 # -----------------------------------------------------------------------------
 # SSH hardening (passed to devsec.hardening.ssh_hardening)

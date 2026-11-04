@@ -110,6 +110,14 @@
     group: root
     mode: "0750"
 
+- name: Install the consistent SQLite copy helper
+  ansible.builtin.copy:
+    src: sqlite-snapshot.py
+    dest: "{{ backup_scripts_dest }}/sqlite-snapshot.py"
+    owner: root
+    group: root
+    mode: "0750"
+
 - name: Install restore.sh
   ansible.builtin.copy:
     src: restore.sh
@@ -244,6 +252,57 @@
 - name: Enable and start backup verify timer
   ansible.builtin.systemd:
     name: backup-verify.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+  tags:
+    - molecule-notest
+
+# A backup that silently stops (a timer that no longer fires, a run that
+# hangs) raises no failure of its own; this hourly check notices it
+# (2026-11-04 review).
+- name: Install the backup freshness check
+  ansible.builtin.copy:
+    src: backup-freshness
+    dest: /usr/local/bin/backup-freshness
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the backup freshness units
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/{{ item.name }}"
+    owner: root
+    group: root
+    mode: "0644"
+    content: "{{ item.content }}"
+  loop:
+    - name: backup-freshness.service
+      content: |
+        # Managed by Ansible (backup role)
+        [Unit]
+        Description=Alert when a service's backups have stopped
+        [Service]
+        Type=oneshot
+        ExecStart=/usr/local/bin/backup-freshness
+        Nice=10
+    - name: backup-freshness.timer
+      content: |
+        # Managed by Ansible (backup role)
+        [Unit]
+        Description=Hourly check that every service's backups are recent
+        [Timer]
+        OnCalendar=*-*-* *:40:00
+        RandomizedDelaySec=5min
+        [Install]
+        WantedBy=timers.target
+  loop_control:
+    label: "{{ item.name }}"
+  notify: Reload systemd
+
+- name: Enable the backup freshness timer
+  ansible.builtin.systemd:
+    name: backup-freshness.timer
     enabled: true
     state: started
     daemon_reload: true

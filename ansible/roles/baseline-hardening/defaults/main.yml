@@ -104,6 +104,14 @@ baseline_docker_audit_watch_candidates:
 # Shell history churns constantly and is trivially forgeable — auditd's execve
 # records are the authoritative command trail; .ssh/authorized_keys, .bashrc
 # and .profile stay fully monitored.
+# AIDE's scan and re-baseline: reclaim its own page cache above this, and take
+# at most this share of a CPU (2026-11-04 review: unbounded, it peaked at
+# 690 MB and held the single vCPU for 20 minutes at a time).
+baseline_aide_memory_high: 384M
+# The kernel audit backlog, at boot (GRUB) and at runtime (-b).
+baseline_audit_backlog_limit: 16384
+baseline_aide_cpu_quota: 60%
+
 baseline_aide_exclude_paths:
   - /run
   - /tmp

@@ -23,6 +23,11 @@ notify_default_priority: high
 # Provisioning fails when the URL is empty unless the gap is explicitly
 # accepted with notify_deadman_accept_none: true.
 notify_deadman_url: ""
+# A second channel for when the local ntfy is down: a public ntfy.sh topic
+# (keep its name unguessable, as for any ntfy.sh topic). It gets the host and
+# the alert title only; the detail waits in /var/spool/vps-notify until
+# vps-notify-retry can send it. Empty disables the fallback.
+notify_fallback_url: ""
 notify_deadman_token: ""
 notify_deadman_interval_min: 5
 notify_deadman_accept_none: false

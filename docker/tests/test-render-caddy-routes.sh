@@ -406,11 +406,13 @@ if bash "$renderer" "$work/members" "$work/members-out" >/dev/null 2>"$work/memb
   auth_block="$(awk '/^  auth:/{f=1;next} /^  [a-z]/{f=0} f' "$nets")"
   cases_block="$(awk '/^  cases:/{f=1;next} /^  [a-z]/{f=0} f' "$nets")"
   rota_block="$(awk '/^  rota:/{f=1;next} /^  [a-z]/{f=0} f' "$nets")"
-  if grep -q -- '- cases_members' <<<"$auth_block" && grep -q -- '- cases_members' <<<"$cases_block" \
+  if grep -A2 '^      cases_members:$' <<<"$auth_block" | grep -q -- '- auth-members' \
+     && ! grep -q 'auth-members' <<<"$cases_block" \
+     && grep -q -- '- cases_members' <<<"$cases_block" \
      && ! grep -q -- '_members' <<<"$rota_block" \
      && grep -A1 -q '^  cases_members:$' "$nets" && grep -A1 '^  cases_members:$' "$nets" | grep -q 'internal: true' \
      && ! grep -q 'rota_members' "$nets"; then
-    pass "members network: cases and auth share an internal cases_members; rota has none"
+    pass "members network: cases and auth share an internal cases_members, where auth is auth-members; rota has none"
   else
     fail "members network not as expected:"; cat "$nets" >&2
   fi

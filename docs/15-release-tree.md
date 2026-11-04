@@ -189,9 +189,10 @@ docker run --rm -v "$PWD":/t:ro ubuntu:24.04 bash /t/test_vps_release.sh
   whose old history carries fsck warnings needs `fetch.fsck.<msg-id>=ignore`
   for that warning, not the check turned off.
 
-- markbot needs SOPS support for two non-dotenv files (Authelia's key and
-  user list) before it can adopt; `vps-secrets-render` gains a binary mode
-  for `secrets/**/*.file.sops`.
+- markbot's two non-dotenv files (Authelia's key and user list) are carried
+  by the renderer's whole-file mode (docs/13 "Whole files", 2026-11-04); the
+  server still has to move them into `secrets/` and make its Authelia
+  configuration bind read-only before it can adopt.
 - `provision.sh` and `restore.sh` assume the default access model and a
   checkout at `/opt/deploy`, and need a release-tree path. Until then a
   server is provisioned or rebuilt in default mode and switched afterwards

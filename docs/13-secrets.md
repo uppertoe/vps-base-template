@@ -81,7 +81,8 @@ check and before `docker compose pull`:
    - `secrets/backup/services/<name>.env.sops` becomes
      `backup/services/<name>.env`.
 
-   Only the env files that the wrapper already locks to `600` may be targets.
+   Only the env files that the wrapper already locks to `600` may be targets,
+   plus the whole files described under "Whole files" below.
    `secrets/recovery.sops` is never rendered. When the repo carries
    `secrets/backup/config.env.sops`, the renderer also installs the rendered
    backup set into `/etc/restic` (root-only, `--restic-dir`) and removes a
@@ -120,14 +121,69 @@ let them write, read or hang anything they could not already
 - New files are created under a `.env.` temporary name with
   `O_EXCL | O_NOFOLLOW` and renamed into place; stale temporary files from an
   interrupted run are removed first.
-- Decrypted content that sets a `COMPOSE_*` variable or holds a carriage
-  return is refused.
+- Decrypted dotenv content that sets a `COMPOSE_*` variable or holds a
+  carriage return is refused.
+
+## Whole files
+
+Some secrets are not environment variables: Authelia's OIDC signing key and
+its user list on markbot are files that the container reads from a mount. A
+secrets file whose name does not end in `.env.sops` is a whole file. It is
+encrypted with sops' binary type and rendered byte for byte to its mirrored
+path, mode `0600`, owned like every rendered file:
+
+```text
+secrets/apps/authelia/config/oidc.pem.sops           -> apps/authelia/config/oidc.pem
+secrets/apps/authelia/config/users_database.yml.sops -> apps/authelia/config/users_database.yml
+```
+
+Four rules apply to a whole file and not to a dotenv file:
+
+- Its rendered path must lie below a subdirectory of an app
+  (`apps/<app>/<dir>/.../<file>`). The deploy reads compose files, hooks and
+  Caddy snippets from an app's top level, so nothing rendered is ever
+  executed or assembled by the deploy itself.
+- Its rendered path must not be a file git tracks. The CI check, the wrapper
+  and `vps-release` all refuse a secrets file that would replace a reviewed
+  file with content no reviewer can read.
+- The dotenv checks (the `COMPOSE_*` guard, the carriage-return refusal) do
+  not apply; an empty result is refused as a mistake.
+- The renderer records the whole files it has written under
+  `/var/lib/vps-secrets-render/` (root-only) and removes one whose secrets file
+  has since left the repo, so a retired key or user list does not stay in use.
+  A dotenv file is not removed: compose reads it by name from the tracked
+  compose files, and the wrapper locks the whole set.
+
+The permission pass that makes bind-mounted repo files world-readable skips
+the rendered whole files, which stay `0600`. The container must therefore run
+as the owner of the rendered files: the deploy account in checkout mode, root
+under the release tree. An app whose container runs as another uid cannot
+read a whole file rendered this way until phase 2 writes secret files under
+`/run/vps-secrets/<app>/` owned by the container's uid.
+
+Encrypt a whole file on the server, outside the checkout, as for a dotenv
+file, with the binary type and the final path named so that `.sops.yaml`
+picks the recipients:
+
+```bash
+f=apps/authelia/config/oidc.pem
+out=/root/secrets-import/secrets/$f.sops
+mkdir -p "$(dirname "$out")"
+sops --encrypt --filename-override "secrets/$f.sops" \
+  --input-type binary --output-type binary "$f" > "$out"
+```
+
+The result is a small JSON document whose one `data` value is the encrypted
+file; `sops secrets/$f.sops` on the laptop opens it for editing as usual. The
+CI check accepts exactly that document, with age as its only key source.
 
 ## Guards
 
-- **CI (built):** `scaffold/docker/check-secrets-encrypted.sh` fails if a file
-  under `secrets/` is not a SOPS-encrypted dotenv file in which every line is
-  encrypted, empty or SOPS' age metadata, if `secrets/` exists without
+- **CI (built):** `scaffold/docker/check-secrets-encrypted.sh` fails if a
+  dotenv file under `secrets/` is not SOPS-encrypted with every line
+  encrypted, empty or SOPS' age metadata, if a whole file is not the binary
+  document sops writes, sits anywhere but below an app's subdirectory, or
+  would be rendered over a tracked file, if `secrets/` exists without
   `.sops.yaml`, or if git tracks a plain env file (`.env`, `*.env`, `.env.*`).
   A server repo turns it on with `secrets_sops: true` in its
   `.scaffold-server.yml`; the shared CI (docs/14) then runs the check in its

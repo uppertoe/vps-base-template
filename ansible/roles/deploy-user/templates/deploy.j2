@@ -39,9 +39,17 @@ find . \
 # uid is not the deploy user's — readability must not depend on that
 # coincidence. Normalise the container-consumed tree to world-readable,
 # conditionally for the same ctime/AIDE reason as above. Secrets are exactly
-# the .env set locked to 600 above and are excluded here.
+# the .env set locked to 600 above and the whole files rendered from secrets/
+# (docs/13 "Whole files", named after their secrets file without ".sops"),
+# and are excluded here.
+rendered_prune=()
+if [[ -d secrets ]]; then
+  while IFS= read -r -d '' f; do
+    rendered_prune+=(-o -path "./${f#./secrets/}")
+  done < <(find ./secrets -type f -name '*.sops' ! -name '*.env.sops' ! -path './secrets/recovery.sops' -print0 | sed -z 's/\.sops$//')
+fi
 find ./apps ./scaffold ./.generated ./Caddyfile \
-  \( -name '.env' -o -name '.env.*' \) -prune \
+  \( -name '.env' -o -name '.env.*' "${rendered_prune[@]}" \) -prune \
   -o -type f ! -perm -0004 -exec chmod o+r {} + \
   -o -type d ! -perm -0005 -exec chmod o+rx {} +
 

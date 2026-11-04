@@ -221,6 +221,13 @@ ansible-playbook -i ansible/hosts scaffold/ansible/audit-docker.yml
 
 Each output line references a CIS Docker Benchmark section number directly.
 
+The play clones the tool at a pinned commit (`docker_bench_commit` in
+`audit-docker.yml`), because the script runs as root on the host. Renovate
+opens a pull request when upstream `master` moves; read the upstream diff
+before merging it. The trusted-user list for check 1.1.2 is derived from the
+access model: `admin` where it keeps direct docker access, and `deploy` only
+in the default model.
+
 The scaffold intentionally focuses on the host and daemon controls that can be
 applied safely across many Dockerised apps:
 - daemon defaults like `icc: false`, `no-new-privileges`, `live-restore`, and

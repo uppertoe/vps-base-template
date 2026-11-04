@@ -33,8 +33,27 @@
       ],
       "datasourceTemplate": "docker",
     },
+    {
+      "customType": "regex",
+      "description": "Commit-pinned git checkouts in Ansible plays (docker-bench-security): the comment names the datasource and the branch to follow, the next line carries the commit",
+      "managerFilePatterns": [
+        "/^ansible/.+\\.ya?ml$/",
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>git-refs) depName=(?<depName>\\S+) branch=(?<currentValue>\\S+)\\s+\\S+: \"(?<currentDigest>[a-f0-9]{40})\"",
+      ],
+    },
   ],
   "packageRules": [
+    {
+      // The benchmark script runs as root on production hosts, so a new
+      // commit is proposed, not automerged: an operator reads the upstream
+      // diff before the pin moves.
+      "description": "docker-bench-security commit bumps stay manual",
+      "matchDatasources": ["git-refs"],
+      "groupName": "docker-bench-security commit",
+      "automerge": false,
+    },
     {
       // NO minimumReleaseAge on digest rules: Renovate cannot date a Docker
       // digest ("digest update of <image> has no releaseTimestamp to age

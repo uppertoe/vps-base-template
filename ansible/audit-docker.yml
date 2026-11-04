@@ -30,6 +30,20 @@
         else (playbook_dir | dirname)
       }}
     local_report_dir: "{{ local_reports_root }}/reports/docker-bench-{{ inventory_hostname }}-{{ ansible_facts['date_time']['date'] }}"
+    # The benchmark runs as root on a production host, so it is pinned to a
+    # commit (a commit id is a hash of the whole tree) like every other
+    # third-party artefact the scaffold fetches. Renovate proposes a bump when
+    # upstream master moves (renovate.json5, "docker-bench-security commit").
+    # renovate: datasource=git-refs depName=https://github.com/docker/docker-bench-security branch=master
+    docker_bench_commit: "154869da6418089decf7e1ab0cfca0e1cdfc5c49"
+    # Accounts that may hold docker-group membership, for check 1.1.2 (only
+    # trusted users control the daemon): the admin account where it keeps
+    # direct docker access, and the deploy account only in the default model.
+    docker_bench_trusted_users: >-
+      {{
+        ([deploy_admin_user | default('admin')] if (deploy_allow_direct_docker_for_admin | default(true) | bool) else [])
+        + ([deploy_user | default('deploy')] if not (deploy_restricted_mode | default(false) | bool) else [])
+      }}
 
   tasks:
     - name: Install git (required to clone docker-bench-security)
@@ -37,18 +51,21 @@
         name: git
         state: present
 
-    - name: Clone docker-bench-security
+    - name: Clone docker-bench-security at the pinned commit
       ansible.builtin.git:
         repo: https://github.com/docker/docker-bench-security.git
         dest: /opt/docker-bench-security
+        version: "{{ docker_bench_commit }}"
         force: true
 
+    # -l names the text log; the tool writes its JSON beside it as <log>.json.
+    # -u is the trusted docker-user list for check 1.1.2.
     - name: Run docker-bench-security
       ansible.builtin.shell:
         cmd: >-
           bash docker-bench-security.sh
           -l /tmp/docker-bench.log
-          -u /tmp/docker-bench-output.json
+          {% if docker_bench_trusted_users | length > 0 %}-u {{ docker_bench_trusted_users | join(',') }}{% endif %}
           2>/dev/null
         chdir: /opt/docker-bench-security
       register: bench_result
@@ -81,11 +98,9 @@
 
     - name: Fetch JSON output
       ansible.builtin.fetch:
-        src: /tmp/docker-bench-output.json
+        src: /tmp/docker-bench.log.json
         dest: "{{ local_report_dir }}/docker-bench.json"
         flat: true
-      # JSON output may not exist on older versions of the tool
-      failed_when: false
 
     - name: Remind how to read results
       ansible.builtin.debug:

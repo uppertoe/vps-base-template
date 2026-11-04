@@ -125,6 +125,30 @@
     - not molecule_test | default(false) | bool
     - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
 
+# Turning the switch off removes the setting again: the persisted line goes,
+# and the running kernel returns to its default heuristic (0). Until 2026-11-04
+# the line stayed in place once written.
+- name: Remove the kernel memory overcommit setting when it is switched off
+  ansible.posix.sysctl:
+    name: vm.overcommit_memory
+    state: absent
+    reload: true
+    sysctl_file: /etc/sysctl.d/99-vps-scaffold.conf
+  register: os_overcommit_removed
+  when:
+    - not (host_vm_overcommit_memory_enabled | bool)
+    - not molecule_test | default(false) | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
+- name: Reset the running kernel to the default overcommit heuristic
+  ansible.builtin.command:
+    cmd: sysctl -w vm.overcommit_memory=0
+  changed_when: true
+  when:
+    - os_overcommit_removed is changed
+    - not molecule_test | default(false) | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
 - name: Lock root password
   ansible.builtin.user:
     name: root

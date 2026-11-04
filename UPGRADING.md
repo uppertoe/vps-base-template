@@ -6,6 +6,58 @@ are always the same; what varies is the *operator actions* that accompany a
 given range of scaffold changes — that's what this file records.
 
 
+## 2026-11-04 — Ansible corrections from the 2026-11-03 review
+
+**The CIS L2 audit ruleset now follows `baseline_cis_l2_audit_rules`.** The
+task that copied `cis-l2-audit.d/*.rules` into `/etc/audit/rules.d/` ran on
+every host; it now runs only where the flag is true, and a host with the flag
+false (the default) has those files removed on its next site play. Rules
+already loaded under the immutable flag (`-e 2`) stay in the kernel until the
+host reboots, so such a host keeps auditing setuid executions until then.
+Hosts that set the flag true (the RCH and MCH servers) see no change.
+
+**`deploy_restricted_mode` has left the playbook `group_vars/all.yml`.** Its
+default of false lives in the deploy-user and docker role defaults, so an
+inventory may now set it in `[servers:vars]` as well as per host. A host var
+keeps working unchanged. The refusal to narrow deploy's sudo from the deploy
+account now reads the account that invoked sudo (`SUDO_USER`), since the
+plays gather facts as root.
+
+**The play refuses a string-valued `deploy_allowed_signers` or
+`deploy_github_webflow_fingerprints`.** An INI value wrapped in outer single
+quotes is read as one string, and the trust store rendered from it refused
+every operator-signed deploy (prod-mch-vps, 2026-08-18). Write the list
+without outer quotes (docs/05).
+
+**`audit-docker.yml` clones docker-bench-security at a pinned commit** and
+passes the trusted docker users derived from the access model; the JSON
+report is now fetched from the path the tool writes. Renovate proposes a
+pull request when upstream moves; it is not automerged.
+
+**Smaller corrections, no action needed:** `vps-panic-guard-stable.timer` is
+templated from `notify_panic_guard_stable_min`; the never-read SSH MACs
+drop-in under `sshd_config.d` is removed (the MACs come from devsec's
+`ssh_macs` in `sshd_config` itself); the duplicate `INACTIVE=30` task is
+gone; the home-directory permission passes run the chmod as the owning
+account; the site plays record the scaffold commit from
+`/opt/deploy/.release` under the release tree; turning
+`host_vm_overcommit_memory_enabled` off removes the sysctl; the log export
+takes its "newer than" mark at the start of a run; `vps-deploy` reads
+`deploy_verify_signature` through `| bool`. Ports removed from the
+`firewall_allowed_*` lists still keep their ufw rules; delete those by hand
+(`sudo ufw delete allow <port>/<proto>`).
+
+**Operator actions:**
+
+1. Re-run the site play. On a host without `baseline_cis_l2_audit_rules`,
+   reboot in a maintenance window if you want the removed L2 rules out of
+   the running kernel.
+2. If an inventory carries `deploy_allowed_signers` in outer single quotes,
+   remove the quotes before the play (it would otherwise fail with the
+   reason).
+
+---
+
 ## 2026-11-03 — Restricted mode requires the release tree and the signature gate; the wrapper refuses rewinds
 
 From the 2026-11-03 review (docs/05 "The Repo-to-Root Trust Boundary").

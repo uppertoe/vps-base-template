@@ -143,16 +143,20 @@
   when: deploy_allow_direct_docker_for_admin | bool
 
 # The flip must not run as the account it narrows: the next become would fail
-# mid-play. Site plays run as admin in restricted mode (docs/05).
+# mid-play. Site plays run as admin in restricted mode (docs/05). The plays
+# gather facts under become, so ansible_user_id is root; the account that
+# invoked sudo is the one sudo records in SUDO_USER.
 - name: Refuse to narrow deploy's sudo from the deploy account itself
   ansible.builtin.fail:
     msg: >-
       deploy_restricted_mode is true but this play is connected as
-      '{{ ansible_user_id }}', the account whose sudo it narrows. Connect as
-      {{ deploy_admin_user }} (ansible_user=admin) and re-run.
+      '{{ deploy_connecting_user }}', the account whose sudo it narrows.
+      Connect as {{ deploy_admin_user }} (ansible_user=admin) and re-run.
+  vars:
+    deploy_connecting_user: "{{ (ansible_env | default({})).SUDO_USER | default(ansible_user_id | default('')) }}"
   when:
     - deploy_restricted_mode | bool
-    - ansible_user_id == deploy_user
+    - deploy_connecting_user == deploy_user
     - not (molecule_test | default(false) | bool)
 
 # Restricted mode replaces broad sudo with the wrapper allowlist. Both
@@ -588,6 +592,49 @@
 # only (an explicit allowedSignersFile and a fixed GNUPGHOME, the deploy
 # user's git config and keyring ignored), so the trust store is genuinely
 # outside the deploy account's reach — a stolen deploy key cannot add a signer.
+
+# Both trust variables must be lists. An INI inventory makes a string easy to
+# produce: a value wrapped in outer single quotes (var='["..."]') is read as
+# one string, and the template's for-loop then iterates its characters and
+# writes a one-character-per-line trust store that refuses every
+# operator-signed deploy. The fault is silent at provision time and masked in
+# operation, because web-flow merges verify through the GPG keyring
+# (prod-mch-vps, 2026-08-18). The play fails here instead.
+- name: Refuse a deploy_allowed_signers that is not a list of signer lines
+  ansible.builtin.assert:
+    that:
+      - deploy_allowed_signers is not string
+      - deploy_allowed_signers is not mapping
+      - deploy_allowed_signers is sequence
+      - deploy_allowed_signers | select('string') | list | length == deploy_allowed_signers | length
+      - deploy_allowed_signers | reject('match', '^\S+\s+\S+\s+\S+') | list | length == 0
+    fail_msg: >-
+      deploy_allowed_signers must be a list of allowed-signers lines
+      ("<principal> <key-type> <base64-key>"); it is a
+      {{ deploy_allowed_signers | type_debug }}: {{ deploy_allowed_signers }}.
+      In an INI inventory write the list without outer quotes,
+      deploy_allowed_signers=["<email> ssh-ed25519 AAAA..."]; a quoted value
+      is read as a string and would render a corrupt /etc/ssh/allowed_signers.
+    quiet: true
+  when: deploy_verify_signature | bool
+
+- name: Refuse a deploy_github_webflow_fingerprints that is not a list of fingerprints
+  ansible.builtin.assert:
+    that:
+      - deploy_github_webflow_fingerprints is not string
+      - deploy_github_webflow_fingerprints is not mapping
+      - deploy_github_webflow_fingerprints is sequence
+      - deploy_github_webflow_fingerprints | select('string') | list | length == deploy_github_webflow_fingerprints | length
+      - deploy_github_webflow_fingerprints | reject('match', '^[0-9A-Fa-f]{40}$') | list | length == 0
+    fail_msg: >-
+      deploy_github_webflow_fingerprints must be a list of 40-hex-digit GPG
+      fingerprints; it is a {{ deploy_github_webflow_fingerprints | type_debug }}:
+      {{ deploy_github_webflow_fingerprints }}. In an INI inventory write the
+      list without outer quotes.
+    quiet: true
+  when:
+    - deploy_verify_signature | bool
+    - deploy_trust_github_merges | bool
 
 - name: Install allowed-signers file for signed deploys
   ansible.builtin.template:

@@ -368,33 +368,30 @@
           - ssh_banner_file.stat.mode == '0644'
         msg: "SSH banner file is missing or has unexpected permissions"
 
-    - name: Check SSH hardening drop-in state
+    # devsec writes sshd_config without an Include, so a drop-in under
+    # sshd_config.d is never read; the scaffold's old MACs drop-in is removed
+    # and the MACs are asserted on the effective configuration (sshd -T).
+    - name: Check the inert SSH MACs drop-in is gone
       ansible.builtin.stat:
         path: /etc/ssh/sshd_config.d/00-vps-scaffold-hardening.conf
       register: ssh_hardening_dropin
 
-    - name: Assert SSH hardening drop-in is locked down when present
+    - name: Assert the inert SSH MACs drop-in is gone
       ansible.builtin.assert:
         that:
-          - not ssh_hardening_dropin.stat.exists or ssh_hardening_dropin.stat.mode == '0600'
-        msg: "SSH hardening drop-in is too permissive"
+          - not ssh_hardening_dropin.stat.exists
+        msg: "the never-read MACs drop-in /etc/ssh/sshd_config.d/00-vps-scaffold-hardening.conf should have been removed"
 
-    - name: Read SSH hardening drop-in when present
-      ansible.builtin.slurp:
-        src: /etc/ssh/sshd_config.d/00-vps-scaffold-hardening.conf
-      register: ssh_hardening_dropin_raw
-      when: ssh_hardening_dropin.stat.exists
+    - name: Read the effective sshd configuration
+      ansible.builtin.command: sshd -T
+      register: sshd_effective
+      changed_when: false
 
-    - name: Assert benchmark MACs are configured in SSH config
+    - name: Assert benchmark MACs are in force
       ansible.builtin.assert:
         that:
-          - >-
-            'MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com'
-            in sshd_config or
-            (sshd_config_d_raw.results | default([]) |
-             map(attribute='content') | map('b64decode') |
-             select('search', 'MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com') | list | length > 0)
-        msg: "SSH config does not configure the expected benchmark MACs"
+          - "'macs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com' in sshd_effective.stdout"
+        msg: "sshd -T does not report the expected benchmark MACs"
 
     - name: Read root shadow entry
       ansible.builtin.getent:
@@ -562,11 +559,12 @@
         src: /etc/default/useradd
       register: useradd_defaults_raw
 
-    - name: Assert default inactive days are configured
+    - name: Assert default inactive days are configured once
       ansible.builtin.assert:
         that:
           - "'INACTIVE=30' in (useradd_defaults_raw.content | b64decode)"
-        msg: "default inactive password lock is not configured"
+          - (useradd_defaults_raw.content | b64decode).splitlines() | select('match', '^INACTIVE=') | list | length == 1
+        msg: "default inactive password lock is not configured exactly once"
 
     - name: Check allow-list files exist
       ansible.builtin.stat:
@@ -974,6 +972,25 @@
       loop: "{{ compliance_artifacts.results }}"
       loop_control:
         label: "{{ item.item }}"
+
+    - name: Read the panic-guard re-arm timer
+      ansible.builtin.slurp:
+        src: /etc/systemd/system/vps-panic-guard-stable.timer
+      register: panic_guard_timer_raw
+
+    - name: Read notify.env
+      ansible.builtin.slurp:
+        src: /etc/vps-scaffold/notify.env
+      register: notify_env_raw
+
+    # Converge sets notify_panic_guard_stable_min to 45: the timer and the
+    # message text must both follow the variable.
+    - name: Assert the panic-guard re-arm wait follows notify_panic_guard_stable_min
+      ansible.builtin.assert:
+        that:
+          - "'OnBootSec=45min' in (panic_guard_timer_raw.content | b64decode)"
+          - "'PANIC_GUARD_STABLE_MIN=45' in (notify_env_raw.content | b64decode)"
+        msg: "vps-panic-guard-stable.timer is not templated from notify_panic_guard_stable_min"
 
     - name: Check secret env files are root-only
       ansible.builtin.assert:

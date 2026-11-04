@@ -515,6 +515,10 @@ changed="$(changed_paths "$old_head" "$new_head")"
 if [[ "$old_scaffold" != "$new_scaffold" ]]; then
   changed="${changed}"$'\n'"scaffold"
 fi
+# A changed secrets file is rendered to its mirrored path (docs/13), which a
+# service may bind-mount (a whole file such as a signing key): count the
+# rendered path as changed too, so that service is recreated.
+changed="${changed}"$'\n'"$(printf '%s\n' "$changed" | sed -n 's#^secrets/\(.*\)\.sops$#\1#p')"
 recreate=()
 if [[ -n "${changed//[[:space:]]/}" ]]; then
   while IFS=$'\t' read -r svc rel; do

@@ -304,8 +304,12 @@
     owner: root
     group: root
     mode: "0644"
+    # -r: earlyoom's memory report defaults to once a second, which was half
+    # of RCH's journal and cut its retention to about 31 hours (2026-11-04
+    # review). Kills are still logged when they happen.
     content: |
-      EARLYOOM_ARGS="-m {{ host_earlyoom_min_free_mem_percent }} -s {{ host_earlyoom_min_free_swap_percent }}"
+      EARLYOOM_ARGS="-m {{ host_earlyoom_min_free_mem_percent }} -s {{ host_earlyoom_min_free_swap_percent }} -r {{ host_earlyoom_report_interval | default(3600) }}"
+  notify: Restart earlyoom
   when: host_earlyoom_enabled | bool
 
 # The CIS remediation mounts /proc with hidepid=2, which hides every other

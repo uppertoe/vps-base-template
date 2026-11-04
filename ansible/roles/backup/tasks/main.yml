@@ -170,6 +170,18 @@
     group: root
     mode: "0700"
 
+# A server repo that keeps its backup set in SOPS (secrets/backup/) has it
+# rendered into /etc/restic by every deploy (vps-secrets-render --restic-dir).
+# The copies below would then read root-only rendered files as the play's
+# user and fail, or, run from a laptop, overwrite the rendered set with stale
+# plaintext (2026-11-04). Leave the set to the renderer in that case.
+- name: Check whether the backup set is kept in SOPS
+  ansible.builtin.stat:
+    path: "{{ backup_config_src }}/../secrets/backup/config.env.sops"
+  register: backup_sops_set
+  delegate_to: localhost
+  become: false
+
 - name: Deploy global config (config.env)
   ansible.builtin.copy:
     src: "{{ backup_config_src }}/config.env"
@@ -178,6 +190,7 @@
     group: root
     mode: "0600"
   no_log: true  # carries restic repo password / S3 creds
+  when: not backup_sops_set.stat.exists
 
 - name: Find service env files in server repo
   ansible.builtin.find:
@@ -187,6 +200,7 @@
   register: backup_service_files
   delegate_to: localhost
   become: false
+  when: not backup_sops_set.stat.exists
 
 - name: Deploy service configs
   ansible.builtin.copy:
@@ -196,9 +210,10 @@
     group: root
     mode: "0600"
   no_log: true  # each service env carries a restic repo password
-  loop: "{{ backup_service_files.files }}"
+  loop: "{{ backup_service_files.files | default([]) }}"
   loop_control:
     label: "{{ item.path | basename }}"
+  when: not backup_sops_set.stat.exists
 
 # ---------------------------------------------------------------------------
 # Systemd units

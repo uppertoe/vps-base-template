@@ -1,0 +1,38 @@
+#!/bin/bash
+# vps-notify-retry — resend alerts that vps-notify could not deliver.
+#
+# vps-notify spools a message it could not send to /var/spool/vps-notify.
+# This sends each one to NTFY_URL again, oldest first, and removes it once
+# sent. A message older than a day is sent with a note that it was delayed;
+# one older than a week is dropped with a log line. Installed by the notify role.
+set -u
+CONF="${VPS_NOTIFY_CONF:-/etc/vps-scaffold/notify.env}"
+# shellcheck disable=SC1090
+[ -r "$CONF" ] && . "$CONF"
+[ -n "${NTFY_URL:-}" ] || exit 0
+SPOOL="${VPS_NOTIFY_SPOOL:-/var/spool/vps-notify}"
+[ -d "$SPOOL" ] || exit 0
+now="$(date -u +%s)"
+# A glob sorts by name, and the names start with their UTC time: oldest first.
+for p in "$SPOOL"/*; do
+  [ -f "$p" ] || continue
+  age=$(( now - $(stat -c %Y "$p") ))
+  if [ "$age" -gt 604800 ]; then
+    logger -t vps-notify-retry "dropping an undelivered alert older than a week: $(sed -n 's/^title=//p' "$p")"
+    rm -f "$p"
+    continue
+  fi
+  title="$(sed -n 's/^title=//p' "$p" | head -1)"
+  priority="$(sed -n 's/^priority=//p' "$p" | head -1)"
+  tags="$(sed -n 's/^tags=//p' "$p" | head -1)"
+  body="$(sed '1,/^$/d' "$p")"
+  [ "$age" -gt 86400 ] && body="(Delayed by $((age / 3600)) h: the alert channel was unreachable.) ${body}"
+  args=(-fsS --max-time 20 -H "Title: ${title}" -H "Priority: ${priority:-high}" -H "Tags: ${tags:-warning}")
+  [ -n "${NTFY_TOKEN:-}" ] && args+=(-H "Authorization: Bearer ${NTFY_TOKEN}")
+  if printf '%s' "$body" | curl "${args[@]}" --data-binary @- "$NTFY_URL" >/dev/null 2>&1; then
+    rm -f "$p"
+  else
+    break   # still down; try again next time, in order
+  fi
+done
+exit 0

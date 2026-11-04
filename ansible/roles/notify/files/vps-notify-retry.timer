@@ -1,0 +1,8 @@
+# Managed by Ansible (notify role).
+[Unit]
+Description=Every ten minutes, resend undelivered alerts
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=10min
+[Install]
+WantedBy=timers.target

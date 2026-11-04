@@ -82,6 +82,11 @@ services:
     # faulted back from swap. It runs around 60 MB against this ceiling, so the
     # slice costs nothing worth having. Installed by the docker role.
     cgroup_parent: vps-noswap.slice
+    # The slice is shared with the gateway and Planka, whose ceilings add up
+    # to more than the slice's own. When the slice runs out, the kernel kills
+    # its likeliest process, which must not be Caddy (2026-11-04 review). The
+    # gateway carries the same setting in its own compose file.
+    oom_score_adj: -800
     mem_limit: 256m
     pids_limit: 256
     ports:

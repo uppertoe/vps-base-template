@@ -8,7 +8,7 @@
 #
 #   --dry-run         Print every command that would run; make no changes.
 #   --verify          After backing up, run `restic check`, apply retention with
-#                     (reading CHECK_READ_DATA_SUBSET of the data packs when set),
+#                     (reading CHECK_READ_DATA_SUBSET of the data packs, 5% by default),
 #                     prune, and list recent snapshots.
 #   --verify-only     Skip backup creation entirely and run verification mode
 #                     only (restic check + retention/prune + recent snapshots).
@@ -50,6 +50,12 @@
 #   BACKUP_EXCLUDE    Colon-separated paths/patterns to exclude from BACKUP_PATHS
 #                     (e.g. /srv/data/apps/ha/media:/srv/data/apps/ha/tmp).
 #                     Passed as --exclude to restic; supports globs.
+#   SQLITE_SNAPSHOT   "true" (default): every SQLite database under BACKUP_PATHS is
+#                     copied with SQLite's online backup API into
+#                     SQLITE_STAGING_DIR/<service>/<original path> first, and the
+#                     snapshot holds that consistent copy instead of the live
+#                     .db/-wal/-shm, which restic would read at different moments.
+#                     restore.sh moves the copies back. "false" backs up live files.
 #   OPTIONAL          Set to "true" to skip this service gracefully (default: false).
 #                     For DB services: skipped if the container is not running.
 #                     For files-only services: skipped if no BACKUP_PATHS exist on disk.
@@ -618,6 +624,33 @@ backup_service() {
     if "$FILES_ONLY"; then
       files_snapshot_state="snapshot not saved"
     fi
+    # Consistent copies of any SQLite databases (2026-11-04 review): the live
+    # files are left out and the staged copies backed up in their place.
+    local _stage="" _db
+    if [[ "${SQLITE_SNAPSHOT:-true}" == "true" ]]; then
+      _stage="${SQLITE_STAGING_DIR:-/var/lib/vps-backup/sqlite}/${SERVICE_NAME}"
+      rm -rf -- "$_stage"
+      mkdir -p "$_stage"
+      chmod 0700 "$(dirname "$_stage")" "$_stage"
+      # The real path: a staging path through a symlink would be restored as
+      # a directory in place of the link.
+      _stage="$(cd "$_stage" && pwd -P)"
+      local _dbs
+      if ! _dbs="$(python3 "${SQLITE_SNAPSHOT_HELPER:-$(dirname "$0")/sqlite-snapshot.py}" "$_stage" "${_paths[@]}")"; then
+        warn "[$SERVICE_NAME] A consistent SQLite copy failed."
+        record_failure "$failure_id" "$SERVICE_NAME" "$files_phase" "$files_snapshot_state" \
+          "consistent SQLite copy failed"
+        rm -rf -- "$_stage"
+        return 1
+      fi
+      if [[ -n "$_dbs" ]]; then
+        while IFS= read -r _db; do
+          _excludes+=(--exclude "$_db" --exclude "$_db-wal" --exclude "$_db-shm" --exclude "$_db-journal")
+        done <<< "$_dbs"
+        _paths+=("$_stage")
+        info "[$SERVICE_NAME] Consistent copies of $(wc -l <<< "$_dbs" | tr -d ' ') SQLite database(s) staged."
+      fi
+    fi
     # ${arr[@]+...} keeps the empty-excludes expansion legal under set -u on
     # bash 3.2 (macOS), where a bare "${arr[@]}" on an empty array is fatal.
     if ! restic backup \
@@ -629,12 +662,20 @@ backup_service() {
       warn "[$SERVICE_NAME] File backup failed."
       record_failure "$failure_id" "$SERVICE_NAME" "$files_phase" "$files_snapshot_state" \
         "file snapshot upload failed"
+      [[ -n "$_stage" ]] && rm -rf -- "$_stage"
       return 1
     fi
+    [[ -n "$_stage" ]] && rm -rf -- "$_stage"
     info "[$SERVICE_NAME] File backup complete."
   fi
 
   : > "$success_file"
+  # A lasting record of this service's last success, read by
+  # backup-freshness, which alerts when a backup silently stops.
+  if [[ "$DRY_RUN" != "true" ]]; then
+    local stamps="${BACKUP_STAMP_DIR:-/var/lib/vps-backup/success}"
+    mkdir -p "$stamps" 2>/dev/null && date -u +%s > "$stamps/$SERVICE_NAME" 2>/dev/null || true
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -657,10 +698,13 @@ verify_service() {
   info "[$SERVICE_NAME] Verifying repository integrity..."
   # CHECK_READ_DATA_SUBSET (config.env, e.g. "10%") makes the check read a sample of
   # the data packs, not just metadata, so silent blob corruption is caught before a
-  # restore needs it. Empty keeps the metadata-only check.
+  # restore needs it.
   local check_args=()
-  if [[ -n "${CHECK_READ_DATA_SUBSET:-}" ]]; then
-    check_args+=("--read-data-subset=${CHECK_READ_DATA_SUBSET}")
+  # Default 5% (2026-11-04 review: unset, the weekly check read metadata
+  # only). "none" keeps the metadata-only check.
+  local subset="${CHECK_READ_DATA_SUBSET:-5%}"
+  if [[ -n "$subset" && "$subset" != "none" ]]; then
+    check_args+=("--read-data-subset=${subset}")
   fi
   # ${arr[@]+...}: an empty array is fatal under set -u on bash 3.2 (macOS),
   # which is where the integration suite is run by hand.

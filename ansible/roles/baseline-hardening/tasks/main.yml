@@ -846,8 +846,34 @@
     group: root
     mode: "0644"
     content: |
-      GRUB_CMDLINE_LINUX="$GRUB_CMDLINE_LINUX audit=1 audit_backlog_limit=8192"
+      GRUB_CMDLINE_LINUX="$GRUB_CMDLINE_LINUX audit=1 audit_backlog_limit={{ baseline_audit_backlog_limit }}"
   notify: Update grub
+  when:
+    - baseline_cis_l2_audit_rules | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
+# The drop-in above is the one source of the audit arguments. Some images (and
+# older versions of this role) also wrote them into /etc/default/grub, which
+# put them on the kernel command line three times (2026-11-04 review).
+- name: Remove duplicate audit arguments from /etc/default/grub
+  ansible.builtin.replace:
+    path: /etc/default/grub
+    # Each audit argument inside a quoted GRUB_CMDLINE value, in one pass.
+    regexp: '\s+audit(?:_backlog_limit=\d+|=1)(?=[^"\n]*"\s*$)'
+    replace: ''
+  notify: Update grub
+  when:
+    - baseline_cis_l2_audit_rules | bool
+    - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
+
+# The runtime queue the kernel holds before auditd reads it. Waits had grown
+# fivefold on RCH at 8192 (2026-11-04 review). The audit rules are immutable
+# once loaded (-e 2), so this applies at the next boot, as the kernel's does.
+- name: Size the audit backlog
+  ansible.builtin.lineinfile:
+    path: /etc/audit/rules.d/audit.rules
+    regexp: '^-b\s+\d+'
+    line: "-b {{ baseline_audit_backlog_limit }}"
   when:
     - baseline_cis_l2_audit_rules | bool
     - ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']

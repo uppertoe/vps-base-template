@@ -21,6 +21,8 @@
 #   - Multi-service restore: --service a --service b restores both
 #   - Files-only services (DB_NAME empty): backup creates only a files snapshot
 #     and restore writes files back without touching any database
+#   - SQLite under BACKUP_PATHS: a consistent copy is backed up, not the live
+#     .db/-wal/-shm, and restore puts it back whole at its original path
 #
 # PREREQUISITES
 #   - Docker (for PostgreSQL container)
@@ -862,6 +864,77 @@ EOF
   fi
 }
 
+test_sqlite_consistent_copy() {
+  header "test_sqlite_consistent_copy"
+  local files_dir stage holder
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    files_dir="$(mktemp -d /private/tmp/sqlite-svc-XXXXXX)"
+    stage="$(mktemp -d /private/tmp/sqlite-stage-XXXXXX)"
+  else
+    files_dir="$(mktemp -d)"
+    stage="$(mktemp -d)"
+  fi
+  # A WAL database whose last writes are still in its -wal, held open by a
+  # writer for the whole backup, as a running app holds it.
+  python3 - "$files_dir/app.db" <<'PY'
+import sqlite3, sys
+c = sqlite3.connect(sys.argv[1])
+c.execute("PRAGMA journal_mode=WAL")
+c.execute("PRAGMA wal_autocheckpoint=0")
+c.execute("CREATE TABLE t (n INTEGER)")
+c.executemany("INSERT INTO t VALUES (?)", [(i,) for i in range(500)])
+c.commit()
+PY
+  python3 -c 'import sqlite3,sys,time; c=sqlite3.connect(sys.argv[1]); c.execute("PRAGMA wal_autocheckpoint=0"); c.execute("INSERT INTO t VALUES (999)"); c.commit(); time.sleep(60)' "$files_dir/app.db" &
+  holder=$!
+  sleep 1
+  echo "not a database" > "$files_dir/notes.txt"
+
+  cat > "$CONFIG_DIR/services/sqlitesvc.env" <<EOF
+SERVICE_NAME=sqlitesvc
+RESTIC_REPOSITORY=${RESTIC_REPO_DIR}/sqlitesvc
+RESTIC_PASSWORD=sqlite-password
+BACKUP_PATHS=${files_dir}
+SQLITE_STAGING_DIR=${stage}
+EOF
+  local out exit_code=0
+  out="$(SQLITE_STAGING_DIR="$stage" run_backup --service sqlitesvc 2>&1)" || exit_code=$?
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+
+  local listing
+  listing="$(RESTIC_PASSWORD=sqlite-password restic -r "${RESTIC_REPO_DIR}/sqlitesvc" ls latest 2>/dev/null)"
+  if [[ "$exit_code" -ne 0 ]]; then
+    fail "sqlite: backup exited $exit_code: $(tail -3 <<< "$out")"
+  elif ! grep -qxF "${stage}/sqlitesvc${files_dir}/app.db" <<< "$listing"; then
+    fail "sqlite: the staged copy is not in the snapshot"
+  elif grep -qxF "${files_dir}/app.db" <<< "$listing"; then
+    fail "sqlite: the live database is in the snapshot"
+  elif ! grep -qxF "${files_dir}/notes.txt" <<< "$listing"; then
+    fail "sqlite: an ordinary file was left out"
+  elif [[ -d "$stage/sqlitesvc" ]]; then
+    fail "sqlite: the staging copy was not removed after the backup"
+  else
+    rm -rf "$files_dir"
+    exit_code=0
+    local rout
+    rout="$(SQLITE_STAGING_DIR="$stage" RESTORE_NO_CONFIRM=true run_restore --service sqlitesvc 2>&1)" || exit_code=$?
+    local rows
+    rows="$(python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute("PRAGMA integrity_check").fetchone()[0], c.execute("select count(*) from t").fetchone()[0])' "$files_dir/app.db" 2>&1 || true)"
+    if [[ "$exit_code" -ne 0 ]]; then
+      fail "sqlite: restore exited $exit_code: $(tail -4 <<< "$rout")"
+    elif [[ "$rows" != "ok 501" ]]; then
+      fail "sqlite: the restored database is not whole (got '$rows', want 'ok 501')"
+    elif [[ -e "$files_dir/app.db-wal" ]]; then
+      fail "sqlite: a stale -wal was left beside the restored database"
+    else
+      pass "sqlite: a consistent copy is backed up and restored whole, writes still in the -wal included"
+    fi
+  fi
+  rm -f "$CONFIG_DIR/services/sqlitesvc.env"
+  rm -rf "$files_dir" "$stage"
+}
+
 test_files_only_optional_skips_when_paths_missing() {
   header "test_files_only_optional_skips_when_paths_missing"
 
@@ -962,6 +1035,7 @@ test_list_snapshots
 test_backup_paths
 test_restore_no_files_skips_file_restore
 test_files_only_service
+test_sqlite_consistent_copy
 test_files_only_optional_skips_when_paths_missing
 test_multi_service_restore
 

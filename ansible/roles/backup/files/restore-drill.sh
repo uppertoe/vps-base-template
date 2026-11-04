@@ -195,6 +195,37 @@ drill_service() {
       echo "$svc | mode=files | snapshot=$snap_id | $rpo_note | rto=n/a | FAIL (empty restore)" >> "$REPORT"
       return 1
     fi
+    # Every restored SQLite database must open and pass an integrity check,
+    # or the restore is not a restore (2026-11-04 review: a file restoring
+    # was all the drill used to ask).
+    local bad_dbs
+    bad_dbs="$(python3 - "$scratch" <<'PY'
+import os, sqlite3, sys
+bad = []
+for root, _, files in os.walk(sys.argv[1]):
+    for name in files:
+        p = os.path.join(root, name)
+        if name.endswith(("-wal", "-shm", "-journal")):
+            continue
+        try:
+            with open(p, "rb") as f:
+                if f.read(16) != b"SQLite format 3\x00":
+                    continue
+            c = sqlite3.connect("file:" + p + "?mode=ro", uri=True)
+            r = c.execute("PRAGMA integrity_check").fetchone()[0]
+            c.close()
+            if r != "ok":
+                bad.append(os.path.basename(p))
+        except Exception:
+            bad.append(os.path.basename(p))
+print(" ".join(bad))
+PY
+)"
+    if [[ -n "$bad_dbs" ]]; then
+      warn "[$svc] Restored SQLite database(s) failed the integrity check: $bad_dbs"
+      echo "$svc | mode=files | snapshot=$snap_id | $rpo_note | rto=n/a | FAIL (integrity: $bad_dbs)" >> "$REPORT"
+      return 1
+    fi
   else
     local container
     if ! container="$(resolve_container_name "$CONTAINER_NAME")"; then

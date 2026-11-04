@@ -17,7 +17,19 @@
 # It CANNOT detect a source commit that was never pushed — that is source-repo
 # discipline, not something the consuming repo can see. It closes the visibility
 # gap, not that specific hole.
+#
+# Since the 2026-11-04 review it also FAILS when the commit is not on the
+# source repo's main branch (a branch or pull-request build), and when any
+# check run on that commit failed. That is the gate that lets first-party
+# digests automerge without a minimum release age: a digest reaches the
+# server only when its code is on main and its CI passed.
+#
+# An image with no revision label, or whose source repo the token cannot read,
+# cannot be checked. These stay warnings so that adopting this check does not
+# stall every update; PROVENANCE_STRICT=1 makes them failures.
 set -uo pipefail
+
+strict="${PROVENANCE_STRICT:-0}"
 
 summary="${GITHUB_STEP_SUMMARY:-/dev/stdout}"
 fail=0
@@ -62,6 +74,7 @@ for ref in "${refs[@]}"; do
   if [[ -z "$rev" ]]; then
     echo "| \`$name\` | — | (no revision label) | — | ⚠️ unverifiable |" >> "$summary"
     echo "WARN: $name carries no revision label — build it with docker/metadata-action so provenance is traceable." >&2
+    [[ "$strict" == 1 ]] && fail=1
     continue
   fi
 
@@ -83,6 +96,7 @@ for ref in "${refs[@]}"; do
   if ! gh api "repos/$slug" --jq .full_name >/dev/null 2>&1; then
     echo "| \`$name\` | \`$short\` | — | — | ⚠️ $slug unreachable |" >> "$summary"
     echo "WARN: cannot reach source repo $slug to verify $name@$short (private / no token?)." >&2
+    [[ "$strict" == 1 ]] && fail=1
     continue
   fi
 
@@ -98,14 +112,47 @@ for ref in "${refs[@]}"; do
     continue
   fi
 
-  # Distance from source main (cosmetic; key off exit code here too).
-  vsmain="?"
-  if head="$(gh api "repos/$slug/commits/main" --jq '.sha' 2>/dev/null)" && [[ -n "$head" ]]; then
-    if [[ "$head" == "$rev" ]]; then
-      vsmain="= main HEAD"
-    elif ahead="$(gh api "repos/$slug/compare/$rev...main" --jq '.ahead_by' 2>/dev/null)" && [[ -n "$ahead" ]]; then
-      vsmain="behind main by $ahead"
-    fi
+  # The commit must be on main: compare main...rev reports "identical" or
+  # "behind" exactly when rev is main or one of its ancestors.
+  if ! cmp="$(gh api "repos/$slug/compare/main...$rev" --jq '"\(.status) \(.behind_by)"' 2>/dev/null)" || [[ -z "$cmp" ]]; then
+    echo "| \`$name\` | \`$short\` | — | — | ❌ cannot compare with main |" >> "$summary"
+    echo "FAIL: cannot compare $short with main in $slug." >&2
+    fail=1
+    continue
+  fi
+  case "${cmp%% *}" in
+    identical) vsmain="= main HEAD" ;;
+    behind) vsmain="behind main by ${cmp#* }" ;;
+    *)
+      echo "| \`$name\` | \`$short\` | — | not on main | ❌ not on main |" >> "$summary"
+      echo "FAIL: $name was built from $short, which is not on $slug's main branch (${cmp%% *}): a branch or pull-request build." >&2
+      fail=1
+      continue
+      ;;
+  esac
+
+  # Its CI must have passed: no check run on the commit failed, and at least
+  # one succeeded. Paged, because a busy commit has more than one page of runs.
+  if ! runs="$(gh api --paginate "repos/$slug/commits/$rev/check-runs?per_page=100" \
+                 --jq '.check_runs[] | "\(.status) \(.conclusion) \(.name)"' 2>/dev/null)"; then
+    echo "| \`$name\` | \`$short\` | — | ${vsmain} | ❌ checks unreadable |" >> "$summary"
+    echo "FAIL: cannot read the check runs on $short in $slug." >&2
+    fail=1
+    continue
+  fi
+  bad="$(awk '$1=="completed" && ($2=="failure" || $2=="cancelled" || $2=="timed_out" || $2=="action_required" || $2=="startup_failure") {sub(/^[^ ]+ [^ ]+ /,""); print}' <<<"$runs" | sort -u | paste -sd, -)"
+  good="$(awk '$1=="completed" && $2=="success"' <<<"$runs" | wc -l | tr -d ' ')"
+  if [[ -n "$bad" ]]; then
+    echo "| \`$name\` | \`$short\` | — | ${vsmain} | ❌ CI failed |" >> "$summary"
+    echo "FAIL: $name was built from $short, whose checks did not pass in $slug: $bad." >&2
+    fail=1
+    continue
+  fi
+  if [[ "$good" -eq 0 ]]; then
+    echo "| \`$name\` | \`$short\` | — | ${vsmain} | ❌ no passing CI |" >> "$summary"
+    echo "FAIL: $name was built from $short, which has no successful check run in $slug." >&2
+    fail=1
+    continue
   fi
 
   subject="${subject//|/\\|}"
@@ -114,7 +161,7 @@ for ref in "${refs[@]}"; do
 done
 
 if [[ "$fail" -ne 0 ]]; then
-  echo "Image provenance check FAILED — a pinned first-party image was built from a commit that is not in its source repo." >&2
+  echo "Image provenance check FAILED — a pinned first-party image was not built from a commit on its source repo's main whose CI passed." >&2
   exit 1
 fi
 echo "Image provenance check passed."

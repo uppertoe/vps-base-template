@@ -51,6 +51,17 @@ fi
 
 # --- disk ----------------------------------------------------------------------
 add "Disk /: $(df -h / 2>/dev/null | awk 'NR==2 {print $5" used, "$4" free"}')"
+# The oldest of each service's last successful backup (backup-freshness alerts
+# on its own; this keeps the state visible every week).
+if [ -d /var/lib/vps-backup/success ]; then
+  now="$(date -u +%s)"; oldest=""; oldest_age=0; n=0
+  for f in /var/lib/vps-backup/success/*; do
+    [ -f "$f" ] || continue
+    n=$((n + 1)); t="$(cat "$f" 2>/dev/null)"; case "$t" in ''|*[!0-9]*) continue ;; esac
+    a=$((now - t)); if [ "$a" -gt "$oldest_age" ]; then oldest_age=$a; oldest="$(basename "$f")"; fi
+  done
+  [ "$n" -gt 0 ] && add "Backups: ${n} services; the least recent, ${oldest}, last succeeded $((oldest_age / 60)) min ago"
+fi
 
 # --- patching ------------------------------------------------------------------
 [ -f /run/reboot-required ] && add "Reboot required: YES (pending patch-window reboot)"

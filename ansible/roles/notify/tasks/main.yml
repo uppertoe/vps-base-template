@@ -49,6 +49,7 @@
   loop:
     - vps-notify
     - vps-notify-unit
+    - vps-notify-retry
 
 - name: Install notify@ systemd template (OnFailure handler)
   ansible.builtin.copy:
@@ -169,6 +170,8 @@
     - vps-notify-selftest.timer
     - vps-log-digest.service
     - vps-log-digest.timer
+    - vps-notify-retry.service
+    - vps-notify-retry.timer
   notify: Reload systemd
 
 - name: Install vps-container-watch.timer
@@ -206,6 +209,8 @@
       want: "{{ notify_selftest_enabled | bool }}"
     - unit: vps-log-digest.timer
       want: "{{ notify_log_digest_enabled | bool }}"
+    - unit: vps-notify-retry.timer
+      want: true
   when: ansible_facts['virtualization_type'] not in ['docker', 'container', 'lxc']
   tags:
     - molecule-notest

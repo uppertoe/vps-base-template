@@ -80,19 +80,27 @@ jobs:
 
   deploy-wrapper:
     name: Deploy Wrapper
-    # The checkout-mode vps-deploy refusals (docs/05), exercised against a
-    # real deploy-owned checkout in a throwaway container as root.
+    # The checkout-mode vps-deploy refusals (docs/05) and the release tree's
+    # vps-release (docs/15), each exercised for real in a throwaway container
+    # as root: the first against a deploy-owned checkout, the second against
+    # the public server-instance-template fetched over the network. Both in
+    # one job, because a job is billed by the minute rounded up.
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - name: Run the wrapper checks
+      - name: Run the deploy wrapper checks
         run: |
           docker run --rm -v "$PWD/ansible/roles/deploy-user":/t:ro \
             ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852 \
             bash /t/files/test_vps_deploy.sh
+      - name: Run the release tree checks
+        run: |
+          docker run --rm -v "$PWD/ansible/roles/deploy-user/files":/t:ro \
+            ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852 \
+            bash /t/test_vps_release.sh
 
   molecule-default:
     name: Molecule Default

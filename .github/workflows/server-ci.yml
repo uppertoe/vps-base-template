@@ -2,16 +2,27 @@ name: Server CI
 
 # Reusable: a server repo's .github/workflows/ci.yml calls this at the commit
 # its scaffold submodule is at, so the checks a server runs are the ones its
-# pinned scaffold ships. Every script below is run from the caller's checkout
-# through its scripts/ shims (scaffold/scripts/server/). The server's choices
-# come from its .scaffold-server.yml. See docs/14-server-tooling.md.
+# pinned scaffold ships. Every script below is run from the scaffold submodule
+# directly (scaffold/scripts/server/) against the caller's checkout, never
+# through the server's scripts/ shims: the shims are files the drift check
+# compares, and a shim edited in the pull request must not be what runs the
+# drift check (2026-11-03 review, B-M7). The server's choices come from its
+# .scaffold-server.yml, validated by that check before they are read. See
+# docs/14-server-tooling.md.
 
 on:
   workflow_call:
+    secrets:
+      GHCR_READ_TOKEN:
+        description: read:packages token for private first-party images (optional)
+        required: false
 
 permissions:
   contents: read
   packages: read
+
+env:
+  SERVER_ROOT: ${{ github.workspace }}
 
 jobs:
   # All the sub-minute checks share one runner: GitHub bills every job's
@@ -32,6 +43,11 @@ jobs:
           git submodule sync --recursive
           git submodule update --init --recursive
 
+      # The server's copies of the shared files must be the scaffold's, and
+      # .scaffold-server.yml must hold values the steps below can act on.
+      - name: Check the shared files match the scaffold
+        run: bash scaffold/scripts/server/check-server-files.sh
+
       - name: Read this server's choices (.scaffold-server.yml)
         id: cfg
         run: |
@@ -48,16 +64,12 @@ jobs:
           PY
           cat "$GITHUB_OUTPUT"
 
-      # The server's copies of the shared files must be the scaffold's.
-      - name: Check the shared files match the scaffold
-        run: bash scripts/check-server-files.sh
-
       - name: Run template consistency checks
-        run: bash scripts/check-template-consistency.sh
+        run: bash scaffold/scripts/server/check-template-consistency.sh
 
       # Supply-chain gate: every compose image must be pinned by digest.
       - name: Verify all images are pinned by digest
-        run: bash scripts/check-image-pins.sh
+        run: bash scaffold/scripts/server/check-image-pins.sh
 
       # Secrets live in secrets/*.sops (docs/13-secrets.md): nothing under
       # secrets/ may be plaintext, and no env file may be tracked.
@@ -70,7 +82,7 @@ jobs:
       # requests, and scope protection by path. Uses a mock auth.
       - name: Verify forward_auth header-stripping and path scoping
         if: hashFiles('apps/auth/auth.caddy') != ''
-        run: bash scripts/ci-forward-auth-test.sh
+        run: bash scaffold/scripts/server/ci-forward-auth-test.sh
 
       - name: Log in to GHCR
         if: steps.cfg.outputs.image_provenance == 'true'
@@ -89,7 +101,7 @@ jobs:
         if: steps.cfg.outputs.image_provenance == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bash scripts/check-image-provenance.sh
+        run: bash scaffold/scripts/server/check-image-provenance.sh
 
   # The gateway's end-to-end suite, run against THIS server's guard snippets.
   gateway-chain:
@@ -100,8 +112,12 @@ jobs:
     env:
       GOTOOLCHAIN: local
     steps:
+      # Neither checkout needs to write back, so neither keeps a token in its
+      # git configuration while the gateway's suite runs.
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Check out the gateway's suite
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -150,5 +166,9 @@ jobs:
           sudo apt-get install -y -q docker-compose-plugin
           docker compose version
 
+      # Boots Caddy and the data tier, rehearses database image upgrades, and
+      # checks the CIS Docker section 5 block twice: as declared, over every
+      # service in the resolved compose config, and at runtime on what it
+      # started.
       - name: Run compose smoke test
-        run: bash scripts/ci-compose-smoke-test.sh
+        run: bash scaffold/scripts/server/ci-compose-smoke-test.sh

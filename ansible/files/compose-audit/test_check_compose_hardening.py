@@ -212,8 +212,113 @@ TIER_CASES = [
 ]
 
 
+# The static mode: a `docker compose config --format json` document is turned
+# into inspect-shaped records and the same controls decide. The hardened
+# service is the section 5 block every app carries; each other service drops
+# one thing, and the control that notices it must be the one that fails.
+HARDENED = {
+    "image": "ghcr.io/x/app:1@sha256:" + "0" * 64,
+    "user": "10001:10001",
+    "cap_drop": ["ALL"],
+    "security_opt": ["no-new-privileges:true"],
+    "read_only": True,
+    "mem_limit": "268435456",
+    "pids_limit": 64,
+    "cgroup_parent": "vps-noswap.slice",
+    "healthcheck": {"test": ["CMD", "true"], "interval": "30s"},
+    "volumes": [{"type": "volume", "source": "app_data", "target": "/data"}],
+    "networks": {"app_proxy": None},
+}
+
+
+def compose_cfg(**services):
+    cfg = {"services": {"caddy": dict(HARDENED, image="caddy:2.11.7-alpine", user="65531:65531",
+                                      cap_add=["NET_BIND_SERVICE"], networks={"app_proxy": None})}}
+    cfg["services"].update(services)
+    return cfg
+
+
+def without(key, **override):
+    svc = {k: v for k, v in HARDENED.items() if k != key}
+    svc.update(override)
+    return svc
+
+
+# (name, compose service, control key, expected)
+STATIC_CASES = [
+    ("hardened service passes every runtime control", dict(HARDENED), None, True),
+    ("no cap_drop", without("cap_drop"), "cap_drop_all", False),
+    ("no security_opt", without("security_opt"), "no_new_privileges", False),
+    ("no-new-privileges:false", without("security_opt", security_opt=["no-new-privileges:false"]), "no_new_privileges", False),
+    ("no read_only", without("read_only"), "read_only", False),
+    ("no mem_limit", without("mem_limit"), "mem_limit", False),
+    ("mem_limit in the deploy block", without("mem_limit", deploy={"resources": {"limits": {"memory": "67108864"}}}), "mem_limit", True),
+    ("mem_limit written as 256m", without("mem_limit", mem_limit="256m"), "mem_limit", True),
+    ("no pids_limit", without("pids_limit"), "pids_limit", False),
+    ("root user", without("user", user="0:0"), "non_root", False),
+    ("no healthcheck", without("healthcheck"), "healthcheck", False),
+    ("healthcheck disabled", without("healthcheck", healthcheck={"disable": True}), "healthcheck", False),
+    ("string healthcheck test", without("healthcheck", healthcheck={"test": "curl -f localhost"}), "healthcheck", True),
+    ("docker.sock bind", without("volumes", volumes=[{"type": "bind", "source": "/var/run/docker.sock", "target": "/var/run/docker.sock"}]), "no_sensitive_mounts", False),
+    ("short-form docker.sock bind", without("volumes", volumes=["/var/run/docker.sock:/var/run/docker.sock:ro"]), "no_sensitive_mounts", False),
+    ("privileged", without("read_only", read_only=True, privileged=True), "privileged", False),
+    ("cap_add SYS_ADMIN", dict(HARDENED, cap_add=["SYS_ADMIN"]), "cap_add_minimal", False),
+    ("host network", dict(HARDENED, network_mode="host"), "no_host_network", False),
+    ("pid host", dict(HARDENED, pid="host"), "no_host_namespaces", False),
+    ("seccomp unconfined", dict(HARDENED, security_opt=["no-new-privileges:true", "seccomp:unconfined"]), "confined", False),
+    ("no cgroup_parent", without("cgroup_parent"), "memory_tier", False),
+    ("batch tier on a proxy network", dict(HARDENED, cgroup_parent="vps-batch.slice"), "web_no_swap", False),
+    ("db with a published port", dict(HARDENED, image="postgres:18", ports=[{"target": 5432, "published": "5432", "protocol": "tcp"}]), "db_no_published_ports", False),
+    ("db on a proxy network", dict(HARDENED, image="postgres:18"), "db_off_proxy_network", False),
+    ("db kept off the proxy network", dict(HARDENED, image="postgres:18", networks={"app_internal": None}), "db_off_proxy_network", True),
+]
+
+
+def static_results(svc):
+    inspected = cch.inspected_from_compose(compose_cfg(app=svc), "ci")
+    c = inspected["ci-app-1"]
+    results = cch.evaluate(c)
+    results.update(cch.evaluate_tier(c))
+    results.update(cch.evaluate_web(c))
+    proxy = set(cch.container_networks(inspected["ci-caddy-1"]))
+    results.update(cch.evaluate_db(c, proxy))
+    results.update(cch.network_controls(inspected)["ci-app-1"])
+    return results
+
+
 def main():
     fails = 0
+    for name, svc, key, want in STATIC_CASES:
+        results = static_results(svc)
+        keys = [k for _, k in cch.CONTROLS + cch.TIER_CONTROLS + cch.WEB_CONTROLS] if key is None else [key]
+        for k in keys:
+            got = results[k]
+            if got is not want:
+                fails += 1
+                print(f"[FAIL] static {name}: {k}={got} (want {want})")
+            else:
+                print(f"[OK] static {name}: {k}={got}")
+
+    # The exceptions register names containers as Compose does.
+    named = cch.inspected_from_compose(compose_cfg(app=dict(HARDENED, container_name="my-app")), "ci")
+    if set(named) != {"ci-caddy-1", "my-app"}:
+        fails += 1
+        print(f"[FAIL] static naming: {sorted(named)}")
+    else:
+        print("[OK] static naming: <project>-<service>-1, or the container_name")
+    # The gateway's members network is not a peer app on the app's internal network.
+    members = cch.inspected_from_compose(compose_cfg(
+        app=dict(HARDENED, networks={"app_proxy": None, "app_members": None}),
+        auth=dict(HARDENED, networks={"auth_proxy": None, "app_members": {"aliases": ["auth-members"]}}),
+    ), "ci")
+    members["ci-caddy-1"]["NetworkSettings"]["Networks"]["auth_proxy"] = {}
+    isolated = cch.network_controls(members)["ci-app-1"]["internal_network_isolated"]
+    if isolated is not True:
+        fails += 1
+        print("[FAIL] static members network: the gateway counted as a peer app")
+    else:
+        print("[OK] static members network: the gateway is not a peer app")
+
     for name, container, key, want in CASES:
         got = cch.evaluate(container)[key]
         if got is not want:
@@ -222,7 +327,9 @@ def main():
         else:
             print(f"[OK] {name}: {key}={got}")
 
-    total = len(CASES)
+    total = len(CASES) + 2
+    for name, _, key, _ in STATIC_CASES:
+        total += len(cch.CONTROLS + cch.TIER_CONTROLS + cch.WEB_CONTROLS) if key is None else 1
     for name, container, want in WEB_CASES:
         total += 1
         got = cch.evaluate_web(container)["web_no_swap"]

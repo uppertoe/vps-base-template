@@ -14,8 +14,12 @@
 #      spoofed identity header does not bypass that.
 #   4. Path scoping works: a public path is not gated.
 #
-# Uses only caddy:2-alpine + traefik/whoami, so it needs no submodule and no
-# real auth image.
+# Caddy is the image pinned in scaffold/docker/caddy.base.yml, so the test
+# runs the Caddy the servers run; the header-echo backend is pinned by digest
+# below. No real auth image is needed. This test covers the plain (protected)
+# snippet only; the gateway's own end-to-end suite (the gateway-chain job,
+# run where .scaffold-server.yml sets gateway_chain: true) is the authoritative
+# test of every protected_* and auth_gate* variant.
 
 set -euo pipefail
 
@@ -38,6 +42,13 @@ cleanup  # pre-clean any leftovers from a previous run (WORK not yet created)
 
 WORK="$(mktemp -d)"
 [ -f "$AUTH_CADDY" ] || { echo "missing $AUTH_CADDY" >&2; exit 1; }
+
+# The Caddy under test is the one the servers run.
+CADDY_BASE="$ROOT_DIR/scaffold/docker/caddy.base.yml"
+CADDY_IMAGE="$(grep -oE 'image: *caddy:[^ ]+@sha256:[0-9a-f]{64}' "$CADDY_BASE" 2>/dev/null | head -1 | sed 's/^image: *//')"
+[ -n "$CADDY_IMAGE" ] || { echo "no digest-pinned caddy image found in $CADDY_BASE (is the scaffold submodule checked out?)" >&2; exit 1; }
+# Header-echo backend, pinned by digest (multi-arch index of traefik/whoami v1.11.0).
+WHOAMI_IMAGE="traefik/whoami:v1.11.0@sha256:200689790a0a0ea48ca45992e0450bc26ccab5307375b41c84dfc4f2475937ab"
 
 # Mock auth. forward_auth forwards the original request (cookies included) to
 # /verify; the mock decides from the session cookie.
@@ -86,12 +97,12 @@ http://fa.test {
 EOF
 
 docker network create "$NET" >/dev/null
-docker run -d --name fa-ci-whoami --network "$NET" --network-alias whoami traefik/whoami:latest >/dev/null
+docker run -d --name fa-ci-whoami --network "$NET" --network-alias whoami "$WHOAMI_IMAGE" >/dev/null
 docker run -d --name fa-ci-auth --network "$NET" --network-alias auth \
-  -v "$WORK/auth.Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2-alpine >/dev/null
+  -v "$WORK/auth.Caddyfile:/etc/caddy/Caddyfile:ro" "$CADDY_IMAGE" >/dev/null
 docker run -d --name fa-ci-gw --network "$NET" -p "$GW_PORT:80" -e DOMAIN=example.com \
   -v "$WORK/gw.Caddyfile:/etc/caddy/Caddyfile:ro" \
-  -v "$AUTH_CADDY:/srv/auth.caddy:ro" caddy:2-alpine >/dev/null
+  -v "$AUTH_CADDY:/srv/auth.caddy:ro" "$CADDY_IMAGE" >/dev/null
 
 # Wait for the gateway to answer.
 ready=0

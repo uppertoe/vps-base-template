@@ -7,6 +7,15 @@
 set -euo pipefail
 apt-get update -qq >/dev/null && apt-get install -y -qq git openssh-client ca-certificates util-linux >/dev/null
 install -m 0755 /t/vps-release /usr/local/sbin/vps-release
+# The template carries a secrets/ directory, so every prepare runs the secrets
+# render step; stand in for the renderer before the first one. The stub records
+# its arguments for the checks further down.
+cat >/usr/local/sbin/vps-secrets-render <<'R'
+#!/bin/sh
+echo "$@" >/tmp/render-args
+echo "vps-secrets-render: .env written"
+R
+chmod 0755 /usr/local/sbin/vps-secrets-render
 # The bind check needs docker; with no containers it has nothing to refuse.
 printf '#!/bin/sh\nexit 0\n' >/usr/local/sbin/vps-release-bind-check; chmod 0755 /usr/local/sbin/vps-release-bind-check
 mkdir -p /etc/vps-scaffold
@@ -48,12 +57,6 @@ ok "a second prepare reuses the release"
 
 # The secrets render step's progress lines must not reach prepare's stdout.
 rm -rf "$rel"
-cat >/usr/local/sbin/vps-secrets-render <<'R'
-#!/bin/sh
-echo "$@" >/tmp/render-args
-echo "vps-secrets-render: .env written"
-R
-chmod 0755 /usr/local/sbin/vps-secrets-render
 # Give this export a secrets/ directory: check_links runs on the partial tree
 # just before the render step, so a test override of it can add one.
 # shellcheck source=/dev/null

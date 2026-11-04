@@ -87,29 +87,45 @@
           # Pull trivy once so the per-image runs don't each block on a pull.
           docker pull -q "$TRIVY" >/dev/null
 
+          # An image Trivy cannot scan is counted as failed and named in
+          # failed.txt, and its partial reports are removed, so the summary
+          # never reads a scan that did not happen as zero findings.
+          scanned=0
+          nfail=0
+          : > "$WORK/failed.txt"
           for pair in "${images[@]}"; do
             img="${pair%% *}"
             ref="${pair#* }"
             safe="$(printf '%s' "${ref%%@*}" | tr '/:@' '___')"
             echo "=== Scanning ${ref%%@*} ($img) ===" | tee -a "$WORK/summary.txt"
+            image_ok=1
             docker run --rm \
               -v "$CACHE:/root/.cache/trivy" \
               -v /var/run/docker.sock:/var/run/docker.sock \
               "$TRIVY" image --quiet --no-progress --scanners vuln \
               --severity "$SEV" --format table --output "/dev/stdout" "$img" \
-              > "$WORK/trivy-$safe.txt" 2>/dev/null || true
+              > "$WORK/trivy-$safe.txt" 2>"$WORK/trivy-$safe.err" || image_ok=0
             docker run --rm \
               -v "$CACHE:/root/.cache/trivy" \
               -v /var/run/docker.sock:/var/run/docker.sock \
               "$TRIVY" image --quiet --no-progress --scanners vuln \
               --severity "$SEV" --format json --output "/dev/stdout" "$img" \
-              > "$WORK/trivy-$safe.json" 2>/dev/null || true
+              > "$WORK/trivy-$safe.json" 2>>"$WORK/trivy-$safe.err" || image_ok=0
+            if [[ "$image_ok" == 1 ]]; then
+              scanned=$((scanned + 1))
+              rm -f "$WORK/trivy-$safe.err"
+            else
+              nfail=$((nfail + 1))
+              echo "FAILED to scan ${ref%%@*}: $(tail -n 3 "$WORK/trivy-$safe.err" | tr '\n' ' ')" | tee -a "$WORK/summary.txt"
+              rm -f "$WORK/trivy-$safe.json" "$WORK/trivy-$safe.txt"
+              echo "${ref%%@*}" >> "$WORK/failed.txt"
+            fi
           done
 
           # Aggregate the json: count HIGH/CRITICAL and fixable CRITICALs across images.
-          python3 - "$WORK" <<'PY' | tee -a "$WORK/summary.txt"
+          python3 - "$WORK" "$scanned" "$nfail" <<'PY' | tee -a "$WORK/summary.txt"
           import glob, json, os, sys
-          work = sys.argv[1]
+          work, scanned, failed = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
           high = crit = crit_fixable = 0
           fixable = []
           for path in sorted(glob.glob(os.path.join(work, "trivy-*.json"))):
@@ -131,12 +147,18 @@
                                   f"{v.get('VulnerabilityID')} {v.get('PkgName')} "
                                   f"{v.get('InstalledVersion')} -> {v.get('FixedVersion')}"
                               )
-          print(f"TOTAL HIGH={high} CRITICAL={crit} CRITICAL_FIXABLE={crit_fixable}")
+          print(f"TOTAL HIGH={high} CRITICAL={crit} CRITICAL_FIXABLE={crit_fixable} "
+                f"SCANNED={scanned} FAILED={failed}")
           for line in fixable[:25]:
               print(f"  FIXABLE: {line}")
-          # Machine-readable signal for the next task.
+          with open(os.path.join(work, "failed.txt")) as fh:
+              for ref in fh:
+                  if ref.strip():
+                      print(f"  FAILED: {ref.strip()} could not be scanned; its findings are not counted above")
+          # Machine-readable signal for the next tasks: high, critical,
+          # fixable critical, images scanned, images that failed.
           with open(os.path.join(work, "gate.txt"), "w") as fh:
-              fh.write(f"{high} {crit} {crit_fixable}\n")
+              fh.write(f"{high} {crit} {crit_fixable} {scanned} {failed}\n")
           PY
       register: audit_vuln_scan
       changed_when: false
@@ -155,7 +177,12 @@
       ansible.builtin.set_fact:
         audit_vuln_crit_fixable: >-
           {{
-            ((audit_vuln_gate.content | b64decode).split() | last | int)
+            ((audit_vuln_gate.content | b64decode).split()[2] | int)
+            if (audit_vuln_gate.content is defined) else 0
+          }}
+        audit_vuln_failed: >-
+          {{
+            ((audit_vuln_gate.content | b64decode).split()[4] | int)
             if (audit_vuln_gate.content is defined) else 0
           }}
 
@@ -190,7 +217,7 @@
     - name: List scan artifacts to fetch
       ansible.builtin.find:
         paths: "{{ audit_vuln_work_dir }}"
-        patterns: "trivy-*.txt,trivy-*.json,summary.txt"
+        patterns: "trivy-*.txt,trivy-*.json,trivy-*.err,summary.txt,failed.txt"
       register: audit_vuln_artifacts
 
     - name: Fetch scan artifacts
@@ -215,3 +242,14 @@
       ansible.builtin.file:
         path: "{{ audit_vuln_work_dir }}"
         state: absent
+
+    # Findings never fail the play, but a scan that did not happen is not a
+    # clean result. The artifacts are already fetched, so the failure costs
+    # nothing but the honest exit code.
+    - name: Fail when any image could not be scanned
+      ansible.builtin.fail:
+        msg: >-
+          {{ audit_vuln_failed }} image(s) could not be scanned; the summary
+          in {{ local_report_dir }}/summary.txt names them and the trivy-*.err
+          files carry Trivy's error output. Their findings are not counted.
+      when: (audit_vuln_failed | int) > 0

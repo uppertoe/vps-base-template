@@ -33,6 +33,31 @@ of the actions, once.
 
 ---
 
+## 2026-11-04 — Deploys end with acceptance probes against the local Caddy
+
+After `docker compose up --wait` has reported the containers healthy, both
+deploy entrypoints (`vps-deploy`, and the default-mode `./deploy`) now run
+`vps-deploy-probes`. It reads the release's `.generated/caddy/route-access.tsv`
+and asks the local Caddy for the root of every site: a gated site must send
+`302` to the gateway's `/login` page, with and without a forged
+`Remote-Email` header; a public site must answer 2xx or 3xx; nothing may
+answer 5xx or fail to answer. A failed probe prints the failing hosts, sends
+one `vps-notify` alert, and makes the deploy exit non-zero, so `auto-deploy`
+records the failure and its `OnFailure` alert fires. The deploy stays live
+and nothing is rolled back; rolling back remains the operator's decision
+(`sudo vps-deploy --rollback` under the release tree). docs/05 "Acceptance
+probes" has the detail.
+
+**Operator actions:** none beyond the site play that installs the probes. Be
+aware of the new failure mode: a deploy can now report failure after its
+containers are up and serving. The alert names the hosts; the deploy log
+(`journalctl -u auto-deploy`, or the terminal of a hand-run deploy) has each
+probe's answer. A site whose DNS the box does not yet serve, so that Caddy
+holds no certificate for it, is listed with a reason in `deploy-probes.skip`
+at the root of the server repo and committed.
+
+---
+
 ## 2026-11-04 — Documentation brought into line with restricted mode, SOPS and the release tree
 
 No code lands with this entry. The docs now describe the platform as it runs:

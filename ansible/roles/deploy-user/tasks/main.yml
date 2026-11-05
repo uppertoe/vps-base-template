@@ -490,6 +490,17 @@
     group: root
     mode: "0755"
 
+# The post-deploy acceptance probes (docs/05): both deploy entrypoints run
+# them after compose up --wait, so every site answers through Caddy as its
+# access rules declare before the deploy is counted a success.
+- name: Install the post-deploy acceptance probes
+  ansible.builtin.copy:
+    src: vps-deploy-probes
+    dest: /usr/local/sbin/vps-deploy-probes
+    owner: root
+    group: root
+    mode: "0755"
+
 # In restricted mode docker (and so `compose pull`) runs as root inside
 # vps-deploy, but private-registry credentials were logged in as the deploy
 # user (bootstrap flow) and live in ~deploy/.docker/config.json — root's pull

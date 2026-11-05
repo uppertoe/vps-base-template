@@ -124,6 +124,7 @@
       register: wrapper_files
       loop:
         - /usr/local/sbin/vps-deploy
+        - /usr/local/sbin/vps-deploy-probes
         - /usr/local/sbin/vps-app-manage
         - /usr/local/sbin/vps-app-logs
         - /usr/local/sbin/vps-git
@@ -180,6 +181,13 @@
           - "'--remove-orphans --wait --force-recreate' not in (vps_deploy_raw.content | b64decode)"
           - "'recreating services whose mounted files changed' in (vps_deploy_raw.content | b64decode)"
         msg: "vps-deploy must not force-recreate the whole stack; it recreates the services whose bind-mounted files changed"
+
+    - name: Assert wrapper runs the acceptance probes after compose up and reports their result last
+      ansible.builtin.assert:
+        that:
+          - "'/usr/local/sbin/vps-deploy-probes /opt/deploy || probe_rc=$?' in (vps_deploy_raw.content | b64decode)"
+          - "'exit \"$probe_rc\"' in (vps_deploy_raw.content | b64decode)"
+        msg: "vps-deploy must run vps-deploy-probes after compose up --wait and exit non-zero when a probe failed"
 
     - name: Assert wrapper installs a SOPS-held backup set into /etc/restic
       ansible.builtin.assert:

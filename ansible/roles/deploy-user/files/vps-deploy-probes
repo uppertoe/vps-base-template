@@ -1,0 +1,192 @@
+#!/bin/bash
+# vps-deploy-probes: post-deploy acceptance probes (docs/05 "What vps-deploy
+# does", step 7). Managed by Ansible (deploy-user role).
+#
+#   vps-deploy-probes [STACK_DIR]      (default /opt/deploy)
+#
+# After `docker compose up --wait` has reported every container healthy, the
+# deploy wrappers run this script against the stack directory. It reads the
+# rendered access table (.generated/caddy/route-access.tsv: one
+# "host<TAB>kind<TAB>value" row per access rule, hosts in Caddy's address form
+# with {$DOMAIN} placeholders) and asks the local Caddy, over TLS on
+# 127.0.0.1:443 with the host name supplied through --resolve, for the root
+# of every site the bundle serves. The expectations are:
+#
+#   * a site whose rows are all gates (groups, domains, signed-in, guests)
+#     answers 302 with a Location on the gateway's /login page, and still
+#     does so when the request carries a forged Remote-Email header, so the
+#     gate is known to run before the app and to strip client identity;
+#   * a site whose rows are all public markers answers 2xx or 3xx;
+#   * a site with both kinds of row, or a row that opens it on a named
+#     network, may answer anything below 500 at its root;
+#   * a 5xx, or no answer at all, fails the probe for any site.
+#
+# A failed probe is reported, notified through vps-notify and makes the
+# script exit 1; nothing is rolled back (the deploy is live, and the operator
+# decides). A host the box cannot answer for (DNS that points elsewhere, so
+# Caddy holds no certificate) is skipped by listing it in deploy-probes.skip
+# in the stack directory, one "host reason" per line; the file is part of the
+# release, so the exception is reviewed like any other change.
+#
+# The probes test routing and gating, not the certificate chain, so curl does
+# not verify the certificate: a site whose certificate is still being issued
+# answers through Caddy's handshake or not at all, and either way the result
+# says whether the route is up.
+set -euo pipefail
+
+dir="${1:-/opt/deploy}"
+table="$dir/.generated/caddy/route-access.tsv"
+skipfile="$dir/deploy-probes.skip"
+envfile="$dir/.env"
+notify="${VPS_DEPLOY_PROBES_NOTIFY:-/usr/local/bin/vps-notify}"
+attempts="${VPS_DEPLOY_PROBES_ATTEMPTS:-3}"
+retry_wait="${VPS_DEPLOY_PROBES_RETRY_WAIT:-10}"
+forged_header='Remote-Email: forged@example.invalid'
+
+if [[ ! -f "$table" ]]; then
+  echo "vps-deploy-probes: no $table; nothing to probe."
+  exit 0
+fi
+if ! command -v curl >/dev/null 2>&1; then
+  echo "vps-deploy-probes: curl is not installed; the probes cannot run." >&2
+  exit 1
+fi
+
+# env_value NAME prints the value of NAME from the stack's .env, in compose's
+# dotenv grammar (optional export, spaces around =, single or double quotes),
+# or nothing. Only the names the site addresses use are read.
+env_value() {
+  [[ -f "$envfile" ]] || return 0
+  sed -nE "s/^[[:space:]]*(export[[:space:]]+)?$1[[:space:]]*=[[:space:]]*//p" "$envfile" \
+    | tail -n1 | sed -E "s/^\"(.*)\"[[:space:]]*$/\1/; s/^'(.*)'[[:space:]]*$/\1/; s/[[:space:]]+#.*$//; s/[[:space:]]+$//"
+}
+
+# resolve_host ADDRESS prints the address with every {$NAME} placeholder
+# replaced from .env; a placeholder with no value is left in place, and the
+# caller skips the host.
+resolve_host() {
+  local addr="$1" name value
+  while [[ "$addr" =~ \{\$([A-Za-z_][A-Za-z0-9_]*)\} ]]; do
+    name="${BASH_REMATCH[1]}"
+    value="$(env_value "$name")"
+    [[ -n "$value" ]] || break
+    addr="${addr//\{\$$name\}/$value}"
+  done
+  printf '%s\n' "$addr"
+}
+
+# skip_reason HOST prints the reason from deploy-probes.skip when HOST is
+# listed there (by its resolved name or its address form); nothing otherwise.
+skip_reason() {
+  [[ -f "$skipfile" ]] || return 0
+  awk -v h1="$1" -v h2="$2" '
+    /^[[:space:]]*(#|$)/ { next }
+    $1 == h1 || $1 == h2 { $1 = ""; sub(/^[[:space:]]+/, ""); print; exit }
+  ' "$skipfile"
+}
+
+# probe HOST [HEADER] prints "<status>\t<redirect url>"; status 000 means no
+# answer (refused, timed out, or a failed handshake).
+probe() {
+  local host="$1" extra=()
+  [[ -n "${2:-}" ]] && extra=(-H "$2")
+  curl -s -o /dev/null -k --max-time 10 --connect-timeout 5 --no-keepalive \
+    -A 'vps-deploy-probes' --resolve "$host:443:127.0.0.1" ${extra[@]+"${extra[@]}"} \
+    -w '%{http_code}\t%{redirect_url}' "https://$host/" 2>/dev/null || true
+}
+
+# expect KIND HOST [HEADER] runs one probe, with retries, and prints the
+# verdict; returns 1 on a failed expectation.
+expect() {
+  local kind="$1" host="$2" header="${3:-}" try result status location what
+  for (( try = 1; try <= attempts; try++ )); do
+    result="$(probe "$host" "$header")"
+    status="${result%%$'\t'*}"
+    location="${result#*$'\t'}"
+    [[ "$status" =~ ^[0-9]{3}$ ]] || status=000
+    case "$kind" in
+      gated)   what="302 to the gateway's /login page"
+               [[ "$status" == 302 && "$location" =~ ^https?://[^/]+/login(\?|$) ]] && break ;;
+      public)  what="2xx or 3xx"
+               [[ "$status" =~ ^[23] ]] && break ;;
+      mixed)   what="an answer below 500"
+               [[ "$status" =~ ^[1-4] ]] && break ;;
+    esac
+    (( try < attempts )) && sleep "$retry_wait"
+  done
+  local label="$host"
+  [[ -n "$header" ]] && label="$host with a forged identity header"
+  if (( try <= attempts )); then
+    echo "vps-deploy-probes: ok   $label ($status${location:+ -> $location})"
+    return 0
+  fi
+  if [[ "$status" == 000 ]]; then
+    echo "vps-deploy-probes: FAIL $label: no answer from the local Caddy (expected $what)" >&2
+  else
+    echo "vps-deploy-probes: FAIL $label: answered $status${location:+ -> $location} (expected $what)" >&2
+  fi
+  return 1
+}
+
+# Group the rows by site address, in order of first appearance: a site is
+# gated when it has a gate row and open when it has a public or network row.
+sites() {
+  awk -F'\t' '
+    /^[[:space:]]*(#|$)/ { next }
+    !($1 in seen) { seen[$1] = 1; order[++n] = $1; gate[$1] = 0; open[$1] = 0 }
+    $2 == "groups" || $2 == "domains" || $2 == "signed-in" || $2 == "guests" { gate[$1] = 1 }
+    $2 == "public" || $2 == "network" { open[$1] = 1 }
+    END { for (i = 1; i <= n; i++) printf "%s\t%d\t%d\n", order[i], gate[order[i]], open[order[i]] }
+  ' "$table"
+}
+
+failed=()
+probed=0
+while IFS=$'\t' read -r addr gated open; do
+  # A site block may name several addresses; each is one host.
+  IFS=',' read -r -a hosts <<< "$addr"
+  for raw in "${hosts[@]}"; do
+    raw="${raw## }"; raw="${raw%% }"
+    raw="${raw#https://}"
+    host="$(resolve_host "$raw")"
+    if [[ "$host" == *'{$'* ]]; then
+      echo "vps-deploy-probes: skip $raw: a placeholder in the address has no value in .env"
+      continue
+    fi
+    if [[ ! "$host" =~ ^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$ ]]; then
+      echo "vps-deploy-probes: skip $raw: not a plain https host name"
+      continue
+    fi
+    reason="$(skip_reason "$host" "$raw")"
+    if [[ -n "$reason" ]]; then
+      echo "vps-deploy-probes: skip $host: $reason (deploy-probes.skip)"
+      continue
+    fi
+    probed=$((probed + 1))
+    if [[ "$gated" == 1 && "$open" == 0 ]]; then
+      expect gated "$host" || failed+=("$host")
+      expect gated "$host" "$forged_header" || failed+=("$host (forged identity header)")
+    elif [[ "$gated" == 0 ]]; then
+      expect public "$host" || failed+=("$host")
+    else
+      expect mixed "$host" || failed+=("$host")
+    fi
+  done
+done < <(sites)
+
+if (( ${#failed[@]} == 0 )); then
+  echo "vps-deploy-probes: $probed site(s) answered as their access rules declare."
+  exit 0
+fi
+
+echo "vps-deploy-probes: ${#failed[@]} probe(s) failed; the deploy is live and has not been rolled back:" >&2
+printf '  %s\n' "${failed[@]}" >&2
+if [[ -x "$notify" ]]; then
+  "$notify" "Deploy probes failed on ${#failed[@]} site(s)" \
+"After compose up reported the containers healthy, these sites did not answer as their access rules declare:
+$(printf '%s\n' "${failed[@]}")
+
+The deploy is live and has not been rolled back. Details are in the deploy log; a host the box cannot answer for can be listed in deploy-probes.skip (scaffold/docs/05-access-model.md)." \
+    high warning || true
+fi
+exit 1

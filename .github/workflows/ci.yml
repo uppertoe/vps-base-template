@@ -96,6 +96,10 @@ jobs:
           docker run --rm -v "$PWD/ansible/roles/deploy-user":/t:ro \
             ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852 \
             bash /t/files/test_vps_deploy.sh
+      # The post-deploy acceptance probes, against a stub curl: bash and awk
+      # only, so they run on the runner itself.
+      - name: Run the deploy probe checks
+        run: bash ansible/roles/deploy-user/files/test_vps_deploy_probes.sh
       - name: Run the release tree checks
         run: |
           docker run --rm -v "$PWD/ansible/roles/deploy-user/files":/t:ro \

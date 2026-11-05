@@ -16,7 +16,10 @@
 #     answers 302 with a Location on the gateway's /login page, and still
 #     does so when the request carries a forged Remote-Email header, so the
 #     gate is known to run before the app and to strip client identity;
-#   * a site whose rows are all public markers answers 2xx or 3xx;
+#   * a site whose rows are all public markers answers anything below 500:
+#     a public host whose root has no route (ntfy, a feed, an API) answers
+#     404 by design, and what the probe wants to know is that Caddy routed
+#     the request to the app and the app answered;
 #   * a site with both kinds of row, or a row that opens it on a named
 #     network, may answer anything below 500 at its root;
 #   * a 5xx, or no answer at all, fails the probe for any site.
@@ -107,8 +110,8 @@ expect() {
     case "$kind" in
       gated)   what="302 to the gateway's /login page"
                [[ "$status" == 302 && "$location" =~ ^https?://[^/]+/login(\?|$) ]] && break ;;
-      public)  what="2xx or 3xx"
-               [[ "$status" =~ ^[23] ]] && break ;;
+      public)  what="an answer below 500"
+               [[ "$status" =~ ^[1-4] ]] && break ;;
       mixed)   what="an answer below 500"
                [[ "$status" =~ ^[1-4] ]] && break ;;
     esac

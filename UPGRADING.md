@@ -40,7 +40,7 @@ deploy entrypoints (`vps-deploy`, and the default-mode `./deploy`) now run
 `vps-deploy-probes`. It reads the release's `.generated/caddy/route-access.tsv`
 and asks the local Caddy for the root of every site: a gated site must send
 `302` to the gateway's `/login` page, with and without a forged
-`Remote-Email` header; a public site must answer 2xx or 3xx; nothing may
+`Remote-Email` header; a public site must answer below 500 (a root with no route answers 404 by design); nothing may
 answer 5xx or fail to answer. A failed probe prints the failing hosts, sends
 one `vps-notify` alert, and makes the deploy exit non-zero, so `auto-deploy`
 records the failure and its `OnFailure` alert fires. The deploy stays live

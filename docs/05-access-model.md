@@ -211,7 +211,7 @@ supplied through `--resolve`, following no redirects:
   `Remote-Email: forged@example.invalid` header and must still send that
   redirect, so the gate is known to run before the app and to strip client
   identity.
-- A site whose rows are all `public` markers must answer 2xx or 3xx.
+- A site whose rows are all `public` markers must answer anything below 500; a public host whose root has no route answers 404 by design, and the probe is satisfied that Caddy routed the request and the app answered.
 - A site with both kinds of row, or with a `network` row that opens it on a
   named network, may answer anything below 500 at its root (the box's own
   address is not on the named network, and the root may be a declared open

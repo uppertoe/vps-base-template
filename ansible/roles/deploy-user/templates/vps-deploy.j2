@@ -623,6 +623,18 @@ fi
 
 record_deployed "$new_head"
 
+# Acceptance probes. compose --wait says the containers are healthy; it does
+# not say that each site answers through Caddy as its access rules declare.
+# vps-deploy-probes asks the local Caddy for the root of every site in the
+# rendered access table (.generated/caddy/route-access.tsv): a gated site
+# must send 302 to the gateway, with and without a forged identity header, a
+# public site must answer 2xx or 3xx, and nothing may answer 5xx or not at
+# all. A failure is reported and notified, and the wrapper exits non-zero at
+# the end so auto-deploy records it; the deploy stays live, and rolling back
+# is the operator's decision (docs/05, "What vps-deploy does").
+probe_rc=0
+/usr/local/sbin/vps-deploy-probes /opt/deploy || probe_rc=$?
+
 # Every digest bump strands the superseded image (untagged, unreferenced), and
 # nothing else on the host reclaims them — left alone they fill the disk at
 # roughly the pace Renovate merges. Prune only after --wait has confirmed the
@@ -665,4 +677,11 @@ Roles, timers and scripts only change on a play: run site-quick.yml (scaffold/do
 scaffold-drift.timer reminds weekly until they match." \
       default package || true
   fi
+fi
+
+# The probes ran above; the housekeeping and notices since then were still
+# due, so the failure is reported last, as the exit status.
+if [[ "$probe_rc" -ne 0 ]]; then
+  echo "vps-deploy: the deploy is live, but the post-deploy probes failed (see above)." >&2
+  exit "$probe_rc"
 fi

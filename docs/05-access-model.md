@@ -183,14 +183,65 @@ sudo /usr/local/sbin/vps-deploy
 6. `docker compose up -d --remove-orphans --wait`, then the same with
    `--force-recreate` for only the services whose bind-mounted repo files this
    deploy changed (compose recreates image, definition and env changes itself).
-7. `docker image prune -af` (reclaim superseded images once the new containers
-   are healthy), then record the deployed commit in
-   `/var/lib/vps-deploy/last-deployed`.
+7. Record the deployed commit in `/var/lib/vps-deploy/last-deployed`, then
+   run the acceptance probes (`vps-deploy-probes`, below).
+8. `docker image prune -af` (reclaim superseded images once the new containers
+   are healthy). A failed probe is reported last, as a non-zero exit.
 
 A hand-run `./deploy` on a default-mode server in the checkout layout does not
 go through the wrapper: it pulls as the deploy account, renders the secrets
-through `sudo`, and still runs `docker compose up --force-recreate` for the
-whole stack. The automatic deploy always uses the wrapper.
+through `sudo`, still runs `docker compose up --force-recreate` for the
+whole stack, and runs the same acceptance probes through `sudo`. The
+automatic deploy always uses the wrapper.
+
+### Acceptance probes
+
+`compose up --wait` reports that every container is healthy. It does not
+report that each site answers through Caddy as its access rules declare, and
+a deploy that leaves a gate open or an app unreachable would otherwise be
+counted a success. After the final `compose up`, `vps-deploy-probes` reads
+the rendered access table (`.generated/caddy/route-access.tsv`, docs/04),
+resolves `{$DOMAIN}` from the stack's `.env`, and asks the local Caddy for
+the root of every site, over TLS on `127.0.0.1:443` with the host name
+supplied through `--resolve`, following no redirects:
+
+- A site whose rows are all gates (`groups`, `domains`, `signed-in`,
+  `guests`) must answer `302` with a `Location` on the gateway's `/login`
+  page. The same site is asked a second time with a forged
+  `Remote-Email: forged@example.invalid` header and must still send that
+  redirect, so the gate is known to run before the app and to strip client
+  identity.
+- A site whose rows are all `public` markers must answer anything below 500; a public host whose root has no route answers 404 by design, and the probe is satisfied that Caddy routed the request and the app answered.
+- A site with both kinds of row, or with a `network` row that opens it on a
+  named network, may answer anything below 500 at its root (the box's own
+  address is not on the named network, and the root may be a declared open
+  path that answers 404).
+- A 5xx, or no answer at all, fails the probe for any site. A failing probe
+  is tried three times, ten seconds apart, before it counts.
+
+A failure prints the failing hosts, sends one notification through
+`vps-notify`, and makes the deploy exit non-zero, so `auto-deploy` records
+the failure and the unit's `OnFailure` alert fires as well. Nothing is rolled
+back: the deploy is live, and the operator decides whether to run
+`sudo vps-deploy --rollback` (docs/15) or to fix forward. The probes test
+routing and gating, not the certificate chain, so a site whose certificate is
+still being issued fails only when Caddy cannot complete the handshake.
+
+A host the box cannot answer for (DNS that still points elsewhere, so Caddy
+holds no certificate for it) is listed in `deploy-probes.skip` at the root of
+the server repo, one `host reason` per line, by its resolved name or its
+address form:
+
+```text
+# host                reason
+handbook.example.org  DNS moves to this box at the cut-over on Friday
+planka.{$DOMAIN}      not yet deployed here
+```
+
+The file is read from the release, so it is committed and reviewed like any
+other change, and each skipped host is printed with its reason on every
+deploy. The probes can be run by hand at any time with
+`sudo vps-deploy-probes /opt/deploy`.
 
 ### App maintenance entrypoint
 

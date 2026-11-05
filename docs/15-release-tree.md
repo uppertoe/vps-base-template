@@ -79,7 +79,10 @@ A failed fetch fails the deploy; it never falls back to the cached tip.
    compose up --wait` then run, as today, from `/opt/deploy`. The first
    switch from a checkout recreates every container once, so none keeps a
    mount opened in the old checkout; later deploys recreate only the services
-   whose settings or mounted files changed (docs/04).
+   whose settings or mounted files changed (docs/04). Once the containers are
+   healthy, the acceptance probes ask the local Caddy for every site in the
+   release's access table (docs/05, "Acceptance probes"); a failed probe
+   leaves the release live and makes the deploy exit non-zero.
    App hooks run as root from the release and must not write inside it; a
    release never changes after its export.
 9. **Keep three.** The current release and the two most recently deployed

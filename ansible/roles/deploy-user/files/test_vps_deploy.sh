@@ -33,11 +33,13 @@ exit 0
 EOF
 printf '#!/bin/sh\nexit 0\n' >/usr/local/sbin/vps-git-heal
 printf '#!/bin/sh\nexit 0\n' >/usr/local/sbin/vps-secrets-render
+# The acceptance probes record their call and fail when /tmp/probes-fail exists.
+printf '#!/bin/sh\necho "probes $*" >>/tmp/docker.log\n[ -e /tmp/probes-fail ] && exit 1\nexit 0\n' >/usr/local/sbin/vps-deploy-probes
 # shellcheck disable=SC2016  # the $1 is for the stub, not this shell
 printf '#!/bin/sh\necho "notify: $1" >>/tmp/notify.log\nexit 0\n' >/usr/local/bin/vps-notify
 # systemctl: nothing is active, so the apt wait returns at once.
 printf '#!/bin/sh\necho inactive\n' >/usr/local/bin/systemctl
-chmod 0755 /usr/local/bin/docker /usr/local/sbin/vps-git-heal /usr/local/sbin/vps-secrets-render /usr/local/bin/vps-notify /usr/local/bin/systemctl
+chmod 0755 /usr/local/bin/docker /usr/local/sbin/vps-git-heal /usr/local/sbin/vps-secrets-render /usr/local/sbin/vps-deploy-probes /usr/local/bin/vps-notify /usr/local/bin/systemctl
 
 # Render the wrapper: checkout mode, no signature gate (the gate is covered by
 # the Molecule suite and needs a trust store), branch main.
@@ -75,7 +77,9 @@ run >/tmp/out.log 2>&1 || fail "clean deploy refused: $(cat /tmp/out.log)"
 grep -q 'docker compose up -d --remove-orphans --wait' /tmp/docker.log || fail "compose up not called"
 grep -q hook-ran /tmp/hook.log || fail "hook did not run"
 [[ "$(cat /var/lib/vps-deploy/last-deployed)" == "$(git -C /opt/deploy rev-parse HEAD)" ]] || fail "last-deployed not recorded"
-ok "a clean checkout deploys and is recorded"
+# The probes run after compose up, against the stack directory.
+grep -A99 'docker compose up' /tmp/docker.log | grep -q '^probes /opt/deploy$' || fail "the acceptance probes did not run after compose up: $(cat /tmp/docker.log)"
+ok "a clean checkout deploys, is probed and is recorded"
 
 # 2. core.worktree pointing at a clean copy must not hide an edited hook.
 cp -a /opt/deploy /srv/decoy && chown -R deploy:deploy /srv/decoy
@@ -149,5 +153,17 @@ ok "a rewind is refused unless --allow-rewind is passed"
 # 9. --rollback is a release-tree form; checkout mode refuses it.
 if run --rollback >/tmp/out.log 2>&1; then fail "--rollback accepted in checkout mode"; fi
 ok "--rollback is refused in checkout mode"
+
+# 10. A failed acceptance probe: the deploy stays live and recorded, the
+#     housekeeping after the probes still runs, and the wrapper exits non-zero
+#     so auto-deploy records the failure. Nothing is rolled back.
+cd /srv/work && echo probed >>docker-compose.yml && git commit -qam third && git push -q origin main && cd /
+touch /tmp/probes-fail
+if run >/tmp/out.log 2>&1; then fail "the wrapper exited 0 with a failed probe"; fi
+grep -q 'post-deploy probes failed' /tmp/out.log || fail "the probe failure was not reported last: $(cat /tmp/out.log)"
+[[ "$(cat /var/lib/vps-deploy/last-deployed)" == "$(git -C /opt/deploy rev-parse HEAD)" ]] || fail "a probed-but-failed deploy was not recorded as deployed"
+grep -q 'docker image prune' /tmp/docker.log || fail "the image prune did not run after a failed probe"
+rm -f /tmp/probes-fail
+ok "a failed probe exits non-zero after the housekeeping, with the deploy live and recorded"
 
 echo "all vps-deploy checks passed"

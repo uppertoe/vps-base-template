@@ -499,7 +499,7 @@
     dest: /usr/local/sbin/vps-deploy-probes
     owner: root
     group: root
-    mode: "0755"
+    mode: "0750"
 
 # In restricted mode docker (and so `compose pull`) runs as root inside
 # vps-deploy, but private-registry credentials were logged in as the deploy

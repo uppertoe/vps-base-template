@@ -243,6 +243,31 @@ check_remote "sudo logging is configured" "sudo grep -F 'Defaults logfile=\"/var
 check_remote "timesyncd config is present" "[[ -f /etc/systemd/timesyncd.conf ]]"
 check_remote "timesyncd config includes expected NTP servers" "grep -F 'NTP=0.ubuntu.pool.ntp.org 1.ubuntu.pool.ntp.org 2.ubuntu.pool.ntp.org 3.ubuntu.pool.ntp.org' /etc/systemd/timesyncd.conf >/dev/null && grep -F 'FallbackNTP=ntp.ubuntu.com' /etc/systemd/timesyncd.conf >/dev/null"
 
+header "Auth"
+# The sign-in gateway (apps/auth, docs/07) protects administrators with a
+# second step at the admin door: an authenticator code, or an admin passkey
+# added while that step was on. The gateway turns the step on from
+# TOTP_ENABLED in its environment, and a value in the repo's .env.example or
+# in a SOPS file proves nothing about the box, so read the setting from the
+# RUNNING container through docker inspect. Only the one variable is tested,
+# with grep -q, so no other value from the container's environment is ever
+# printed. sudo docker works in both access modes (docs/05): the deploy
+# account holds full sudo in the default mode and the admin account in
+# restricted mode.
+if remote "grep -Eq '^[[:space:]]*-[[:space:]]*apps/auth/docker-compose\\.ya?ml[[:space:]]*\$' /opt/deploy/docker-compose.yml" >/dev/null 2>&1; then
+  pass "Sign-in gateway (apps/auth) is included in docker-compose.yml"
+  auth_container="$(remote "sudo docker ps --filter label=com.docker.compose.service=auth --filter status=running -q | head -n1" 2>/dev/null || true)"
+  if [[ "$auth_container" =~ ^[0-9a-f]{12,64}$ ]]; then
+    pass "Gateway container is running"
+    check_remote "Administrators take a second step at the admin door (TOTP_ENABLED=true in the running gateway)" \
+      "sudo docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' $auth_container | grep -qiE '^TOTP_ENABLED=(true|t|1)\$'"
+  else
+    fail "Gateway container is running (no running container carries the compose service label auth)"
+  fi
+else
+  warn "Sign-in gateway (apps/auth) is not included in docker-compose.yml; the admin second-step check does not apply"
+fi
+
 if ! "$SKIP_BACKUP"; then
   header "Backups"
 

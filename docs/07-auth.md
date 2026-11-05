@@ -168,7 +168,11 @@ the SSP template, `docs/templates/system-security-plan.md`):
   same service).
 
 Disabling `TOTP_ENABLED` is a documented exception: record it and the reason
-in the instance's control matrix (row 5).
+in the instance's control matrix (row 5). The provisioning smoke test
+(`scripts/post-provision-smoke-test.sh`, docs/03 Step 13) reads
+`TOTP_ENABLED` from the running gateway container and fails when the deployed
+value is not `true`, so the exception shows up on every run until it is
+reversed.
 
 ## Local end-to-end test
 

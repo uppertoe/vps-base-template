@@ -341,6 +341,15 @@ ansible-playbook -i ansible/hosts scaffold/ansible/audit-all.yml
 ssh myserver 'sudo systemctl start vuln-scan.service restore-drill.service log-export.service'
 ```
 
+The smoke test reads the box, not the repository. Its "Auth" section applies
+when `docker-compose.yml` includes `apps/auth/docker-compose.yml`: it finds
+the running gateway container and reads `TOTP_ENABLED` from that container's
+environment through `docker inspect`, so a second step for administrators
+that is set in the repo but not deployed is reported as a failure
+([07-auth.md](07-auth.md), "Admin two-factor"). No other value from the
+container's environment is printed. On a server without the gateway the
+section is a warning that the check does not apply.
+
 Copy [templates/](templates/) into the server repo's `compliance/` directory
 and fill them in — that pack plus the `reports/` bundle is what you hand a
 reviewer (see [compliance-plan-vic-health.md](compliance-plan-vic-health.md)).

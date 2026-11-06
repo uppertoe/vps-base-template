@@ -82,8 +82,8 @@ A failed fetch fails the deploy; it never falls back to the cached tip.
    whose settings or mounted files changed (docs/04). Once the containers are
    healthy, the acceptance probes ask the local Caddy for every site in the
    release's access table (docs/05, "Acceptance probes"). A failed probe
-   makes the deploy exit non-zero; when the deploy ran no app hook it is
-   also rolled back (§4, "Automatic rollback"), otherwise the release stays
+   makes the deploy exit non-zero; when the deploy changed no image or app
+   hook it is also rolled back (§4, "Automatic rollback"), otherwise the release stays
    live and the alert says why.
    App hooks run as root from the release and must not write inside it; a
    release never changes after its export.
@@ -115,10 +115,11 @@ on an app whose key change is irreversible (p.stonn's `DATA_ENCRYPTION_KEY`).
 
 A deploy whose acceptance probes fail is rolled back by `vps-deploy` itself,
 in the same run, when all of the following hold: the server deploys from the
-release tree, the run was not itself a rollback, `deploy_probe_rollback` is
-true (the default, written to `/etc/vps-scaffold/release.env` as
-`PROBE_ROLLBACK=1`), no executable `apps/*/deploy.sh` hook ran in the
-deploy, there is an earlier release, and that release still verifies
+release tree, the run was neither a rollback nor a redeploy of the commit already live,
+`deploy_probe_rollback` is true (the default, written to
+`/etc/vps-scaffold/release.env` as `PROBE_ROLLBACK=1`), the images in
+`docker compose config --images` and the `apps/*/deploy.sh` files are the same
+in both releases, there is an earlier release, and that release still verifies
 against the root-owned trust stores. The wrapper then does what
 `--rollback` does: it switches `/opt/deploy` to the previous release, holds
 the failed commit, brings the previous release up from its own directory
@@ -135,13 +136,17 @@ failed commit until a new commit reaches the branch, and
 cause has been fixed outside the repo. The deploy still exits non-zero, so
 `auto-deploy` records the failure as before.
 
-A hook that ran may have migrated data the previous release cannot read, so
-a deploy that ran one is never rolled back automatically. The deploy stays
-live, the probes' own alert gives the hook as the reason, and the operator
-decides between `sudo vps-deploy --rollback` and a fix forward. The same
+A new image may migrate its data as it starts, and a changed hook may migrate
+it directly, and the previous release may not read the result, so a deploy
+that changed either is never rolled back automatically. Hooks that merely ran
+do not count: they run on every deploy and are idempotent. In practice the
+rollback covers routes, configuration and secrets, and an image bump stays
+alert-only. The deploy stays live, the probes' own alert gives the reason, and
+the operator decides between `sudo vps-deploy --rollback` and a fix forward. The same
 alert-only path, each with its reason in the alert, applies when
 `deploy_probe_rollback` is false, when there is no earlier release, when the
-earlier release no longer verifies, and when the run was itself a rollback.
+earlier release no longer verifies, and when the run was itself a rollback or
+redeployed the commit already live.
 The checkout layout has no earlier release to switch to and always stays
 live; its alert says that automatic rollback needs the release tree.
 

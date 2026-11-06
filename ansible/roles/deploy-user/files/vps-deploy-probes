@@ -27,7 +27,7 @@
 # A failed probe is reported, notified through vps-notify and makes the
 # script exit 1. This script never rolls anything back itself; what happens
 # next is the caller's decision (vps-deploy rolls back under the release tree
-# when it ran no app hook, docs/15 "Automatic rollback"), and the caller tells
+# when the deploy changed no image or hook, docs/15 "Automatic rollback"), and the caller tells
 # this script how to word the alert through the environment:
 #
 #   VPS_DEPLOY_PROBES_OUTCOME      the sentence that closes the alert and the

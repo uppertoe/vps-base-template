@@ -480,19 +480,10 @@ runuser -u {{ deploy_user }} -- find ./apps ./scaffold ./.generated ./Caddyfile 
 
 {% endif %}
 
-{% if deploy_release_tree | default(false) | bool %}
-# Whether a hook ran decides what a failed acceptance probe may do later: a
-# hook may have migrated data the previous release cannot read, so a deploy
-# that ran one is never rolled back automatically (docs/15).
-hooks_ran=0
-{% endif %}
 for hook in ./apps/*/deploy.sh; do
   if [[ -x "$hook" ]]; then
     echo "Running app deploy hook: ${hook#./}"
     "$hook" 9>&-
-{% if deploy_release_tree | default(false) | bool %}
-    hooks_ran=1
-{% endif %}
   fi
 done
 
@@ -654,7 +645,7 @@ record_deployed "$new_head"
 # vps-deploy-probes asks the local Caddy for the root of every site in the
 # rendered access table (.generated/caddy/route-access.tsv): a gated site
 # must send 302 to the gateway, with and without a forged identity header, a
-# public site must answer 2xx or 3xx, and nothing may answer 5xx or not at
+# public site must answer below 500, and nothing may answer 5xx or not at
 # all. A failure is reported and notified, and the wrapper exits non-zero at
 # the end so auto-deploy records it. What happens to the deploy depends on
 # the layout (docs/05 "Acceptance probes", docs/15 "Automatic rollback").
@@ -662,11 +653,33 @@ probe_rc=0
 {% if deploy_release_tree | default(false) | bool %}
 # Under the release tree the previous release is still on disk, so a deploy
 # that failed its probes can be undone here, the way --rollback would, when
-# it is safe and wanted: this run must not itself be a rollback, automatic
-# rollback must be on for this server (PROBE_ROLLBACK in release.env, from
-# deploy_probe_rollback), no app hook may have run (a migration may have
-# changed data the previous release cannot read), and there must be an
-# earlier release. Otherwise the deploy stays live and the alert says why.
+# it is safe and wanted: this run must not itself be a rollback or a redeploy
+# of the commit already live, automatic rollback must be on for this server
+# (PROBE_ROLLBACK in release.env, from deploy_probe_rollback), the deploy must
+# have changed no image and no app hook, and there must be an earlier release.
+# Otherwise the deploy stays live and the alert says why.
+#
+# The test is what changed, not whether a hook ran: hooks run on every deploy
+# and are idempotent, whereas a new image may migrate its data as it starts,
+# with no hook involved, and the previous image may not read the result. A
+# deploy that moved only routes, configuration or secrets has no such risk.
+# rollback_risk PREVIOUS_DIR PREVIOUS_HEAD NEW_HEAD prints why the move back
+# may not be safe, or nothing. Images that cannot be listed count as changed.
+rollback_risk() {
+  local hooks before after
+  hooks="$(changed_paths "$2" "$3" | grep -E '^apps/[^/]+/deploy\.sh$' | tr '\n' ' ' || true)"
+  if [[ -n "$hooks" ]]; then
+    echo "it changed an app deploy hook (${hooks% }), which may have migrated data into a form the previous release cannot read"
+    return 0
+  fi
+  before="$(cd "$1" && docker compose config --images 2>/dev/null | sort -u || true)"
+  after="$(cd /opt/deploy && docker compose config --images 2>/dev/null | sort -u || true)"
+  if [[ -z "$before" || -z "$after" ]]; then
+    echo "the images of the two releases could not be compared"
+  elif [[ "$before" != "$after" ]]; then
+    echo "it changed an image, and an app may have migrated its data as it started, into a form the previous release cannot read"
+  fi
+}
 probe_rollback="$(sed -n 's/^PROBE_ROLLBACK=//p' /etc/vps-scaffold/release.env 2>/dev/null | tail -n1)"
 previous_release="" rollback_head="" rollback_scaffold="" rolled_back=0
 # A failed lookup counts as no earlier release: the deploy is live by now,
@@ -683,13 +696,19 @@ if [[ "$action" == rollback ]]; then
   probe_outcome="The release is live and has not been rolled back again, because this deploy was itself a rollback."
 elif [[ "${probe_rollback:-1}" != 1 ]]; then
   probe_outcome="The deploy is live and has not been rolled back, because automatic rollback is switched off on this server (deploy_probe_rollback: false). An administrator can roll back by hand with sudo vps-deploy --rollback, or fix forward."
-elif [[ "$hooks_ran" == 1 ]]; then
-  probe_outcome="The deploy is live and has not been rolled back, because an app deploy hook ran in this deploy and a migration may have changed data that the previous release cannot read. Check the app before choosing between sudo vps-deploy --rollback and a fix forward."
+elif [[ "$new_head" == "$old_head" ]]; then
+  probe_outcome="The deploy is live and has not been rolled back, because this run redeployed the commit that was already live, so the cause is not a change it made."
 elif [[ -z "$previous_release" ]]; then
   probe_outcome="The deploy is live and has not been rolled back, because there is no earlier release to roll back to."
+else
+  rollback_risk_reason="$(rollback_risk "$previous_release" "$rollback_head" "$new_head")"
+  if [[ -n "$rollback_risk_reason" ]]; then
+    probe_outcome="The deploy is live and has not been rolled back, because $rollback_risk_reason. Check the app before choosing between sudo vps-deploy --rollback and a fix forward."
+  fi
+fi
 # A kept release is verified again before it is used: a signer may have been
 # removed since it was deployed.
-elif ! /usr/local/sbin/vps-release recheck "$previous_release"; then
+if [[ -z "$probe_outcome" ]] && ! /usr/local/sbin/vps-release recheck "$previous_release"; then
   probe_outcome="The deploy is live and has not been rolled back, because the previous release ${rollback_head:0:7} no longer verifies against the root-owned trust stores."
 fi
 if [[ -n "$probe_outcome" ]]; then
@@ -704,15 +723,26 @@ else
   if [[ "$probe_rc" -ne 0 ]]; then
     failed_hosts="$(cat "$probe_failed_file" 2>/dev/null || true)"
     [[ -n "$failed_hosts" ]] || failed_hosts="(the probes did not run to the end; the deploy log has the detail)"
-    echo "vps-deploy: the probes failed and no app hook ran; rolling back to the previous release ${rollback_head:0:7}." >&2
+    echo "vps-deploy: the probes failed and the deploy changed no image or hook; rolling back to the previous release ${rollback_head:0:7}." >&2
     # The same steps as --rollback: the link is switched, the commit rolled
     # back from is held so auto-deploy does not bring it straight back, and
     # the previous release is brought up from its own directory. Its images
     # are still on the host, because the prune has not run yet. No rewind
     # guard here: the guard accepts a rollback, and this one goes to the
     # release the guard's own record named before this run.
-    /usr/local/sbin/vps-release switch "$previous_release"
-    /usr/local/sbin/vps-release hold "$new_head"
+    # The probes were told to stay quiet, so every way out of here must alert.
+    if ! /usr/local/sbin/vps-release switch "$previous_release"; then
+      /usr/local/bin/vps-notify "Deploy probes failed and the rollback did not start" \
+"After compose up reported the containers healthy, these sites did not answer as their access rules declare:
+$failed_hosts
+
+vps-deploy could not switch /opt/deploy back to ${rollback_head:0:7}, so ${new_head:0:7} is still live. An administrator can try sudo vps-deploy --rollback, or fix forward." \
+        high warning || true
+      echo "vps-deploy: the switch back to ${rollback_head:0:7} failed; ${new_head:0:7} is still live." >&2
+      exit 1
+    fi
+    hold_note=""
+    /usr/local/sbin/vps-release hold "$new_head" || hold_note=" The hold could not be recorded, so auto-deploy may try ${new_head:0:7} again."
     cd /opt/deploy
     if bring_up "$new_head" "$rollback_head" "$new_scaffold" "$rollback_scaffold"; then
       record_deployed "$rollback_head"
@@ -731,16 +761,16 @@ else
 "After compose up reported the containers healthy, these sites did not answer as their access rules declare:
 $failed_hosts
 
-${new_head:0:7} ran no app deploy hook, so vps-deploy switched /opt/deploy back to ${rollback_head:0:7} and brought it up again. $rollback_result
+${new_head:0:7} changed no image and no app deploy hook, so vps-deploy switched /opt/deploy back to ${rollback_head:0:7} and brought it up again. $rollback_result
 
-Automatic deploys skip ${new_head:0:7} until a new commit reaches the branch. To deploy ${new_head:0:7} again without a new commit, once the cause is fixed outside the repo, run sudo vps-release unhold." \
+Automatic deploys skip ${new_head:0:7} until a new commit reaches the branch. To deploy ${new_head:0:7} again without a new commit, once the cause is fixed outside the repo, run sudo vps-release unhold.$hold_note" \
         high warning || true
     else
       /usr/local/bin/vps-notify "Deploy probes failed and the rollback did not come up" \
 "After compose up reported the containers healthy, these sites did not answer as their access rules declare:
 $failed_hosts
 
-${new_head:0:7} ran no app deploy hook, so vps-deploy switched /opt/deploy back to ${rollback_head:0:7}, but compose up did not bring that release up (the deploy log names the containers that are not running). Check the stack with sudo docker ps -a. Automatic deploys skip ${new_head:0:7} until a new commit reaches the branch; sudo vps-release unhold lets them deploy it again." \
+${new_head:0:7} changed no image and no app deploy hook, so vps-deploy switched /opt/deploy back to ${rollback_head:0:7}, but compose up did not bring that release up (the deploy log names the containers that are not running). Check the stack with sudo docker ps -a. Automatic deploys skip ${new_head:0:7} until a new commit reaches the branch; sudo vps-release unhold lets them deploy it again." \
         high warning || true
       echo "vps-deploy: the rollback to ${rollback_head:0:7} did not come up." >&2
       exit 1

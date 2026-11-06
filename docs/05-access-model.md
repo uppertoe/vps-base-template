@@ -185,7 +185,7 @@ sudo /usr/local/sbin/vps-deploy
    deploy changed (compose recreates image, definition and env changes itself).
 7. Record the deployed commit in `/var/lib/vps-deploy/last-deployed`, then
    run the acceptance probes (`vps-deploy-probes`, below). Under the release
-   tree a failed probe set rolls the deploy back when no hook ran (docs/15
+   tree a failed probe set rolls the deploy back when it changed no image or hook (docs/15
    "Automatic rollback").
 8. `docker image prune -af` (reclaim superseded images once the new containers
    are healthy). A failed probe is reported last, as a non-zero exit.
@@ -226,17 +226,18 @@ A failure prints the failing hosts, sends one notification through
 the failure and the unit's `OnFailure` alert fires as well. What happens to
 the deploy depends on the layout, and the alert always says which:
 
-- Under the release tree, when the deploy ran no `apps/*/deploy.sh` hook,
+- Under the release tree, when the deploy changed no image and no
+  `apps/*/deploy.sh` file,
   `vps-deploy` rolls back automatically: it switches `/opt/deploy` to the
   previous release, brings it up, runs the probes against it, records it as
   the deployed commit and holds the failed commit, so `auto-deploy` does not
   bring it straight back. docs/15 "Automatic rollback" has the detail and
   the alert text. `deploy_probe_rollback: false` in the inventory keeps the
   failed deploy live instead.
-- Under the release tree, when a hook did run, the deploy stays live: a
-  migration may have changed data the previous release cannot read, so the
-  decision between `sudo vps-deploy --rollback` and a fix forward is the
-  operator's, and the alert gives the hook as the reason.
+- Under the release tree, when the deploy changed an image or a hook, the
+  deploy stays live: a migration may have changed data the previous release
+  cannot read, so the decision between `sudo vps-deploy --rollback` and a fix
+  forward is the operator's, and the alert gives the reason.
 - In the checkout layout the deploy stays live and the alert says that
   automatic rollback needs the release tree.
 

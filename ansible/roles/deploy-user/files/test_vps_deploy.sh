@@ -28,6 +28,9 @@ mkdir -p /usr/local/sbin /usr/local/bin /var/lib/vps-deploy /run
 cat >/usr/local/bin/docker <<'EOF'
 #!/bin/sh
 echo "docker $*" >>/tmp/docker.log
+# compose config --images reads images.txt from the release, so a test commit
+# can change an image.
+if [ "$1 $2 $3" = "compose config --images" ]; then cat images.txt 2>/dev/null || echo app:1; exit 0; fi
 if [ "$1 $2" = "compose config" ]; then echo '{"services":{}}'; fi
 exit 0
 EOF
@@ -186,8 +189,8 @@ ok "a failed probe exits non-zero after the housekeeping, with the deploy live, 
 # deploy_release_tree, against a stub vps-release that keeps the switch
 # history, the hold and the releases the way the real one does, exported from
 # a root mirror of the origin. What is under test is the wrapper's handling of
-# a failed acceptance probe: an automatic rollback when no hook ran, and the
-# alert's reason when it does not roll back.
+# a failed acceptance probe: an automatic rollback when no image or hook
+# changed, and the alert's reason when it does not roll back.
 python3 - <<'PY'
 import jinja2
 env = jinja2.Environment()
@@ -212,7 +215,7 @@ case "$1" in
       printf 'commit=%s\nscaffold=none\nexported=now\n' "$c" >"$d/.release"
     fi
     echo "$d" ;;
-  switch) ln -sfn "$2" /opt/.deploy-link && mv -T /opt/.deploy-link /opt/deploy; echo "now $2" >>"$H" ;;
+  switch) if [[ -e /tmp/switch-fail && "$2" == "$(cat /tmp/switch-fail)" ]]; then exit 1; fi; ln -sfn "$2" /opt/.deploy-link && mv -T /opt/.deploy-link /opt/deploy; echo "now $2" >>"$H" ;;
   previous) cur="$(readlink -f /opt/deploy)"; tac "$H" | while read -r _ d; do if [[ "$d" != "$cur" ]]; then echo "$d"; break; fi; done; true ;;
   hold) echo "$2" >"$STATE/hold" ;;
   held) cat "$STATE/hold" 2>/dev/null || true ;;
@@ -230,7 +233,7 @@ tip() { git -C /srv/work rev-parse HEAD; }
 commit() { ( cd /srv/work && git add -A && git commit -qm "$1" && git push -q origin main ); }
 
 # 11. A release deploys with its probes passing: no hold, the commit recorded.
-( cd /srv/work && git rm -q apps/x/deploy.sh ) && commit "rt-base"
+echo base >>/srv/work/docker-compose.yml && commit "rt-base"
 run >/tmp/out.log 2>&1 || fail "the first release deploy failed: $(cat /tmp/out.log)"
 base="$(tip)"
 [[ -L /opt/deploy && "$(live)" == "$base" ]] || fail "/opt/deploy is not the first release"
@@ -239,13 +242,15 @@ base="$(tip)"
 [[ ! -s /tmp/notify.log ]] || fail "a passing deploy notified: $(cat /tmp/notify.log)"
 ok "a release whose probes pass is live, recorded and not held"
 
-# 12. Probes fail, no hook ran: the wrapper rolls back to the previous release,
+# 12. Probes fail, no image or hook changed (the unchanged hook still ran, as
+#     hooks do on every deploy): the wrapper rolls back to the previous release,
 #     re-probes it, records it, holds the failed commit and sends one alert
 #     that names the host, the rollback and the unhold command.
 : >/tmp/notify.log
 echo bad >>/srv/work/docker-compose.yml && commit "rt-bad"
 bad="$(tip)"; echo "$bad" >/tmp/probes-fail
 if run >/tmp/out.log 2>&1; then fail "a rolled-back deploy exited 0: $(cat /tmp/out.log)"; fi
+grep -q hook-ran /tmp/hook.log || fail "the unchanged hook did not run: $(cat /tmp/out.log)"
 [[ "$(live)" == "$base" ]] || fail "/opt/deploy was not switched back to the previous release: $(cat /tmp/out.log)"
 [[ "$(/usr/local/sbin/vps-release held)" == "$bad" ]] || fail "the failed commit is not held"
 [[ "$(cat /var/lib/vps-deploy/last-deployed)" == "$base" ]] || fail "last-deployed does not name the release that is live again"
@@ -259,7 +264,7 @@ grep -q "The previous release ${base:0:7} is live again and its probes passed." 
 grep -q 'run sudo vps-release unhold' /tmp/notify.log || fail "the alert does not say how to resume automatic deploys"
 grep -q 'previous release is live again' /tmp/out.log || fail "the closing line does not report the rollback: $(cat /tmp/out.log)"
 grep -q 'docker image prune' /tmp/docker.log || fail "the housekeeping did not run after the rollback"
-ok "probes fail with no hook: rolled back, re-probed, recorded, held and announced once"
+ok "probes fail with no image or hook changed: rolled back, re-probed, recorded, held and announced once"
 
 # 13. The hold is honoured: --auto on the held commit exits 3 and changes
 #     nothing; a new commit clears it and passes the rewind guard.
@@ -269,27 +274,32 @@ rc=0; run --auto >/tmp/out.log 2>&1 || rc=$?
 [[ "$(live)" == "$base" ]] || fail "--auto moved /opt/deploy while the commit was held"
 ok "--auto skips the held commit"
 
-# 14. Probes fail but a hook ran: no rollback, the deploy stays live and the
-#     alert says why. The new commit also clears the hold.
+# 14. Probes fail on a deploy that changed an image: no rollback, the deploy
+#     stays live and the alert says why. The new commit also clears the hold.
 : >/tmp/notify.log
-mkdir -p /srv/work/apps/x
-printf '#!/bin/bash\necho hook-ran >>/tmp/hook.log\n' >/srv/work/apps/x/deploy.sh
-chmod +x /srv/work/apps/x/deploy.sh
-echo hooked >>/srv/work/docker-compose.yml && commit "rt-hook"
+echo app:2 >/srv/work/images.txt && commit "rt-image"
+imaged="$(tip)"; echo "$imaged" >/tmp/probes-fail
+if run >/tmp/out.log 2>&1; then fail "a failed probe exited 0"; fi
+[[ "$(live)" == "$imaged" ]] || fail "a deploy that changed an image was rolled back"
+[[ -z "$(/usr/local/sbin/vps-release held)" ]] || fail "the hold was not cleared by the new commit, or the deploy held it"
+[[ "$(cat /var/lib/vps-deploy/last-deployed)" == "$imaged" ]] || fail "the live deploy was not recorded"
+grep -q 'outcome=The deploy is live and has not been rolled back, because it changed an image' /tmp/docker.log || fail "the alert does not give the image as the reason: $(cat /tmp/docker.log)"
+[[ ! -s /tmp/notify.log ]] || fail "the wrapper sent an alert of its own as well as the probes': $(cat /tmp/notify.log)"
+ok "probes fail after an image changed: not rolled back, and the alert says why"
+
+# 14b. The same for a deploy that changed a hook.
+printf '#!/bin/bash\necho hook-ran >>/tmp/hook.log\necho changed >/dev/null\n' >/srv/work/apps/x/deploy.sh
+commit "rt-hook"
 hooked="$(tip)"; echo "$hooked" >/tmp/probes-fail
 if run >/tmp/out.log 2>&1; then fail "a failed probe exited 0"; fi
-grep -q hook-ran /tmp/hook.log || fail "the hook did not run: $(cat /tmp/out.log)"
-[[ "$(live)" == "$hooked" ]] || fail "a deploy that ran a hook was rolled back"
-[[ -z "$(/usr/local/sbin/vps-release held)" ]] || fail "the hold was not cleared by the new commit, or the deploy held it"
-[[ "$(cat /var/lib/vps-deploy/last-deployed)" == "$hooked" ]] || fail "the live deploy was not recorded"
-grep -q 'outcome=The deploy is live and has not been rolled back, because an app deploy hook ran in this deploy' /tmp/docker.log || fail "the alert does not give the hook as the reason: $(cat /tmp/docker.log)"
-[[ ! -s /tmp/notify.log ]] || fail "the wrapper sent an alert of its own as well as the probes': $(cat /tmp/notify.log)"
-ok "probes fail after a hook ran: not rolled back, and the alert says why"
+[[ "$(live)" == "$hooked" ]] || fail "a deploy that changed a hook was rolled back"
+grep -q 'outcome=The deploy is live and has not been rolled back, because it changed an app deploy hook (apps/x/deploy.sh)' /tmp/docker.log || fail "the alert does not give the hook as the reason: $(cat /tmp/docker.log)"
+ok "probes fail after a hook changed: not rolled back, and the alert says why"
 
 # 15. Probes fail with automatic rollback switched off: no rollback, and the
 #     alert says so.
 sed -i 's/^PROBE_ROLLBACK=.*/PROBE_ROLLBACK=0/' /etc/vps-scaffold/release.env
-( cd /srv/work && git rm -q apps/x/deploy.sh ) && echo off >>/srv/work/docker-compose.yml && commit "rt-off"
+echo off >>/srv/work/docker-compose.yml && commit "rt-off"
 off="$(tip)"; echo "$off" >/tmp/probes-fail
 if run >/tmp/out.log 2>&1; then fail "a failed probe exited 0"; fi
 [[ "$(live)" == "$off" ]] || fail "a deploy was rolled back with deploy_probe_rollback off"
@@ -297,6 +307,14 @@ if run >/tmp/out.log 2>&1; then fail "a failed probe exited 0"; fi
 grep -q 'outcome=The deploy is live and has not been rolled back, because automatic rollback is switched off on this server (deploy_probe_rollback: false)' /tmp/docker.log || fail "the alert does not give the setting as the reason: $(cat /tmp/docker.log)"
 sed -i 's/^PROBE_ROLLBACK=.*/PROBE_ROLLBACK=1/' /etc/vps-scaffold/release.env
 ok "probes fail with rollback switched off: not rolled back, and the alert says why"
+
+# 15b. A redeploy of the commit already live is not rolled back: the cause is
+#      not a change this run made, and the previous release is older still.
+if run >/tmp/out.log 2>&1; then fail "a failed probe exited 0"; fi
+[[ "$(live)" == "$off" ]] || fail "a redeploy of the live commit was rolled back"
+[[ -z "$(/usr/local/sbin/vps-release held)" ]] || fail "a redeploy set a hold"
+grep -q 'outcome=The deploy is live and has not been rolled back, because this run redeployed the commit that was already live' /tmp/docker.log || fail "the alert does not give the redeploy as the reason: $(cat /tmp/docker.log)"
+ok "a redeploy of the live commit whose probes fail stays, and the alert says why"
 
 # 16. A hand-run --rollback whose probes fail is not rolled back again.
 : >/tmp/notify.log
@@ -306,7 +324,17 @@ if run --rollback >/tmp/out.log 2>&1; then fail "a rollback with failing probes 
 [[ "$(/usr/local/sbin/vps-release held)" == "$off" ]] || fail "--rollback did not hold the commit rolled back from"
 grep -q 'outcome=The release is live and has not been rolled back again, because this deploy was itself a rollback.' /tmp/docker.log || fail "a rollback's failed probes were not explained: $(cat /tmp/docker.log)"
 grep -q "^notify: Rolled back to ${hooked:0:7}$" /tmp/notify.log || fail "the rollback was not announced: $(cat /tmp/notify.log)"
-rm -f /tmp/probes-fail
 ok "a rollback whose probes fail stays, with the reason in the alert"
+
+# 17. The switch back fails: the probes were silenced, so the wrapper must
+#     alert itself and say that the failed commit is still live.
+: >/tmp/notify.log
+echo nosw >>/srv/work/docker-compose.yml && commit "rt-noswitch"
+nosw="$(tip)"; echo "$nosw" >/tmp/probes-fail; echo "/opt/deploy-releases/$hooked" >/tmp/switch-fail
+if run >/tmp/out.log 2>&1; then fail "a failed switch back exited 0"; fi
+rm -f /tmp/switch-fail /tmp/probes-fail
+[[ "$(live)" == "$nosw" ]] || fail "/opt/deploy moved although the switch failed"
+grep -q '^notify: Deploy probes failed and the rollback did not start$' /tmp/notify.log || fail "a failed switch back was not announced: $(cat /tmp/notify.log)"
+ok "a switch back that fails is announced, with the deploy live"
 
 echo "all vps-deploy checks passed"

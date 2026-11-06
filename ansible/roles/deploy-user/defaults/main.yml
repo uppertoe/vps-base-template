@@ -133,6 +133,12 @@ deploy_secrets_sops_checksums:
 deploy_release_tree: false
 # Releases kept for `vps-deploy --rollback` (the current one included).
 deploy_release_keep: 3
+# A deploy whose acceptance probes fail (docs/05) is rolled back to the
+# previous release automatically when no app deploy hook ran in it, and the
+# commit is held until a new one reaches the branch. Set false to keep every
+# failed deploy live and leave the rollback to an administrator (the alert
+# then says so). Written to /etc/vps-scaffold/release.env as PROBE_ROLLBACK.
+deploy_probe_rollback: true
 # The server repo's GitHub URL. Empty: read from the existing checkout's
 # origin, then from /etc/vps-scaffold/release.env.
 deploy_repo_url: ""

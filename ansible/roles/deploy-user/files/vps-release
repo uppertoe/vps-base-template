@@ -314,12 +314,16 @@ do_current() {
 }
 # The release deployed before the current one, from the switch history (not
 # export times, which a reused release keeps from its first export).
+# Prints nothing, and succeeds, when there is none: a while loop's status is
+# that of its last body command, so without the final return the first
+# release's `previous` would fail under errexit instead of answering "none".
 do_previous() {
   local cur d; cur="$(current_dir)"
   [[ -f "$HISTORY" ]] || return 0
   while read -r _ d; do
     [[ "$d" != "$cur" ]] && is_release "$d" && { echo "$d"; return 0; }
   done < <(tac "$HISTORY")
+  return 0
 }
 # Keep the current release and the most recently switched-to others, $KEEP in all.
 # Releases named in mount tables on stdin (/proc/<pid>/mountinfo). The kernel

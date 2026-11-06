@@ -33,6 +33,37 @@ of the actions, once.
 
 ---
 
+## 2026-11-06 — A failed probe set rolls the deploy back when no hook ran
+
+Under the release tree, `vps-deploy` now undoes a deploy whose acceptance
+probes fail, provided the deploy ran no `apps/*/deploy.sh` hook. It switches
+`/opt/deploy` back to the previous release, brings it up, runs the probes
+against it, records it as the deployed commit and holds the failed commit, so
+the hourly `auto-deploy` does not bring that commit straight back. One alert,
+`Deploy probes failed: rolled back to <commit>`, names the failing hosts,
+says that the previous release is live again and whether its probes passed,
+and ends with how to resume: automatic deploys skip the failed commit until a
+new commit reaches the branch, and `sudo vps-release unhold` lets them deploy
+the same commit again once the cause has been fixed outside the repo. The
+deploy still exits non-zero, so `auto-deploy` records the failure as before.
+
+A deploy that ran a hook is never rolled back automatically, because a
+migration may have changed data the previous release cannot read; it stays
+live, and the alert gives the hook as the reason. The checkout layout
+(default-mode servers) stays alert-only as well, and its alert says that
+automatic rollback needs the release tree. docs/15 "Automatic rollback" and
+docs/05 "Acceptance probes" have the detail.
+
+**Operator actions:** none. The behaviour arrives with the site play that
+installs the new wrapper and writes `PROBE_ROLLBACK=1` to
+`/etc/vps-scaffold/release.env`. A server that should keep every failed
+deploy live sets `deploy_probe_rollback: false` in its inventory before that
+play. After an automatic rollback, fix the cause and push; if the cause was
+outside the repo and the same commit should go out again, run
+`sudo vps-release unhold` and the next `auto-deploy` run deploys it.
+
+---
+
 ## 2026-11-04 — Deploys end with acceptance probes against the local Caddy
 
 After `docker compose up --wait` has reported the containers healthy, both

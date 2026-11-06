@@ -187,7 +187,10 @@
         that:
           - "'/usr/local/sbin/vps-deploy-probes /opt/deploy || probe_rc=$?' in (vps_deploy_raw.content | b64decode)"
           - "'exit \"$probe_rc\"' in (vps_deploy_raw.content | b64decode)"
-        msg: "vps-deploy must run vps-deploy-probes after compose up --wait and exit non-zero when a probe failed"
+          # Molecule converges in the checkout layout, where a failed probe
+          # set is alert-only and the alert must say why (docs/05).
+          - "'automatic rollback needs the release tree' in (vps_deploy_raw.content | b64decode)"
+        msg: "vps-deploy must probe after compose up --wait, exit non-zero on a failed probe, and say why the checkout layout does not roll back"
 
     - name: Assert wrapper installs a SOPS-held backup set into /etc/restic
       ansible.builtin.assert:

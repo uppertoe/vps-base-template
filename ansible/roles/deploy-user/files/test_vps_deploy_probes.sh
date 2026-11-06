@@ -151,7 +151,36 @@ grep -q '6 site(s) answered' "$work/out.log" || fail "expected six probed sites 
 ok "deploy-probes.skip, unresolved placeholders and non-host addresses are skipped with a note"
 rm -f "$stack/deploy-probes.skip"
 
-# 6. No access table means nothing to probe, and a clean exit.
+# 6. The caller words the outcome. VPS_DEPLOY_PROBES_OUTCOME closes the log
+#    and the alert; an empty VPS_DEPLOY_PROBES_NOTIFY sends no alert; and
+#    VPS_DEPLOY_PROBES_FAILED_FILE receives the failing hosts, one per line,
+#    or an empty file when every probe passed.
+answers 'auth.example.org|-|503|' 'ntfy.example.org|-|404|' 'hooks.example.org|-|404|' \
+        'docs.example.org|-|302|https://auth.example.org/login' \
+        'docs.example.org|Remote-Email: forged@example.invalid|200|' \
+        'planka.example.org|-|302|https://auth.example.org/login' \
+        'planka.example.org|Remote-Email: forged@example.invalid|302|https://auth.example.org/login' \
+        'www.example.org|-|302|https://example.org/' 'example.org|-|200|' 'caffeine.example.org|-|200|'
+if VPS_DEPLOY_PROBES_OUTCOME="The deploy is live; this is the caller's sentence." run; then fail "two broken sites passed"; fi
+grep -q "^vps-deploy-probes: The deploy is live; this is the caller's sentence.$" "$work/out.log" || fail "the caller's outcome was not printed: $(cat "$work/out.log")"
+grep -q "^The deploy is live; this is the caller's sentence. Details are in the deploy log" "$NOTIFY_LOG" || fail "the caller's outcome is not in the alert: $(cat "$NOTIFY_LOG")"
+grep -q 'has not been rolled back' "$NOTIFY_LOG" && fail "the default outcome was sent as well as the caller's"
+if run; then fail "two broken sites passed"; fi
+grep -q '^The deploy is live and has not been rolled back. Details' "$NOTIFY_LOG" || fail "the default outcome is missing: $(cat "$NOTIFY_LOG")"
+if VPS_DEPLOY_PROBES_NOTIFY="" VPS_DEPLOY_PROBES_FAILED_FILE="$work/failed" run; then fail "two broken sites passed"; fi
+[[ ! -s "$NOTIFY_LOG" ]] || fail "an alert was sent although the notifier was set empty: $(cat "$NOTIFY_LOG")"
+[[ "$(cat "$work/failed")" == $'auth.example.org\ndocs.example.org (forged identity header)' ]] || fail "the failed-hosts file is wrong: $(cat "$work/failed")"
+answers 'auth.example.org|-|200|' 'ntfy.example.org|-|404|' 'hooks.example.org|-|404|' \
+        'docs.example.org|-|302|https://auth.example.org/login' \
+        'docs.example.org|Remote-Email: forged@example.invalid|302|https://auth.example.org/login' \
+        'planka.example.org|-|302|https://auth.example.org/login' \
+        'planka.example.org|Remote-Email: forged@example.invalid|302|https://auth.example.org/login' \
+        'www.example.org|-|302|https://example.org/' 'example.org|-|200|' 'caffeine.example.org|-|200|'
+VPS_DEPLOY_PROBES_FAILED_FILE="$work/failed" run || fail "a healthy estate failed: $(cat "$work/out.log")"
+[[ -f "$work/failed" && ! -s "$work/failed" ]] || fail "a passing run did not leave an empty failed-hosts file"
+ok "the caller's outcome is used, an empty notifier sends nothing, and the failing hosts are written to the file"
+
+# 7. No access table means nothing to probe, and a clean exit.
 rm -f "$table"
 run || fail "a stack without an access table failed: $(cat "$work/out.log")"
 grep -q 'nothing to probe' "$work/out.log" || fail "the missing table was not reported"

@@ -81,8 +81,10 @@ A failed fetch fails the deploy; it never falls back to the cached tip.
    mount opened in the old checkout; later deploys recreate only the services
    whose settings or mounted files changed (docs/04). Once the containers are
    healthy, the acceptance probes ask the local Caddy for every site in the
-   release's access table (docs/05, "Acceptance probes"); a failed probe
-   leaves the release live and makes the deploy exit non-zero.
+   release's access table (docs/05, "Acceptance probes"). A failed probe
+   makes the deploy exit non-zero; when the deploy changed no image or app
+   hook it is also rolled back (§4, "Automatic rollback"), otherwise the release stays
+   live and the alert says why.
    App hooks run as root from the release and must not write inside it; a
    release never changes after its export.
 9. **Keep three.** The current release and the two most recently deployed
@@ -108,6 +110,50 @@ the services whose settings differ between the two releases, so a rollback
 that changes an app's settings carries the same risk as a deploy that does:
 check before running it
 on an app whose key change is irreversible (p.stonn's `DATA_ENCRYPTION_KEY`).
+
+### Automatic rollback (owner decision, 2026-11-06)
+
+A deploy whose acceptance probes fail is rolled back by `vps-deploy` itself,
+in the same run, when all of the following hold: the server deploys from the
+release tree, the run was neither a rollback nor a redeploy of the commit already live,
+`deploy_probe_rollback` is true (the default, written to
+`/etc/vps-scaffold/release.env` as `PROBE_ROLLBACK=1`), the images in
+`docker compose config --images` and the `apps/*/deploy.sh` files are the same
+in both releases, there is an earlier release, and that release still verifies
+against the root-owned trust stores. The wrapper then does what
+`--rollback` does: it switches `/opt/deploy` to the previous release, holds
+the failed commit, brings the previous release up from its own directory
+(its images are still on the host, because the image prune runs after the
+probes), records it in `/var/lib/vps-deploy/last-deployed` and runs the
+probes against it. The rewind guard is not consulted for the switch back,
+and the next forward deploy of a fixed commit passes it, because a fix
+descends from the commit that is live again. One alert is sent, titled
+`Deploy probes failed: rolled back to <commit>`, naming the failing hosts,
+saying that the previous release is live again and whether its probes
+passed, and ending with the way to resume: automatic deploys skip the
+failed commit until a new commit reaches the branch, and
+`sudo vps-release unhold` lets them deploy the same commit again once the
+cause has been fixed outside the repo. The deploy still exits non-zero, so
+`auto-deploy` records the failure as before.
+
+A new image may migrate its data as it starts, and a changed hook may migrate
+it directly, and the previous release may not read the result, so a deploy
+that changed either is never rolled back automatically. Hooks that merely ran
+do not count: they run on every deploy and are idempotent. In practice the
+rollback covers routes, configuration and secrets, and an image bump stays
+alert-only. The deploy stays live, the probes' own alert gives the reason, and
+the operator decides between `sudo vps-deploy --rollback` and a fix forward. The same
+alert-only path, each with its reason in the alert, applies when
+`deploy_probe_rollback` is false, when there is no earlier release, when the
+earlier release no longer verifies, and when the run was itself a rollback or
+redeployed the commit already live.
+The checkout layout has no earlier release to switch to and always stays
+live; its alert says that automatic rollback needs the release tree.
+
+Should the previous release fail to come up after the switch back, the
+alert is titled `Deploy probes failed and the rollback did not come up`,
+names the release that `/opt/deploy` now points at, and asks for
+`sudo docker ps -a`; the failed commit is held as above.
 
 ## 5. What changes for people
 

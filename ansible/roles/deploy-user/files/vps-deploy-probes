@@ -25,11 +25,25 @@
 #   * a 5xx, or no answer at all, fails the probe for any site.
 #
 # A failed probe is reported, notified through vps-notify and makes the
-# script exit 1; nothing is rolled back (the deploy is live, and the operator
-# decides). A host the box cannot answer for (DNS that points elsewhere, so
-# Caddy holds no certificate) is skipped by listing it in deploy-probes.skip
-# in the stack directory, one "host reason" per line; the file is part of the
-# release, so the exception is reviewed like any other change.
+# script exit 1. This script never rolls anything back itself; what happens
+# next is the caller's decision (vps-deploy rolls back under the release tree
+# when the deploy changed no image or hook, docs/15 "Automatic rollback"), and the caller tells
+# this script how to word the alert through the environment:
+#
+#   VPS_DEPLOY_PROBES_OUTCOME      the sentence that closes the alert and the
+#                                  log, saying what has and has not happened
+#                                  to the deploy (default: the deploy is live
+#                                  and has not been rolled back)
+#   VPS_DEPLOY_PROBES_NOTIFY       the notifier; set it empty and no alert is
+#                                  sent, for a caller that reports the outcome
+#                                  itself once it knows it
+#   VPS_DEPLOY_PROBES_FAILED_FILE  when set, the failing hosts are written
+#                                  there one per line, for that caller's alert
+#
+# A host the box cannot answer for (DNS that points elsewhere, so Caddy holds
+# no certificate) is skipped by listing it in deploy-probes.skip in the stack
+# directory, one "host reason" per line; the file is part of the release, so
+# the exception is reviewed like any other change.
 #
 # The probes test routing and gating, not the certificate chain, so curl does
 # not verify the certificate: a site whose certificate is still being issued
@@ -41,7 +55,9 @@ dir="${1:-/opt/deploy}"
 table="$dir/.generated/caddy/route-access.tsv"
 skipfile="$dir/deploy-probes.skip"
 envfile="$dir/.env"
-notify="${VPS_DEPLOY_PROBES_NOTIFY:-/usr/local/bin/vps-notify}"
+notify="${VPS_DEPLOY_PROBES_NOTIFY-/usr/local/bin/vps-notify}"
+outcome="${VPS_DEPLOY_PROBES_OUTCOME:-The deploy is live and has not been rolled back.}"
+failed_file="${VPS_DEPLOY_PROBES_FAILED_FILE:-}"
 attempts="${VPS_DEPLOY_PROBES_ATTEMPTS:-3}"
 retry_wait="${VPS_DEPLOY_PROBES_RETRY_WAIT:-10}"
 forged_header='Remote-Email: forged@example.invalid'
@@ -177,19 +193,24 @@ while IFS=$'\t' read -r addr gated open; do
   done
 done < <(sites)
 
+if [[ -n "$failed_file" ]]; then
+  : >"$failed_file"
+  if (( ${#failed[@]} )); then printf '%s\n' "${failed[@]}" >>"$failed_file"; fi
+fi
 if (( ${#failed[@]} == 0 )); then
   echo "vps-deploy-probes: $probed site(s) answered as their access rules declare."
   exit 0
 fi
 
-echo "vps-deploy-probes: ${#failed[@]} probe(s) failed; the deploy is live and has not been rolled back:" >&2
+echo "vps-deploy-probes: ${#failed[@]} probe(s) failed:" >&2
 printf '  %s\n' "${failed[@]}" >&2
-if [[ -x "$notify" ]]; then
+echo "vps-deploy-probes: $outcome" >&2
+if [[ -n "$notify" && -x "$notify" ]]; then
   "$notify" "Deploy probes failed on ${#failed[@]} site(s)" \
 "After compose up reported the containers healthy, these sites did not answer as their access rules declare:
 $(printf '%s\n' "${failed[@]}")
 
-The deploy is live and has not been rolled back. Details are in the deploy log; a host the box cannot answer for can be listed in deploy-probes.skip (scaffold/docs/05-access-model.md)." \
+$outcome Details are in the deploy log; a host the box cannot answer for can be listed in deploy-probes.skip (scaffold/docs/05-access-model.md)." \
     high warning || true
 fi
 exit 1

@@ -66,9 +66,11 @@ docker compose up -d --remove-orphans --wait --force-recreate
 # access table is asked for through the local Caddy and must answer as its
 # rules declare. Root, because the notifier reads a root-only configuration.
 # A failure is reported and notified, and this script exits non-zero at the
-# end; the deploy stays live.
+# end; the deploy stays live, and the alert says why nothing was rolled back
+# (automatic rollback needs the release tree, docs/15).
 probe_rc=0
-sudo -n /usr/local/sbin/vps-deploy-probes /opt/deploy || probe_rc=$?
+sudo -n env VPS_DEPLOY_PROBES_OUTCOME="The deploy is live and has not been rolled back: this server deploys from a checkout, and automatic rollback needs the release tree (scaffold/docs/15-release-tree.md)." \
+  /usr/local/sbin/vps-deploy-probes /opt/deploy || probe_rc=$?
 
 # Every digest bump strands the superseded image (untagged, unreferenced), and
 # nothing else on the host reclaims them — left alone they fill the disk at

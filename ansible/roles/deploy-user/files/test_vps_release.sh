@@ -96,6 +96,9 @@ vps-release switch "$rel"
 [[ -f /opt/deploy-legacy/marker ]] || fail "the legacy checkout was not kept"
 [[ "$(vps-release current)" == "$tip" ]] || fail "current after the switch"
 ok "the first switch keeps the legacy checkout and links /opt/deploy"
+prev="$(vps-release previous)" || fail "previous failed with one release in the history"
+[[ -z "$prev" ]] || fail "previous printed '$prev' for the first release"
+ok "the first release has no previous, and asking does not fail"
 
 # The manifest: root-only, and verify finds a change, an addition and a
 # removal in the live release, then passes once the tree is restored.

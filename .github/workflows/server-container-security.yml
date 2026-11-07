@@ -59,7 +59,7 @@ jobs:
             safe="$(echo "$img" | tr '/:@' '___')"
             short="${img%@*}"
             if docker run --rm -v "$HOME/.docker/config.json:/root/.docker/config.json:ro" \
-                -v "$PWD/reports/container-security:/out" aquasec/trivy:latest@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c image \
+                -v "$PWD/reports/container-security:/out" aquasec/trivy:latest@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb image \
                 --severity HIGH,CRITICAL --no-progress --format json \
                 --output "/out/trivy-${safe}.json" "$img"; then
               jq -r --arg img "$short" '[.Results[]?.Vulnerabilities[]?] | unique_by(.VulnerabilityID + .PkgName) as $v

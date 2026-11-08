@@ -165,6 +165,16 @@ baseline_aide_exclude_paths:
   # /var/lib/snapd/snaps, stay monitored.
   - '/var/lib/snapd/state\.json$'
   - '/var/lib/snapd/maintenance\.json$'
+  # vps-secrets-render's record of what it wrote, replaced on every deploy
+  # (seen on RCH and MCH, 2026-11-08). The rendered .env files are covered by
+  # /opt/deploy and the release tree; this is bookkeeping only.
+  - '/var/lib/vps-secrets-render(/|$)'
+  # udev rebuilds these per boot: /dev/disk's symlink directories and the
+  # per-CPU device nodes differed after RCH's kernel-update reboot
+  # (2026-11-07). They are derived from the hardware on every boot, so a
+  # baseline of them records only the previous boot.
+  - '/dev/disk(/|$)'
+  - '/dev/cpu(/|$)'
 
 # Raw aide.conf rule lines (not exclusions) written verbatim into a managed block.
 # Use for per-node rule overrides that '!' exclusion can't express.
@@ -184,6 +194,13 @@ baseline_aide_exclude_paths:
 #   =/boot/grub/grubenv VarFile   GRUB records each boot in this file (the
 #               recordfail flag), so every reboot changes it. The GRUB config
 #               and kernels in /boot stay fully monitored.
+#   =/etc/restic VarDir, =/etc/restic/services VarDir,
+#   =/etc/vps-scaffold/gnupg VarDir
+#               Every deploy's secrets render re-applies the restic
+#               directories' permissions (ctime only), and its signature check
+#               leaves gpg's lock-file churn on the keyring directory's
+#               timestamps. Only those three directory nodes drop mtime/ctime;
+#               the files inside them stay fully monitored.
 #   DeployConf on /opt/deploy   Every deploy re-runs chmod over the working
 #               tree, bumping ctime with no content change. DeployConf keeps
 #               content hashes, permissions, owner and inode data (the real
@@ -195,6 +212,9 @@ baseline_aide_rule_overrides:
   - '=/etc/ld\.so\.cache VarFile'
   - "=/var/lib/snapd VarDir"
   - '=/boot/grub/grubenv VarFile'
+  - "=/etc/restic VarDir"
+  - "=/etc/restic/services VarDir"
+  - "=/etc/vps-scaffold/gnupg VarDir"
   - "DeployConf = InodeData+Checksums"
   - "/opt/deploy DeployConf"
   # AIDE selection lines are prefix regexes, so the line above also covers the

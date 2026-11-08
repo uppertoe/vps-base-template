@@ -63,6 +63,10 @@ ansible-playbook -i "$INVENTORY_FILE" ansible/bootstrap.yml \
 # is meaningless here; real hosts must set notify_deadman_url (notify role
 # fails without it). notify_alerts_accept_none: the same applies to the ntfy
 # alert route (notify_ntfy_url).
+# deploy_restricted_checkout_ok / deploy_restricted_unsigned_ok: the runner
+# has no server repo to deploy, so there is no release tree to build and no
+# signed history to verify. Real hosts set deploy_release_tree and
+# deploy_verify_signature instead (deploy-user role guards).
 # log_export_accept_none: likewise, the ephemeral runner has no Object-Locked
 # bucket to export to; real hosts must set log_export_s3_uri (log-export role
 # fails without it).
@@ -72,6 +76,8 @@ ansible-playbook -i "$INVENTORY_FILE" ansible/site-first-run.yml \
   -e common_run_safe_upgrade=false \
   -e baseline_cis_l2_audit_rules=true \
   -e deploy_restricted_mode=true \
+  -e deploy_restricted_checkout_ok=true \
+  -e deploy_restricted_unsigned_ok=true \
   -e baseline_manage_apparmor_profile_modes=false \
   -e baseline_initialize_aide_database=false \
   -e notify_deadman_accept_none=true \

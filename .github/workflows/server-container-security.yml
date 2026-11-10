@@ -77,7 +77,7 @@ jobs:
       - name: KICS compose scan (apps)
         run: |
           docker run --rm -v "$PWD/apps:/path" -v "$PWD/reports/container-security:/out" \
-            checkmarx/kics:latest@sha256:ef29dbac14b046b1ef65f3280646112e927a61781c5f01bca1aeb723e0b96003 scan -p /path --type DockerCompose \
+            checkmarx/kics:latest@sha256:49ccc54b6ae7f5d5fc95e96f8f95c18c57f3bba047ab611a03d80792bdff6757 scan -p /path --type DockerCompose \
             --exclude-queries 8c978947-0ff6-485c-b0c2-0bfca6026466,bc2908f3-f73c-40a9-8793-c1b7d5544f79,451d79dc-0588-476a-ad03-3c7f0320abb3,ce76b7d0-9e77-464d-b86f-c5c48e03e22d \
             --report-formats json --output-name kics-apps -o /out --fail-on high
 

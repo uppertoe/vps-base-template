@@ -43,7 +43,8 @@ server-myserver/
 │   ├── apps.caddy               ← all app routes, mounted into Caddy
 │   ├── networks.yml             ← per-app proxy-network wiring
 │   ├── route-groups.tsv         ← groups each route requires, for the auth service
-│   └── route-access.tsv         ← each site's access rules, for the auth service
+│   ├── route-access.tsv         ← each site's access rules, for the auth service
+│   └── app-roles.tsv            ← each app's roles and paths, for the auth service
 ├── Caddyfile.local              ← local dev (self-signed certs)
 ├── docker-compose.yml           ← includes scaffold base + each app
 ├── docker-compose.override.yml.example
@@ -146,15 +147,18 @@ Caddy mounts this file instead of the deploy repo, keeping `.env` and backup
 secrets off the reverse proxy), `.generated/caddy/networks.yml` (the per-app
 proxy networks), `.generated/caddy/route-groups.tsv` (each gateway group a
 site's guard requires, which the auth service mounts so its Groups page can
-list the groups the routes use) and `.generated/caddy/route-access.tsv` (who
-can reach each site, described below). All four are committed like lockfiles;
-CI fails if they drift from the sources, and `audit-compose.yml` fails at
-runtime if two apps ever share a proxy network.
+list the groups the routes use), `.generated/caddy/route-access.tsv` (who
+can reach each site, described below) and `.generated/caddy/app-roles.tsv`
+(the roles and paths of every app guarded with `import role`, which the auth
+service reads as `APP_ROLES_FILE`; docs/07 "Protecting an app with roles").
+All five are committed like lockfiles; CI fails if they drift from the
+sources, and `audit-compose.yml` fails at runtime if two apps ever share a
+proxy network.
 
 The renderer also refuses a site that does not declare who may reach it.
-Every site block must import a gateway guard (`protected*`, `auth_gate*`) or
-`forward_auth`, or carry a marker on a comment line just above its address or
-inside the block:
+Every site block must import a gateway guard (`protected*`, `auth_gate*`,
+`role`) or `forward_auth`, or carry a marker on a comment line just above its
+address or inside the block:
 
 ```caddyfile
 # scaffold-lint: public -- the feed checks its own token
@@ -165,8 +169,9 @@ A forgotten gate on a new app therefore fails the render, and CI with it,
 instead of reaching the server. The markers, guards and `import <name>_network`
 hooks are collected into `.generated/caddy/route-access.tsv`, which the auth
 service shows to administrators as a "who can reach what" table. Each row is
-`host`, a kind (`groups`, `domains`, `signed-in`, `guests`, `network` or
-`public`) and a value.
+`host`, a kind (`groups`, `domains`, `signed-in`, `guests`, `roles`,
+`network` or `public`) and a value. A `roles` row is an `import role` guard,
+and its value is the app and the role.
 
 A site that has a gate may still serve some paths without one: a public QR
 view beside a gated editor, a webhook that checks its own signature, a

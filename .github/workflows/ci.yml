@@ -43,6 +43,11 @@ jobs:
       - name: Renderer checks
         run: bash docker/tests/test-render-caddy-routes.sh
 
+      # The signed-out route check against the app-roles manifest, with a
+      # stub curl: bash and awk only.
+      - name: Route check tests
+        run: bash docker/tests/test-check-routes.sh
+
       # The secrets render step and the server-repo CI guard (docs/13-secrets.md).
       # The real-encryption tests need sops and age-keygen: sops is the pinned,
       # checksum-verified release the deploy-user role installs (version and

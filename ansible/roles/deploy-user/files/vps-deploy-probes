@@ -12,8 +12,8 @@
 # 127.0.0.1:443 with the host name supplied through --resolve, for the root
 # of every site the bundle serves. The expectations are:
 #
-#   * a site whose rows are all gates (groups, domains, signed-in, guests)
-#     answers 302 with a Location on the gateway's /login page, and still
+#   * a site whose rows are all gates (groups, domains, signed-in, guests,
+#     or roles, the rows an "import role" guard leaves) answers 302 with a Location on the gateway's /login page, and still
 #     does so when the request carries a forged Remote-Email header, so the
 #     gate is known to run before the app and to strip client identity;
 #   * a site whose rows are all public markers answers anything below 500:
@@ -153,7 +153,7 @@ sites() {
   awk -F'\t' '
     /^[[:space:]]*(#|$)/ { next }
     !($1 in seen) { seen[$1] = 1; order[++n] = $1; gate[$1] = 0; open[$1] = 0 }
-    $2 == "groups" || $2 == "domains" || $2 == "signed-in" || $2 == "guests" { gate[$1] = 1 }
+    $2 == "groups" || $2 == "domains" || $2 == "signed-in" || $2 == "guests" || $2 == "roles" { gate[$1] = 1 }
     $2 == "public" || $2 == "network" { open[$1] = 1 }
     END { for (i = 1; i <= n; i++) printf "%s\t%d\t%d\n", order[i], gate[order[i]], open[order[i]] }
   ' "$table"

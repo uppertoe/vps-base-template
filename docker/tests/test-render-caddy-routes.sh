@@ -27,6 +27,12 @@
 #    covers it; a site with no guard is not checked; handle_errors is not a
 #    door; a malformed marker and a marker outside a site fail.
 #
+# 3. Members networks: an app with a scaffold-members marker gets its own
+#    internal network to the gateway.
+#
+# 4. App roles. import role is a gateway guard for the lint and is listed in
+#    route-access.tsv as a "roles" row.
+#
 # Go is needed for part 1 (it is on every GitHub-hosted runner); the test
 # fails plainly if it is missing rather than pretending to pass.
 set -euo pipefail
@@ -492,6 +498,41 @@ elif grep -q 'apps/auth is not enabled' "$work/members-noauth.err"; then
 else
   fail "unexpected error: $(cat "$work/members-noauth.err")"
 fi
+
+# --- 4. app roles ---------------------------------------------------------------
+# import role "<app>" "<role>" <upstream> is a gateway guard: it satisfies the
+# rule that a site declares its access, it covers its handle for the
+# open-path rule, and route-access.tsv lists it as a "roles" row.
+render_case roles-guard pass <<'EOF'
+enquiries.{$DOMAIN} {
+	@public path / /faq
+	handle @public {
+		# scaffold-lint: open-path -- / /faq: read before a person signs in
+		reverse_proxy fellows:8080 {
+			import strip_public
+		}
+	}
+	handle /admin/* {
+		import role "enquiries" "admin" fellows:8080
+	}
+	handle {
+		import role "enquiries" "user" fellows:8080
+	}
+}
+EOF
+expect_row roles-guard $'enquiries.{$DOMAIN}\troles\tenquiries admin'
+expect_row roles-guard $'enquiries.{$DOMAIN}\troles\tenquiries user'
+expect_row roles-guard $'enquiries.{$DOMAIN}\tpublic\t/ /faq: read before a person signs in'
+render_case roles-open-handle-unmarked fail "$open_err" <<'EOF'
+app.{$DOMAIN} {
+	handle /healthz {
+		respond 200
+	}
+	handle {
+		import role "app" "user" app:8080
+	}
+}
+EOF
 
 echo
 if [[ $failures -gt 0 ]]; then

@@ -32,7 +32,9 @@
 #
 # 4. App roles. A site guarded with import role is rendered into
 #    app-roles.tsv (render-app-roles.sh); the example from docs/07 is checked
-#    against a golden file, and every refusal has a case.
+#    against a golden file, and every refusal has a case. The gate written
+#    out in a route (import auth_gate_role) counts as import role does, and
+#    a cookie-optional verify on an open path is checked but is not a guard.
 #
 # Go is needed for part 1 (it is on every GitHub-hosted runner); the test
 # fails plainly if it is missing rather than pretending to pass.
@@ -764,6 +766,176 @@ app.{$DOMAIN} {
 	}
 }
 EOF
+
+# The gate written out in a route, for an app that adds a header toward its
+# upstream: import auth_gate_role counts as the role guard. The open handle
+# asks the gateway only when a session cookie is present (a cookie-optional
+# verify): it is an open path, not a guard and not an older guard.
+render_case roles-gate-in-route pass <<'EOF'
+# scaffold-roles: admin "Administrator"
+app.{$DOMAIN} {
+	@pages path /about /contact
+	handle @pages {
+		# scaffold-lint: open-path -- /about /contact: public pages that greet a signed-in visitor
+		route {
+			import strip_client_identity
+			@hassession header Cookie *vps_auth_session=*
+			reverse_proxy @hassession auth:8080 {
+				method GET
+				rewrite /verify
+				header_up X-Auth-App "app"
+				header_up X-Auth-Role "user"
+				header_up -X-Auth-Policy
+				@signedin status 2xx
+				handle_response @signedin {
+					request_header Remote-Roles {http.reverse_proxy.header.Remote-Roles}
+				}
+				@anon status 3xx 4xx 5xx
+				handle_response @anon {
+				}
+			}
+			reverse_proxy app:8080 {
+				import strip_auth_cookie
+				header_up X-Proxy-Secret {$APP_PROXY_SECRET}
+			}
+		}
+	}
+	handle /admin* {
+		route {
+			import strip_client_identity
+			import auth_gate_role "app" "admin"
+			reverse_proxy app:8080 {
+				import strip_auth_cookie
+				header_up X-Proxy-Secret {$APP_PROXY_SECRET}
+			}
+		}
+	}
+	handle {
+		route {
+			import strip_client_identity
+			import auth_gate_role "app" "user"
+			reverse_proxy app:8080 {
+				import strip_auth_cookie
+				header_up X-Proxy-Secret {$APP_PROXY_SECRET}
+			}
+		}
+	}
+}
+EOF
+cat > "$work/roles-gate-in-route.golden" <<'EOF'
+app	user	User	app.{$DOMAIN}
+app	admin	Administrator	app.{$DOMAIN}
+@label	app	App
+@source	app	apps/app/app.caddy
+@open	app	/about /contact	public pages that greet a signed-in visitor
+@path	app	/admin*	admin
+@path	app	*	user
+EOF
+if diff -u "$work/roles-gate-in-route.golden" <(grep -v '^#' "$work/roles-gate-in-route-out/app-roles.tsv" | sed '/^$/d') >&2; then
+  pass "manifest: import auth_gate_role in a route, beside a cookie-optional verify"
+else
+  fail "manifest: the gate-in-route case differs (diff above)"
+fi
+expect_row roles-gate-in-route $'app.{$DOMAIN}\troles\tapp admin'
+expect_row roles-gate-in-route $'app.{$DOMAIN}\troles\tapp user'
+expect_row roles-gate-in-route $'app.{$DOMAIN}\tpublic\t/about /contact: public pages that greet a signed-in visitor'
+if grep -q $'^[^\t]*\tgroups\t' "$work/roles-gate-in-route-out/route-access.tsv"; then
+  fail "table: import auth_gate_role was read as a policy"; cat "$work/roles-gate-in-route-out/route-access.tsv" >&2
+else
+  pass "table: import auth_gate_role is not read as a policy"
+fi
+
+# The gate counts as import role does in every refusal.
+render_case roles-gate-undeclared-role fail 'role "admin" is not declared for app "app"' <<'EOF'
+app.{$DOMAIN} {
+	handle /admin/* {
+		route {
+			import auth_gate_role "app" "admin"
+			reverse_proxy app:8080 {
+				import strip_auth_cookie
+			}
+		}
+	}
+	handle {
+		import role "app" "user" app:8080
+	}
+}
+EOF
+render_case roles-gate-mixed fail 'mixes import role with an older guard' <<'EOF'
+app.{$DOMAIN} {
+	handle /admin/* {
+		route {
+			import auth_gate "groups=admin"
+			reverse_proxy app:8080 {
+				import strip_auth_cookie
+			}
+		}
+	}
+	handle {
+		route {
+			import auth_gate_role "app" "user"
+			reverse_proxy app:8080 {
+				import strip_auth_cookie
+			}
+		}
+	}
+}
+EOF
+render_case roles-gate-malformed fail 'the gate must read import auth_gate_role' <<'EOF'
+app.{$DOMAIN} {
+	route {
+		import auth_gate_role "app" "user" app:8080
+		reverse_proxy app:8080 {
+			import strip_auth_cookie
+		}
+	}
+}
+EOF
+render_case roles-gate-two-apps fail 'guards with two apps' <<'EOF'
+app.{$DOMAIN} {
+	handle /other/* {
+		route {
+			import auth_gate_role "other" "user"
+			reverse_proxy app:8080 {
+				import strip_auth_cookie
+			}
+		}
+	}
+	handle {
+		import role "app" "user" app:8080
+	}
+}
+EOF
+render_case roles-gate-open-unmarked fail "$open_err" <<'EOF'
+app.{$DOMAIN} {
+	handle /about {
+		route {
+			reverse_proxy auth:8080 {
+				header_up X-Auth-App "app"
+			}
+			reverse_proxy app:8080 {
+				import strip_auth_cookie
+			}
+		}
+	}
+	handle {
+		import role "app" "user" app:8080
+	}
+}
+EOF
+
+# A cookie-optional verify asks about the site's own app and a declared role,
+# and only in a site guarded by roles.
+verify_site() {
+  # shellcheck disable=SC2016 # {$DOMAIN} is Caddy's placeholder, written literally
+  printf '%s.{$DOMAIN} {\n\thandle /about {\n\t\t# scaffold-lint: open-path -- /about: a public page\n\t\troute {\n\t\t\treverse_proxy auth:8080 {\n\t\t\t\theader_up X-Auth-App "%s"\n\t\t\t\theader_up X-Auth-Role "%s"\n\t\t\t}\n\t\t\treverse_proxy app:8080 {\n\t\t\t\timport strip_auth_cookie\n\t\t\t}\n\t\t}\n\t}\n%s}\n' "$1" "$2" "$3" "$4"
+}
+guard_user=$'\thandle {\n\t\timport role "app" "user" app:8080\n\t}\n'
+guard_old=$'\thandle {\n\t\timport protected app:8080\n\t}\n'
+# shellcheck disable=SC2016 # {$DOMAIN} is Caddy's placeholder, written literally
+verify_site app other user "$guard_user" | render_case roles-verify-other-app fail 'X-Auth-App names app "other", but site app.{$DOMAIN} is app "app"'
+verify_site app app editor "$guard_user" | render_case roles-verify-undeclared-role fail 'X-Auth-Role names role "editor", which app "app" does not declare'
+verify_site app app user "$guard_old" | render_case roles-verify-without-guard fail 'sends X-Auth-App to the gateway but has no import role guard'
 
 # Two snippets that use the same app name.
 mkdir -p "$work/roles-two-snippets/apps/one" "$work/roles-two-snippets/apps/two"

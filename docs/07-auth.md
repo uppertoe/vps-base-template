@@ -205,21 +205,56 @@ every path the other handles do not name (`*`). An open handle may use a
 exact paths or prefixes ending in `*`. The gateway decides a path as Caddy
 does: an exact path first, then the longest prefix, then `*`.
 
+### Adding to the request toward the app
+
+`import role` writes its own `reverse_proxy`, so an app that needs something
+added to the request toward it, such as a shared secret in a header, writes
+the route out and imports the gate inside it. The renderer counts
+`import auth_gate_role "<app>" "<role>"` as it counts `import role`, in the
+manifest and in every refusal below.
+
+```caddyfile
+	handle /admin/* {
+		route {
+			import strip_client_identity
+			request_header -X-Auth-App
+			request_header -X-Auth-Role
+			request_header -X-Auth-Policy
+			import auth_gate_role "enquiries" "admin"
+			reverse_proxy fellows:8080 {
+				import strip_auth_cookie
+				header_up X-Proxy-Secret {$FELLOWS_PROXY_SECRET}
+			}
+		}
+	}
+```
+
+The renderer does not read inside a snippet that the app defines, so the
+route must be written out in each guarded handle.
+
+A public page that greets a signed-in visitor by name may ask `/verify` only
+when a session cookie is present, sending `header_up X-Auth-App "<app>"` and
+`header_up X-Auth-Role "<role>"`, and serve the page whatever the answer.
+Such a handle is an open path: it needs the `open-path` marker and a reason,
+and it is neither a guard nor an older guard. The render fails if
+`X-Auth-App` names an app other than the site's, if `X-Auth-Role` names a
+role the app does not declare, or if the site has no role guard.
+
 The render fails, naming the file and line, in each of these cases:
 
 - a guard names a role that the snippet does not declare;
 - an app has role guards but none for `user`;
 - two site blocks use the same app name, in one snippet or in two, or one
   site guards with two apps;
-- a site mixes `import role` with an older guard (`protected*`,
-  `auth_gate*`, `forward_auth`), which the gateway refuses at every request,
-  so the whole site must be migrated at once;
+- a site mixes a role guard with an older guard (`protected*`, `auth_gate`
+  and its other variants, `forward_auth`, `X-Auth-Policy`), which the gateway
+  refuses at every request, so the whole site must be migrated at once;
 - an open-path marker sits on a catch-all `handle` or at the top level of the
   site, where it would open every path that no other handle names;
 - a card page is decided by an open path or by a role other than `user`;
 - a handle's matcher is not a path matcher, a path cannot be written as an
   exact path or a prefix ending in `*`, or two handles declare the same path;
-- an app-roles marker sits on a site that has no `import role` guard.
+- an app-roles marker sits on a site that has no role guard.
 
 A site still guarded by the older guards renders exactly as before and adds
 nothing to the manifest.

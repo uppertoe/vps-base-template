@@ -15,7 +15,8 @@
 #                    cannot reach another app's backend or forge Remote-* headers.
 #   route-access.tsv -- each site's access rules, one "host<TAB>kind<TAB>value"
 #                    line each (kind: groups, domains, signed-in, guests,
-#                    roles -- "<app> <role>" for an "import role" guard --,
+#                    roles -- "<app> <role>" for an "import role" guard, or
+#                    an "import auth_gate_role" written out in a route --,
 #                    network -- open on a named network via an
 #                    "import <name>_network" snippet -- or public with the
 #                    marker's reason; an open path beside a gate, declared
@@ -32,7 +33,8 @@
 #                    them, and which refuses a declared group as a break-glass
 #                    target.
 #   app-roles.tsv -- the app-roles manifest (APP_ROLES_FILE) for every site
-#                    guarded with "import role", rendered by the sibling
+#                    guarded with "import role" (or "import auth_gate_role"
+#                    in a route written out), rendered by the sibling
 #                    render-app-roles.sh, which describes the format and the
 #                    markers it reads. Mounted read-only into the auth
 #                    service at /etc/vps-auth/app-roles.tsv.
@@ -597,7 +599,7 @@ mv "$groups_file.tmp" "$groups_file"
                 else if (trimmed ~ /^import protected_domains[a-z_]*[[:space:]]/)    { rule("domains", norm(quoted(trimmed, 1))) }
                 else if (trimmed ~ /^import auth_gate(_labeled|_alt)?[[:space:]]/)  { policy(quoted(trimmed, 1)) }
                 else if (trimmed ~ /^header_up X-Auth-Policy[[:space:]]/)            { policy(quoted(trimmed, 1)) }
-                else if (trimmed ~ /^import role[[:space:]]/)                        { rule("roles", quoted(trimmed, 1) " " quoted(trimmed, 2)) }
+                else if (trimmed ~ /^import (role|auth_gate_role)[[:space:]]/)       { rule("roles", quoted(trimmed, 1) " " quoted(trimmed, 2)) }
               }
               opens = gsub(/\{/, "{", line)
               closes = gsub(/\}/, "}", line)

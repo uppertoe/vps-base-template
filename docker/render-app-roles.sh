@@ -8,7 +8,13 @@
 #
 #   import role "<app>" "<role>" <upstream>
 #
-# is an app decided by app roles. The gateway reads the manifest this script
+# is an app decided by app roles. An app that must add something to the
+# request toward its upstream (a header, say) writes the route out instead,
+# and the gate inside it,
+#
+#   import auth_gate_role "<app>" "<role>"
+#
+# counts as the same guard everywhere below. The gateway reads the manifest this script
 # writes (APP_ROLES_FILE; the format is described in the gateway's
 # internal/roles/manifest.go) to learn each app's roles, which paths need
 # which role, which paths are open by design and why, and which pages a
@@ -40,13 +46,26 @@
 #
 # The render fails, with the file and line, on: a guard that names a role the
 # app does not declare; one app in two site blocks (in one snippet or two); a
-# site that guards with two apps; a site that mixes import role with the older
-# guards (protected*, auth_gate*, forward_auth, X-Auth-Policy), which the
-# gateway would refuse; an open-path marker on a catch-all handle, or at the
+# site that guards with two apps; a site that mixes a role guard with the older
+# guards (protected*, auth_gate and its other variants, forward_auth,
+# X-Auth-Policy), which the gateway would refuse; an open-path marker on a catch-all handle, or at the
 # top level of the site; a card page that a user-guarded path does not decide;
 # an app with role guards but none for the user role; a path the manifest
 # cannot express; a path declared twice; and a marker on a site with no role
 # guard.
+#
+# An open handle may still ask the gateway who is signed in, so that a public
+# page can greet a signed-in visitor: a reverse_proxy to the gateway's /verify,
+# made only when a session cookie is present, that sends
+#
+#   header_up X-Auth-App "<app>"
+#   header_up X-Auth-Role "<role>"
+#
+# and serves the page whatever the answer. Such a handle is an open path, with
+# its marker and reason, and is not a guard; it sends no X-Auth-Policy, so it is
+# not an older guard either. The render fails when X-Auth-App names an app
+# other than the one the site guards with, when X-Auth-Role names a role the
+# app does not declare, or when the site has no role guard at all.
 set -euo pipefail
 export LC_ALL=C
 
@@ -127,15 +146,22 @@ if [[ ${#snippets[@]} -gt 0 ]]; then
       split("", mkind); split("", mpats)
       split("", h_line); split("", h_spec); split("", h_open); split("", h_reason); split("", h_mpaths)
       split("", h_app); split("", h_role); split("", h_guard_line); nh = 0
+      split("", ask_kind); split("", ask_value); split("", ask_line); nask = 0
       app_label = ""; has_marker = 0; marker_line = 0
       top_app = ""; top_role = ""; top_line = 0; top_open_line = 0
       old_line = 0; cur = 0; in_errors = 0; pending_open = 0
     }
-    # The guard line: import role "<app>" "<role>" <upstream>. Sets g_app and
-    # g_role, or reports the malformed line.
+    # The guard line: import role "<app>" "<role>" <upstream>, or the gate
+    # written out in a route, import auth_gate_role "<app>" "<role>". Sets
+    # g_app and g_role, or reports the malformed line.
     function guard(trimmed, n,    p, k) {
       k = split(trimmed, p, "\"")
-      if (k < 5 || p[1] !~ /^import role[[:space:]]+$/ || p[3] !~ /^[[:space:]]+$/ || p[5] !~ /^[[:space:]]+[^[:space:]]/) {
+      if (trimmed ~ /^import auth_gate_role/) {
+        if (k != 5 || p[1] !~ /^import auth_gate_role[[:space:]]+$/ || p[3] !~ /^[[:space:]]+$/ || p[5] != "") {
+          err(FILENAME, n, "the gate must read import auth_gate_role \"<app>\" \"<role>\"")
+          return 0
+        }
+      } else if (k < 5 || p[1] !~ /^import role[[:space:]]+$/ || p[3] !~ /^[[:space:]]+$/ || p[5] !~ /^[[:space:]]+[^[:space:]]/) {
         err(FILENAME, n, "the guard must read import role \"<app>\" \"<role>\" <upstream>")
         return 0
       }
@@ -213,10 +239,11 @@ if [[ ${#snippets[@]} -gt 0 ]]; then
       }
       if (!guarded) {
         if (has_marker) { err(FILENAME, marker_line, "site " site_addr " carries an app-roles marker but has no import role guard") }
+        if (nask) { err(FILENAME, ask_line[1], "site " site_addr " sends " ask_kind[1] " to the gateway but has no import role guard") }
         return
       }
       if (old_line) {
-        err(FILENAME, old_line, "site " site_addr " mixes import role with an older guard (protected, auth_gate, forward_auth or X-Auth-Policy); the gateway refuses a request that carries both, so migrate the whole site to import role")
+        err(FILENAME, old_line, "site " site_addr " mixes import role with an older guard (protected, auth_gate, forward_auth or X-Auth-Policy); the gateway refuses a request that carries both, so migrate the whole site to role guards")
       }
       if (app in app_file) {
         err(FILENAME, site_line, "app \"" app "\" is already declared by the site at " app_file[app] ":" app_line[app] "; one app is one site block (list several addresses on it to serve more hosts)")
@@ -232,6 +259,12 @@ if [[ ${#snippets[@]} -gt 0 ]]; then
         if (h_app[i] == "") { continue }
         if (h_role[i] == "user") { has_user = 1 }
         else if (!(h_role[i] in role_label)) { err(FILENAME, h_guard_line[i], "role \"" h_role[i] "\" is not declared for app \"" app "\": declare it above the site with # scaffold-roles: " h_role[i] " \"<Label>\"") }
+      }
+      # A cookie-optional verify on an open path asks about this app, and
+      # about a role it declares.
+      for (k = 1; k <= nask; k++) {
+        if (ask_kind[k] == "X-Auth-App" && ask_value[k] != app) { err(FILENAME, ask_line[k], "X-Auth-App names app \"" ask_value[k] "\", but site " site_addr " is app \"" app "\"") }
+        if (ask_kind[k] == "X-Auth-Role" && ask_value[k] != "user" && !(ask_value[k] in role_label)) { err(FILENAME, ask_line[k], "X-Auth-Role names role \"" ask_value[k] "\", which app \"" app "\" does not declare") }
       }
       if (!has_user) {
         err(FILENAME, site_line, "app \"" app "\" has role guards but none for the user role: guard the paths every signed-in user may open with import role \"" app "\" \"user\" <upstream>")
@@ -325,8 +358,15 @@ if [[ ${#snippets[@]} -gt 0 ]]; then
             else { pending_open = FNR; p_reason = reason; p_mpaths = mpaths }
           }
         } else if (trimmed != "") {
-          if (trimmed ~ /^import (protected|auth_gate)/ || trimmed ~ /^forward_auth([[:space:]]|\{|$)/ || trimmed ~ /^header_up X-Auth-Policy[[:space:]]/) {
+          if ((trimmed ~ /^import (protected|auth_gate)/ && trimmed !~ /^import auth_gate_role([[:space:]]|$)/) || trimmed ~ /^forward_auth([[:space:]]|\{|$)/ || trimmed ~ /^header_up X-Auth-Policy[[:space:]]/) {
             if (!old_line) { old_line = FNR }
+          }
+          # header_up X-Auth-App "<app>" or X-Auth-Role "<role>": a
+          # cookie-optional verify, checked when the site closes.
+          if (trimmed ~ /^header_up X-Auth-(App|Role)[[:space:]]/) {
+            nask++; ask_line[nask] = FNR
+            ask_kind[nask] = trimmed; sub(/^header_up[[:space:]]+/, "", ask_kind[nask]); sub(/[[:space:]].*/, "", ask_kind[nask])
+            ask_value[nask] = trimmed; sub(/^header_up[[:space:]]+[^[:space:]]+[[:space:]]+/, "", ask_value[nask]); gsub(/"/, "", ask_value[nask])
           }
           if (depth == 1) {
             if (substr(trimmed, 1, 1) == "@") {
@@ -342,7 +382,7 @@ if [[ ${#snippets[@]} -gt 0 ]]; then
               spec = trimmed; sub(/^[a-z_]+[[:space:]]*/, "", spec); sub(/[[:space:]]*\{$/, "", spec)
               h_spec[nh] = spec; h_app[nh] = ""
               if (pending_open) { h_open[nh] = 1; h_reason[nh] = p_reason; h_mpaths[nh] = p_mpaths; pending_open = 0 }
-            } else if (trimmed ~ /^import role([[:space:]]|$)/) {
+            } else if (trimmed ~ /^import (role|auth_gate_role)([[:space:]]|$)/) {
               if (guard(trimmed, FNR)) {
                 if (top_app != "") { err(FILENAME, FNR, "a second role guard at the top level of the site") }
                 else { top_app = g_app; top_role = g_role; top_line = FNR }
@@ -351,7 +391,7 @@ if [[ ${#snippets[@]} -gt 0 ]]; then
             } else {
               if (pending_open) { top_open_line = pending_open; pending_open = 0 }
             }
-          } else if (cur && !in_errors && trimmed ~ /^import role([[:space:]]|$)/) {
+          } else if (cur && !in_errors && trimmed ~ /^import (role|auth_gate_role)([[:space:]]|$)/) {
             if (guard(trimmed, FNR)) {
               if (h_app[cur] != "") { err(FILENAME, FNR, "a second role guard in one handle; give each role its own handle") }
               else { h_app[cur] = g_app; h_role[cur] = g_role; h_guard_line[cur] = FNR }

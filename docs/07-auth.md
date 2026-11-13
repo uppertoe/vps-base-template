@@ -200,9 +200,9 @@ enquiries	admin	Administrator	enquiries.{$DOMAIN}
 
 The paths on each line come from the handle's matcher: an inline path, a
 one-line `@name path ...` matcher, or no matcher at all, which stands for
-every path the other handles do not name (`*`). An open handle may use a
-`path_regexp` matcher instead, and its marker must then list the paths as
-exact paths or prefixes ending in `*`. The gateway decides a path by an
+every path the other handles do not name (`*`). A `path_regexp` matcher is
+refused, on an open handle as on a guarded one, because Caddy may answer
+more paths than the manifest could list. The gateway decides a path by an
 exact path first, then the longest prefix, then `*`. Caddy compares handles
 by path length only when each has a single path, and otherwise keeps the
 written order, so the renderer refuses two handles whose paths overlap
@@ -259,8 +259,9 @@ The render fails, naming the file and line, in each of these cases:
 - an open-path marker sits on a catch-all `handle` or at the top level of the
   site, where it would open every path that no other handle names;
 - a card page is decided by an open path or by a role other than `user`;
-- a handle's matcher is not a path matcher, a path cannot be written as an
-  exact path or a prefix ending in `*`, or two handles declare the same path;
+- a handle's matcher is not a path matcher (`path_regexp` included), a path
+  cannot be written as an exact path or a prefix ending in `*`, or two
+  handles declare the same path;
 - a path in one handle falls under a prefix in another (ignoring case, as
   Caddy does) and the two handles decide differently, for example
   `handle /users/*` for `user` beside `@adm path /a /users/admin` for

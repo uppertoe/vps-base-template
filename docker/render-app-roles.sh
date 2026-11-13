@@ -40,9 +40,9 @@
 # top-level handle (an inline path, a one-line "@name path ..." matcher, or no
 # matcher at all, which is "*"); an open handle is the one carrying the
 # renderer's "# scaffold-lint: open-path -- <paths>: <reason>" marker, and the
-# manifest takes its reason from the text after the colon. A handle whose
-# matcher is a path_regexp takes its patterns from the marker instead, so they
-# must then be exact paths or prefixes ending in "*".
+# manifest takes its reason from the text after the colon. A path_regexp
+# matcher is refused, open or guarded, because Caddy may answer more paths
+# than any list of patterns says.
 #
 # The render fails, with the file and line, on: a guard that names a role the
 # app does not declare; one app in two site blocks (in one snippet or two); a
@@ -189,11 +189,11 @@ if [[ ${#snippets[@]} -gt 0 ]]; then
         }
         if (mkind[name] == "path") {
           spec = mpats[name]
-        } else if (mkind[name] == "path_regexp" && h_open[i]) {
-          spec = h_mpaths[i]
-          if (spec == "") { err(FILENAME, h_line[i], "the open-path marker must list the paths this " name " matcher answers"); return "" }
+        } else if (mkind[name] == "path_regexp") {
+          err(FILENAME, h_line[i], "in a site guarded by app roles, a handle cannot use a path_regexp matcher, because Caddy may answer more paths than the manifest lists; name the paths in a path matcher instead (" name " path /exact /prefix/*)")
+          return ""
         } else {
-          err(FILENAME, h_line[i], "in a site guarded by app roles, a handle needs a path matcher (or, on an open path, a path_regexp whose marker lists the paths), so the manifest can say which paths it answers; " name " is a " mkind[name] " matcher")
+          err(FILENAME, h_line[i], "in a site guarded by app roles, a handle needs a path matcher, so the manifest can say which paths it answers; " name " is a " mkind[name] " matcher")
           return ""
         }
       }

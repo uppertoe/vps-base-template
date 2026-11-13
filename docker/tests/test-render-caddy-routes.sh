@@ -550,10 +550,10 @@ else
 fi
 
 # Several addresses, a scheme, a top-level guard, a derived label, a named
-# path matcher and a path_regexp open path whose marker lists the patterns.
+# path matcher and an open path.
 render_case roles-shapes pass <<'EOF'
 https://roster-insights.{$DOMAIN}, roster.{$DOMAIN} {
-	@feed path_regexp ^/feeds/staff/[a-z]+\.json$
+	@feed path /feeds/staff/*
 	handle @feed {
 		# scaffold-lint: open-path -- /feeds/staff/*: the app checks the bearer token
 		reverse_proxy app:8080 {
@@ -576,7 +576,7 @@ roster-insights	user	User	roster-insights.{$DOMAIN},roster.{$DOMAIN}
 @path	roster-insights	*	user
 EOF
 if diff -u "$work/roles-shapes.golden" <(grep -v '^#' "$work/roles-shapes-out/app-roles.tsv" | sed '/^$/d') >&2; then
-  pass "manifest: addresses, a top-level guard, a derived label and a path_regexp open path"
+  pass "manifest: addresses, a top-level guard, a derived label and an open path"
 else
   fail "manifest: the shapes case differs (diff above)"
 fi
@@ -664,6 +664,22 @@ app.{$DOMAIN} {
 	@office remote_ip 10.0.0.0/8
 	handle @office {
 		# scaffold-lint: open-path -- /*: open on the office network
+		reverse_proxy app:8080 {
+			import strip_public
+		}
+	}
+	handle {
+		import role "app" "user" app:8080
+	}
+}
+EOF
+# An open path_regexp opens whatever it matches, whatever its marker lists:
+# here /reports/2026 as well as /faq.
+render_case roles-open-regexp fail 'a handle cannot use a path_regexp matcher' <<'EOF'
+app.{$DOMAIN} {
+	@pub path_regexp ^/(faq|reports.*)$
+	handle @pub {
+		# scaffold-lint: open-path -- /faq: the faq
 		reverse_proxy app:8080 {
 			import strip_public
 		}

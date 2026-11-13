@@ -296,7 +296,11 @@ bash scaffold/docker/check-routes.sh --connect 127.0.0.1 example.org
 
 `--connect` sends the requests to the local Caddy while keeping each host
 name, and `--insecure` skips the certificate check for a local Caddy with its
-own certificate authority. Run the check from outside any network that the
+own certificate authority. Only a redirect to `/login` on the gateway's
+own host counts as being sent to sign in, so an app that sends a visitor to
+its own `/login` page fails the check. The gateway's host is taken to be
+`auth.<DOMAIN>`; if the server runs it under another name, pass that name
+with `--auth-host`, for example `--auth-host auth.example.net`. Run the check from outside any network that the
 gateway admits by itself, because a network assignment can grant a role
 without sign-in. The check does not yet sign in with each role, since that
 needs a test session the script cannot create.

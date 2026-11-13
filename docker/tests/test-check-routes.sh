@@ -134,6 +134,35 @@ else
   fail "a path beside an open pattern served without sign-in was not reported: $(cat "$work/out.log")"
 fi
 
+# 4b. Only the gateway's own /login counts: a guarded path that the app
+#     sends to its own /login has been served without the gateway's sign-in.
+#     --auth-host names a sign-in host other than auth.DOMAIN.
+answers "https://enquiries.example.org/|200|" \
+        "https://enquiries.example.org/static/scaffold-route-check|404|" \
+        "https://enquiries.example.org/admin/scaffold-route-check|302|https://enquiries.example.org/login?next=/admin/" \
+        "https://enquiries.example.org/scaffold-route-check-elsewhere|302|$login" \
+        "https://enquiries.example.org/static|302|$login" \
+        "https://enquiries.example.org/enquiry|302|$login"
+if ! run && grep -q "FAIL enquiries.example.org/admin/scaffold-route-check (enquiries, admin): answered 302 -> https://enquiries.example.org/login?next=/admin/ without sign-in; expected a redirect to the gateway's /login page on auth.example.org" "$work/out.log" \
+   && grep -q '1 of 6 path(s) did not answer' "$work/out.log"; then
+  pass "a redirect to the app's own /login is not the gateway's sign-in"
+else
+  fail "a redirect to the app's own /login was accepted: $(cat "$work/out.log")"
+fi
+other='https://AUTH.other.example/login?rd=x'
+answers "https://enquiries.example.org/|200|" \
+        "https://enquiries.example.org/static/scaffold-route-check|404|" \
+        "https://enquiries.example.org/admin/scaffold-route-check|302|$other" \
+        "https://enquiries.example.org/scaffold-route-check-elsewhere|302|$other" \
+        "https://enquiries.example.org/static|302|$other" \
+        "https://enquiries.example.org/enquiry|302|$other"
+if run --auth-host auth.other.example && grep -q '6 path(s) answered as the manifest declares' "$work/out.log" \
+   && ! run && grep -q '4 of 6 path(s) did not answer' "$work/out.log"; then
+  pass "--auth-host names the gateway's sign-in host"
+else
+  fail "--auth-host was not honoured: $(cat "$work/out.log")"
+fi
+
 # 5. A pattern whose made-up path another line decides is skipped with a
 #    note, not tested against the wrong line.
 cat > "$work/app-roles.tsv" <<'EOF'

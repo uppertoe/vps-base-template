@@ -13,6 +13,9 @@
 #   --insecure             do not verify the certificate (a local Caddy with
 #                          its own CA, or a certificate still being issued)
 #   --scheme http|https    default https
+#   --auth-host HOST       the gateway's sign-in host (default auth.DOMAIN,
+#                          the scaffold's auth.{$DOMAIN}); only a redirect to
+#                          /login on this host counts as sent to sign in
 #
 # For every app in the manifest, on every host it names, the script asks for
 # one path per pattern: the path itself for an exact pattern, a path below a
@@ -25,9 +28,10 @@
 # open matcher wider than the manifest says is caught. The expectations are:
 #
 #   * a path that needs a role answers a redirect to the gateway's /login
-#     page, because the request carries no session;
-#   * an open path answers anything below 500 except a redirect to /login (a
-#     404 is fine: the path below a prefix is made up);
+#     page (on the --auth-host), because the request carries no session; an
+#     app's own /login page, on any other host, does not count;
+#   * an open path answers anything below 500 except a redirect to the
+#     gateway's /login (a 404 is fine: the path below a prefix is made up);
 #   * no answer, or a 5xx, fails either kind.
 #
 # A path a role guards that is served without signing in, or an open path
@@ -41,14 +45,15 @@
 # as served without sign-in.
 set -euo pipefail
 
-usage() { sed -n '4,16p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '4,19p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
-connect=""; insecure=0; scheme=https
+connect=""; insecure=0; scheme=https; auth_host=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --connect) connect="${2:?--connect needs HOST[:PORT]}"; shift 2 ;;
     --insecure) insecure=1; shift ;;
     --scheme) scheme="${2:?--scheme needs http or https}"; shift 2 ;;
+    --auth-host) auth_host="${2:?--auth-host needs HOST}"; shift 2 ;;
     -h|--help) usage ;;
     -*) echo "check-routes: unknown option $1" >&2; usage ;;
     *) break ;;
@@ -56,6 +61,7 @@ while [[ $# -gt 0 ]]; do
 done
 [[ $# -ge 1 && $# -le 2 ]] || usage
 domain="$1"
+auth_host="$(printf '%s' "${auth_host:-auth.$domain}" | tr '[:upper:]' '[:lower:]')"
 manifest="${2:-.generated/caddy/app-roles.tsv}"
 [[ "$scheme" == http || "$scheme" == https ]] || usage
 [[ -f "$manifest" ]] || { echo "check-routes: no manifest at $manifest" >&2; exit 2; }
@@ -164,14 +170,17 @@ while IFS=$'\t' read -r expect host path app what; do
   status="${result%%$'\t'*}"; location="${result#*$'\t'}"
   [[ "$status" =~ ^[0-9]{3}$ ]] || status=000
   to_login=0
-  [[ "$status" =~ ^30[1278]$ && "$location" =~ ^https?://[^/]+/login(\?|$) ]] && to_login=1
+  if [[ "$status" =~ ^30[1278]$ && "$location" =~ ^https?://([^/?#]+)/login(\?|$) ]] \
+     && [[ "$(printf '%s' "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]')" == "$auth_host" ]]; then
+    to_login=1
+  fi
   said="$status${location:+ -> $location}"
   if [[ "$status" == 000 ]]; then
     echo "check-routes: FAIL $host$path ($app, $what): no answer" >&2; failed=$((failed + 1))
   elif [[ "$status" =~ ^5 ]]; then
     echo "check-routes: FAIL $host$path ($app, $what): answered $said" >&2; failed=$((failed + 1))
   elif [[ "$expect" == guarded && $to_login -eq 0 ]]; then
-    echo "check-routes: FAIL $host$path ($app, $what): answered $said without sign-in; expected a redirect to the gateway's /login page" >&2; failed=$((failed + 1))
+    echo "check-routes: FAIL $host$path ($app, $what): answered $said without sign-in; expected a redirect to the gateway's /login page on $auth_host" >&2; failed=$((failed + 1))
   elif [[ "$expect" == open && $to_login -eq 1 ]]; then
     echo "check-routes: FAIL $host$path ($app, $what): an open path was sent to sign in ($said)" >&2; failed=$((failed + 1))
   else

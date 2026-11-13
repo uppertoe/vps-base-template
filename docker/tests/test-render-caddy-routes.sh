@@ -699,6 +699,20 @@ app.{$DOMAIN} {
 	}
 }
 EOF
+# Caddy runs every handle before a top-level route, whatever the route's
+# path, so a route /admin* beside a catch-all handle would be decided by the
+# catch-all's role. A route inside a handle is fine (roles-gate-in-route).
+render_case roles-top-level-route fail 'a route block at the top level runs after every handle' <<'EOF'
+# scaffold-roles: admin "Administrator"
+app.{$DOMAIN} {
+	route /admin* {
+		import role "app" "admin" app:8080
+	}
+	handle {
+		import role "app" "user" app:8080
+	}
+}
+EOF
 render_case roles-two-apps-in-site fail 'guards with two apps' <<'EOF'
 app.{$DOMAIN} {
 	handle /other/* {

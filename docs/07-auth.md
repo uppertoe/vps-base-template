@@ -249,6 +249,9 @@ The render fails, naming the file and line, in each of these cases:
 - a site mixes a role guard with an older guard (`protected*`, `auth_gate`
   and its other variants, `forward_auth`, `X-Auth-Policy`), which the gateway
   refuses at every request, so the whole site must be migrated at once;
+- a `route` block sits at the top level of the site, where Caddy runs it
+  after every `handle` whatever its path (write it as a `handle`; a `route`
+  inside a `handle` is fine, and `import role` at the top level decides `*`);
 - an open-path marker sits on a catch-all `handle` or at the top level of the
   site, where it would open every path that no other handle names;
 - a card page is decided by an open path or by a role other than `user`;

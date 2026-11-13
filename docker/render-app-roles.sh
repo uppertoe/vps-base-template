@@ -48,8 +48,10 @@
 # app does not declare; one app in two site blocks (in one snippet or two); a
 # site that guards with two apps; a site that mixes a role guard with the older
 # guards (protected*, auth_gate and its other variants, forward_auth,
-# X-Auth-Policy), which the gateway would refuse; an open-path marker on a catch-all handle, or at the
-# top level of the site; a card page that a user-guarded path does not decide;
+# X-Auth-Policy), which the gateway would refuse; a route block at the top level
+# of the site, which Caddy runs after every handle whatever its path (import
+# role at the top level is the one exception, and decides "*"); an open-path
+# marker on a catch-all handle, or at the top level of the site; a card page that a user-guarded path does not decide;
 # an app with role guards but none for the user role; a path the manifest
 # cannot express; a path declared twice; and a marker on a site with no role
 # guard.
@@ -148,7 +150,7 @@ if [[ ${#snippets[@]} -gt 0 ]]; then
       split("", h_app); split("", h_role); split("", h_guard_line); nh = 0
       split("", ask_kind); split("", ask_value); split("", ask_line); nask = 0
       app_label = ""; has_marker = 0; marker_line = 0
-      top_app = ""; top_role = ""; top_line = 0; top_open_line = 0
+      top_app = ""; top_role = ""; top_line = 0; top_open_line = 0; route_line = 0
       old_line = 0; cur = 0; in_errors = 0; pending_open = 0
     }
     # The guard line: import role "<app>" "<role>" <upstream>, or the gate
@@ -241,6 +243,9 @@ if [[ ${#snippets[@]} -gt 0 ]]; then
         if (has_marker) { err(FILENAME, marker_line, "site " site_addr " carries an app-roles marker but has no import role guard") }
         if (nask) { err(FILENAME, ask_line[1], "site " site_addr " sends " ask_kind[1] " to the gateway but has no import role guard") }
         return
+      }
+      if (route_line) {
+        err(FILENAME, route_line, "in site " site_addr ", which is guarded by app roles, a route block at the top level runs after every handle whatever its path, so the manifest cannot say which paths it decides; write it as a handle with the same matcher (a route inside a handle is fine)")
       }
       if (old_line) {
         err(FILENAME, old_line, "site " site_addr " mixes import role with an older guard (protected, auth_gate, forward_auth or X-Auth-Policy); the gateway refuses a request that carries both, so migrate the whole site to role guards")
@@ -379,6 +384,7 @@ if [[ ${#snippets[@]} -gt 0 ]]; then
               in_errors = 1; pending_open = 0
             } else if (trimmed ~ /^(handle|handle_path|route)([[:space:]]|\{)/ && line ~ /\{[[:space:]]*$/) {
               nh++; cur = nh; h_line[nh] = FNR
+              if (trimmed ~ /^route/ && !route_line) { route_line = FNR }
               spec = trimmed; sub(/^[a-z_]+[[:space:]]*/, "", spec); sub(/[[:space:]]*\{$/, "", spec)
               h_spec[nh] = spec; h_app[nh] = ""
               if (pending_open) { h_open[nh] = 1; h_reason[nh] = p_reason; h_mpaths[nh] = p_mpaths; pending_open = 0 }

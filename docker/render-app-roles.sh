@@ -53,7 +53,9 @@
 # role at the top level is the one exception, and decides "*"); an open-path
 # marker on a catch-all handle, or at the top level of the site; a card page that a user-guarded path does not decide;
 # an app with role guards but none for the user role; a path the manifest
-# cannot express; a path declared twice; and a marker on a site with no role
+# cannot express; a path declared twice; two handles whose paths overlap
+# (ignoring case) but that decide differently, because Caddy does not always
+# try the more specific handle first; and a marker on a site with no role
 # guard.
 #
 # An open handle may still ask the gateway who is signed in, so that a public
@@ -228,9 +230,23 @@ if [[ ${#snippets[@]} -gt 0 ]]; then
         if (t[k] in pat_line) { err(FILENAME, n, "path " t[k] " is already decided at line " pat_line[t[k]]); return }
       }
       for (k = 1; k <= m; k++) { pat_line[t[k]] = n }
-      nl++; l_kind[nl] = kind; l_pats[nl] = pats; l_value[nl] = value
+      nl++; l_kind[nl] = kind; l_pats[nl] = pats; l_value[nl] = value; l_line[nl] = n
     }
-    function finish_site(    i, app, guarded, has_user, pats, buf, hosts, k, n, t, d, label) {
+    # Whether Caddy could match one path against both patterns. The Caddy path
+    # matcher ignores case, so the comparison does too; "*" is the catch-all,
+    # which Caddy always tries last.
+    function overlap(a, b,    pa, pb) {
+      if (a == "*" || b == "*") { return 0 }
+      a = tolower(a); b = tolower(b)
+      pa = (a ~ /\*$/) ? substr(a, 1, length(a) - 1) : ""
+      pb = (b ~ /\*$/) ? substr(b, 1, length(b) - 1) : ""
+      if (pa == "" && pb == "") { return a == b }
+      if (pa == "") { return substr(a, 1, length(pb)) == pb }
+      if (pb == "") { return substr(b, 1, length(pa)) == pa }
+      return substr(pa, 1, length(pb)) == pb || substr(pb, 1, length(pa)) == pa
+    }
+    function decision(i) { return l_kind[i] == "@open" ? "open" : "the " l_value[i] " role" }
+    function finish_site(    i, j, m, q, u, app, guarded, has_user, pats, buf, hosts, k, n, t, d, label) {
       app = ""; guarded = 0; has_user = 0
       if (top_app != "") { app = top_app; guarded = 1 }
       for (i = 1; i <= nh; i++) {
@@ -278,7 +294,7 @@ if [[ ${#snippets[@]} -gt 0 ]]; then
         err(FILENAME, top_open_line, "an open-path marker at the top level of site " site_addr " would open every path of app \"" app "\" that no handle names; give the open paths their own handle and matcher")
       }
       # The path lines, in the order of the handles.
-      split("", pat_line); split("", l_kind); split("", l_pats); split("", l_value); nl = 0
+      split("", pat_line); split("", l_kind); split("", l_pats); split("", l_value); split("", l_line); nl = 0
       for (i = 1; i <= nh; i++) {
         if (h_app[i] != "" && h_open[i]) {
           err(FILENAME, h_line[i], "this handle carries both a role guard and an open-path marker; a path is either guarded or open")
@@ -295,6 +311,26 @@ if [[ ${#snippets[@]} -gt 0 ]]; then
         else { add_line("@path", pats, h_role[i], h_guard_line[i]) }
       }
       if (top_app != "") { add_line("@path", "*", top_role, top_line) }
+      # Caddy does not always try the more specific of two handles first: it
+      # sorts handles by path length only when both have a single path, and
+      # keeps the written order otherwise, so the manifest cannot know which
+      # of two overlapping handles Caddy picks. Overlapping handles must
+      # therefore decide the same way.
+      for (i = 1; i <= nl; i++) {
+        n = split(l_pats[i], t, " ")
+        for (j = i + 1; j <= nl; j++) {
+          if (decision(i) == decision(j)) { continue }
+          m = split(l_pats[j], u, " ")
+          for (k = 1; k <= n; k++) {
+            for (q = 1; q <= m; q++) {
+              if (overlap(t[k], u[q])) {
+                err(FILENAME, l_line[j], "path " u[q] " overlaps " t[k] " at line " l_line[i] ", and the two handles decide differently (" decision(j) " here, " decision(i) " there); Caddy does not always try the more specific handle first, so in a site guarded by app roles two handles whose paths overlap must decide the same way: move one path out from under the other, or give both handles the same guard")
+                k = n; q = m
+              }
+            }
+          }
+        }
+      }
       # Card pages: exact paths that a user-guarded line decides.
       for (k = 1; k <= ncards; k++) {
         if (!valid_pattern(card_path[k]) || card_path[k] ~ /\*/) {

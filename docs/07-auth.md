@@ -202,8 +202,12 @@ The paths on each line come from the handle's matcher: an inline path, a
 one-line `@name path ...` matcher, or no matcher at all, which stands for
 every path the other handles do not name (`*`). An open handle may use a
 `path_regexp` matcher instead, and its marker must then list the paths as
-exact paths or prefixes ending in `*`. The gateway decides a path as Caddy
-does: an exact path first, then the longest prefix, then `*`.
+exact paths or prefixes ending in `*`. The gateway decides a path by an
+exact path first, then the longest prefix, then `*`. Caddy compares handles
+by path length only when each has a single path, and otherwise keeps the
+written order, so the renderer refuses two handles whose paths overlap
+unless both need the same role or both are open. The two rules then always
+reach the same decision.
 
 ### Adding to the request toward the app
 
@@ -257,6 +261,10 @@ The render fails, naming the file and line, in each of these cases:
 - a card page is decided by an open path or by a role other than `user`;
 - a handle's matcher is not a path matcher, a path cannot be written as an
   exact path or a prefix ending in `*`, or two handles declare the same path;
+- a path in one handle falls under a prefix in another (ignoring case, as
+  Caddy does) and the two handles decide differently, for example
+  `handle /users/*` for `user` beside `@adm path /a /users/admin` for
+  `admin`;
 - an app-roles marker sits on a site that has no role guard.
 
 A site still guarded by the older guards renders exactly as before and adds

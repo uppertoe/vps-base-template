@@ -713,6 +713,59 @@ app.{$DOMAIN} {
 	}
 }
 EOF
+# Caddy sorts handles by path length only when both have a single path, so
+# /users/* is tried before @adm and decides /users/admin with the user role,
+# while the manifest would say admin. Overlapping handles must agree.
+render_case roles-overlap-roles fail 'path /users/admin overlaps /users/\* at line 4, and the two handles decide differently (the admin role here, the user role there)' <<'EOF'
+# scaffold-roles: admin "Administrator"
+app.{$DOMAIN} {
+	handle /users/* {
+		import role "app" "user" app:8080
+	}
+	@adm path /a /users/admin
+	handle @adm {
+		import role "app" "admin" app:8080
+	}
+	handle {
+		import role "app" "user" app:8080
+	}
+}
+EOF
+# An open prefix over a guarded exact path, in a different case.
+render_case roles-overlap-open fail 'path /Docs/Secret overlaps /docs/\* at line 2, and the two handles decide differently (the user role here, open there)' <<'EOF'
+app.{$DOMAIN} {
+	handle /docs/* {
+		# scaffold-lint: open-path -- /docs/*: the manual
+		reverse_proxy app:8080 {
+			import strip_public
+		}
+	}
+	@sec path /b /Docs/Secret
+	handle @sec {
+		import role "app" "user" app:8080
+	}
+	handle {
+		import role "app" "admin" app:8080
+	}
+}
+EOF
+# Overlapping handles that decide the same way, beside a catch-all with
+# another role, render.
+render_case roles-overlap-same-role pass <<'EOF'
+# scaffold-roles: admin "Administrator"
+app.{$DOMAIN} {
+	handle /admin/* {
+		import role "app" "admin" app:8080
+	}
+	@more path /reports /admin/export
+	handle @more {
+		import role "app" "admin" app:8080
+	}
+	handle {
+		import role "app" "user" app:8080
+	}
+}
+EOF
 render_case roles-two-apps-in-site fail 'guards with two apps' <<'EOF'
 app.{$DOMAIN} {
 	handle /other/* {

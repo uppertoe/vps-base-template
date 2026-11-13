@@ -18,7 +18,11 @@
 # one path per pattern: the path itself for an exact pattern, a path below a
 # prefix ("/admin/*" asks for /admin/scaffold-route-check) and, for "*", a
 # path no other line names. Card pages are asked for as they are written.
-# The expectations are:
+# Beside each open pattern it also asks for one path that the pattern does
+# not cover and a guarded line decides: below an exact open path ("/faq"
+# asks for /faq/scaffold-route-check-beside) and, for a prefix ending in "/*",
+# the prefix without its slash ("/static/*" asks for /static), so that an
+# open matcher wider than the manifest says is caught. The expectations are:
 #
 #   * a path that needs a role answers a redirect to the gateway's /login
 #     page, because the request carries no session;
@@ -99,6 +103,15 @@ plan() {
       }
       return best
     }
+    # A path just outside an open pattern, or "" when there is none to ask.
+    function beside_path(p,    pre) {
+      if (p == "*" || p == "/" || p == "/*") { return "" }
+      if (p ~ /\*$/) {
+        pre = substr(p, 1, length(p) - 1)
+        return (pre ~ /.\/$/) ? substr(pre, 1, length(pre) - 1) : ""
+      }
+      return p (p ~ /\/$/ ? "" : "/") "scaffold-route-check-beside"
+    }
     function probe_path(p,    pre) {
       if (p == "*") { return "/scaffold-route-check-elsewhere" }
       if (p ~ /\*$/) { pre = substr(p, 1, length(p) - 1); return pre (pre ~ /\/$/ ? "" : "/") "scaffold-route-check" }
@@ -111,12 +124,26 @@ plan() {
         nh = split(hosts[app], hl, ",")
         for (h = 1; h <= nh; h++) {
           host = hl[h]; gsub(/\{\$DOMAIN\}/, domain, host); gsub(/[[:space:]]/, "", host)
+          split("", asked)
           for (i = 1; i <= nl[app]; i++) {
             m = split(pats[app, i], t, " ")
             for (k = 1; k <= m; k++) {
               path = probe_path(t[k])
               if (decide(app, path) != i) { printf "skip\t%s\t%s\t%s\t%s\n", host, t[k], app, "another line of the manifest decides " path; continue }
+              asked[path] = 1
               printf "%s\t%s\t%s\t%s\t%s\n", kind[app, i], host, path, app, value[app, i]
+            }
+          }
+          for (i = 1; i <= nl[app]; i++) {
+            if (kind[app, i] != "open") { continue }
+            m = split(pats[app, i], t, " ")
+            for (k = 1; k <= m; k++) {
+              path = beside_path(t[k])
+              if (path == "" || (path in asked)) { continue }
+              d = decide(app, path)
+              if (d == 0 || kind[app, d] != "guarded") { continue }
+              asked[path] = 1
+              printf "guarded\t%s\t%s\t%s\t%s\n", host, path, app, value[app, d] ", beside the open path " t[k]
             }
           }
           for (c = 1; c <= nc[app]; c++) { printf "guarded\t%s\t%s\t%s\t%s\n", host, card[app, c], app, "user (card page)" }

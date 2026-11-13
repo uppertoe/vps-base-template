@@ -285,7 +285,10 @@ the server repos add in this form:
 
 `docker/check-routes.sh` requests every path the manifest declares, without
 signing in, and fails if a guarded path is served or an open path is sent to
-the sign-in page. On the server, from `/opt/deploy`, run:
+the sign-in page. Beside each open path it also requests one path that the
+open path does not cover, such as `/faq/scaffold-route-check-beside` for
+`/faq` or `/static` for `/static/*`, and fails if that path is served without
+sign-in. On the server, from `/opt/deploy`, run:
 
 ```bash
 bash scaffold/docker/check-routes.sh --connect 127.0.0.1 example.org

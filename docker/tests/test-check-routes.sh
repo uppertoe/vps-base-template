@@ -60,13 +60,15 @@ run() {
 answers() { printf '%s\n' "$@" | tr '|' '\t' > "$CURL_TABLE"; }
 
 # 1. Everything as declared: open paths answer (a 404 below a prefix is
-#    fine), guarded paths and the card page redirect to /login.
+#    fine), guarded paths, the path beside the open /static/* and the card
+#    page redirect to /login.
 answers "https://enquiries.example.org/|200|" \
         "https://enquiries.example.org/static/scaffold-route-check|404|" \
         "https://enquiries.example.org/admin/scaffold-route-check|302|$login" \
         "https://enquiries.example.org/scaffold-route-check-elsewhere|302|$login" \
+        "https://enquiries.example.org/static|302|$login" \
         "https://enquiries.example.org/enquiry|302|$login"
-if run --connect 127.0.0.1 --insecure && grep -q '5 path(s) answered as the manifest declares' "$work/out.log"; then
+if run --connect 127.0.0.1 --insecure && grep -q '6 path(s) answered as the manifest declares' "$work/out.log"; then
   pass "an estate that answers as declared passes"
 else
   fail "an estate that answers as declared failed: $(cat "$work/out.log")"
@@ -82,6 +84,7 @@ answers "https://enquiries.example.org/|200|" \
         "https://enquiries.example.org/static/scaffold-route-check|404|" \
         "https://enquiries.example.org/admin/scaffold-route-check|200|" \
         "https://enquiries.example.org/scaffold-route-check-elsewhere|302|$login" \
+        "https://enquiries.example.org/static|302|$login" \
         "https://enquiries.example.org/enquiry|302|$login"
 if ! run && grep -q 'FAIL enquiries.example.org/admin/scaffold-route-check (enquiries, admin): answered 200 without sign-in' "$work/out.log"; then
   pass "a guarded path served without sign-in fails"
@@ -94,6 +97,7 @@ answers "https://enquiries.example.org/|302|$login" \
         "https://enquiries.example.org/static/scaffold-route-check|404|" \
         "https://enquiries.example.org/admin/scaffold-route-check|302|$login" \
         "https://enquiries.example.org/scaffold-route-check-elsewhere|302|$login" \
+        "https://enquiries.example.org/static|302|$login" \
         "https://enquiries.example.org/enquiry|302|$login"
 if ! run && grep -q 'FAIL enquiries.example.org/ (enquiries, open): an open path was sent to sign in' "$work/out.log"; then
   pass "an open path sent to sign in fails"
@@ -105,14 +109,29 @@ fi
 answers "https://enquiries.example.org/|502|" \
         "https://enquiries.example.org/admin/scaffold-route-check|302|https://enquiries.example.org/admin/" \
         "https://enquiries.example.org/scaffold-route-check-elsewhere|302|$login" \
+        "https://enquiries.example.org/static|302|$login" \
         "https://enquiries.example.org/enquiry|302|$login"
 if ! run && grep -q 'FAIL enquiries.example.org/ (enquiries, open): answered 502' "$work/out.log" \
    && grep -q 'FAIL enquiries.example.org/static/scaffold-route-check (enquiries, open): no answer' "$work/out.log" \
    && grep -q 'FAIL enquiries.example.org/admin/scaffold-route-check (enquiries, admin): answered 302 -> https://enquiries.example.org/admin/ without sign-in' "$work/out.log" \
-   && grep -q '3 of 5 path(s) did not answer' "$work/out.log"; then
+   && grep -q '3 of 6 path(s) did not answer' "$work/out.log"; then
   pass "a redirect away from /login, a 5xx and no answer fail"
 else
   fail "the broken answers were not all reported: $(cat "$work/out.log")"
+fi
+
+# 4a. An open matcher wider than the manifest says: /static, beside the
+#     open /static/*, is served without sign-in.
+answers "https://enquiries.example.org/|200|" \
+        "https://enquiries.example.org/static/scaffold-route-check|404|" \
+        "https://enquiries.example.org/admin/scaffold-route-check|302|$login" \
+        "https://enquiries.example.org/scaffold-route-check-elsewhere|302|$login" \
+        "https://enquiries.example.org/static|200|" \
+        "https://enquiries.example.org/enquiry|302|$login"
+if ! run && grep -q 'FAIL enquiries.example.org/static (enquiries, user, beside the open path /static/\*): answered 200 without sign-in' "$work/out.log"; then
+  pass "a path beside an open pattern served without sign-in fails"
+else
+  fail "a path beside an open pattern served without sign-in was not reported: $(cat "$work/out.log")"
 fi
 
 # 5. A pattern whose made-up path another line decides is skipped with a
@@ -122,7 +141,8 @@ app	user	User	app.{$DOMAIN}
 @open	app	/scaffold-route-check-elsewhere	a page that happens to share the name
 @path	app	*	user
 EOF
-answers "https://app.example.org/scaffold-route-check-elsewhere|200|"
+answers "https://app.example.org/scaffold-route-check-elsewhere|200|" \
+        "https://app.example.org/scaffold-route-check-elsewhere/scaffold-route-check-beside|302|https://auth.example.org/login"
 if run && grep -q 'skip app.example.org \* (app): another line of the manifest decides /scaffold-route-check-elsewhere' "$work/out.log"; then
   pass "a pattern another line would decide is skipped with a note"
 else

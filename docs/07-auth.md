@@ -135,6 +135,176 @@ app.{$DOMAIN} {
 }
 ```
 
+## Protecting an app with roles
+
+An app can instead declare the roles it has and leave the gateway's admin
+pages to decide who holds each one. Guard each `handle` with `import role`,
+naming the app and the role its paths need, and declare every role other
+than `user` above the site address:
+
+```caddyfile
+# apps/fellows/fellows.caddy
+# scaffold-app-label: "Fellowship enquiries"
+# scaffold-roles: admin "Administrator"
+# scaffold-card-pages: /enquiry "Your enquiry"
+enquiries.{$DOMAIN} {
+	import error_pages /srv/www/dash
+	@public path / /faq /privacy /static/* /healthz
+	handle @public {
+		# scaffold-lint: open-path -- / /faq /privacy: read before a person signs in
+		reverse_proxy fellows:8080 {
+			import strip_public
+		}
+	}
+	handle /admin/* {
+		import role "enquiries" "admin" fellows:8080
+	}
+	handle {
+		import role "enquiries" "user" fellows:8080
+	}
+}
+```
+
+Three markers describe the app. They sit on comment lines just above the
+site address or inside the site block.
+
+- `# scaffold-roles: <role> "<Label>" ...` declares the app's roles beyond
+  `user`, which every app has with the label "User". A role name uses
+  lower-case letters, digits, `-` and `_`.
+- `# scaffold-app-label: "<Label>"` sets the name the gateway's admin pages
+  show. Without it, the gateway shows the app name with its first letter in
+  capitals and `-` or `_` read as a space.
+- `# scaffold-card-pages: <path> "<Label>" ...` lists the pages a break-glass
+  card for the app may open. Each must be an exact path that a `user` guard
+  decides, because a card holds only the user role.
+
+An open path is declared with the same `open-path` marker that any gated site
+uses (docs/04), and the gateway shows the text after its colon as the reason.
+Access from a named network is assigned on the gateway's admin pages, so a
+handle with a network matcher has no place in a site guarded by roles.
+
+The renderer writes `.generated/caddy/app-roles.tsv`, which the gateway reads
+as `APP_ROLES_FILE`. For the example above the file holds these lines, with
+one tab between fields:
+
+```tsv
+enquiries	user	User	enquiries.{$DOMAIN}
+enquiries	admin	Administrator	enquiries.{$DOMAIN}
+@label	enquiries	Fellowship enquiries
+@source	enquiries	apps/fellows/fellows.caddy
+@open	enquiries	/ /faq /privacy /static/* /healthz	read before a person signs in
+@path	enquiries	/admin/*	admin
+@path	enquiries	*	user
+@card-page	enquiries	/enquiry	Your enquiry
+```
+
+The paths on each line come from the handle's matcher: an inline path, a
+one-line `@name path ...` matcher, or no matcher at all, which stands for
+every path the other handles do not name (`*`). A `path_regexp` matcher is
+refused, on an open handle as on a guarded one, because Caddy may answer
+more paths than the manifest could list. The gateway decides a path by an
+exact path first, then the longest prefix, then `*`. Caddy compares handles
+by path length only when each has a single path, and otherwise keeps the
+written order, so the renderer refuses two handles whose paths overlap
+unless both need the same role or both are open. The two rules then always
+reach the same decision.
+
+### Adding to the request toward the app
+
+`import role` writes its own `reverse_proxy`, so an app that needs something
+added to the request toward it, such as a shared secret in a header, writes
+the route out and imports the gate inside it. The renderer counts
+`import auth_gate_role "<app>" "<role>"` as it counts `import role`, in the
+manifest and in every refusal below.
+
+```caddyfile
+	handle /admin/* {
+		route {
+			import strip_client_identity
+			request_header -X-Auth-App
+			request_header -X-Auth-Role
+			request_header -X-Auth-Policy
+			import auth_gate_role "enquiries" "admin"
+			reverse_proxy fellows:8080 {
+				import strip_auth_cookie
+				header_up X-Proxy-Secret {$FELLOWS_PROXY_SECRET}
+			}
+		}
+	}
+```
+
+The renderer does not read inside a snippet that the app defines, so the
+route must be written out in each guarded handle.
+
+A public page that greets a signed-in visitor by name may ask `/verify` only
+when a session cookie is present, sending `header_up X-Auth-App "<app>"` and
+`header_up X-Auth-Role "<role>"`, and serve the page whatever the answer.
+Such a handle is an open path: it needs the `open-path` marker and a reason,
+and it is neither a guard nor an older guard. The render fails if
+`X-Auth-App` names an app other than the site's, if `X-Auth-Role` names a
+role the app does not declare, or if the site has no role guard.
+
+The render fails, naming the file and line, in each of these cases:
+
+- a guard names a role that the snippet does not declare;
+- an app has role guards but none for `user`;
+- two site blocks use the same app name, in one snippet or in two, or one
+  site guards with two apps;
+- a site mixes a role guard with an older guard (`protected*`, `auth_gate`
+  and its other variants, `forward_auth`, `X-Auth-Policy`), which the gateway
+  refuses at every request, so the whole site must be migrated at once;
+- a `route` block sits at the top level of the site, where Caddy runs it
+  after every `handle` whatever its path (write it as a `handle`; a `route`
+  inside a `handle` is fine, and `import role` at the top level decides `*`);
+- an open-path marker sits on a catch-all `handle` or at the top level of the
+  site, where it would open every path that no other handle names;
+- a card page is decided by an open path or by a role other than `user`;
+- a handle's matcher is not a path matcher (`path_regexp` included), a path
+  cannot be written as an exact path or a prefix ending in `*`, or two
+  handles declare the same path;
+- a path in one handle falls under a prefix in another (ignoring case, as
+  Caddy does) and the two handles decide differently, for example
+  `handle /users/*` for `user` beside `@adm path /a /users/admin` for
+  `admin`;
+- an app-roles marker sits on a site that has no role guard.
+
+A site still guarded by the older guards renders exactly as before and adds
+nothing to the manifest.
+
+The auth service reads the manifest once its compose file mounts it, which
+the server repos add in this form:
+
+```yaml
+    environment:
+      - APP_ROLES_FILE=/etc/vps-auth/app-roles.tsv
+    volumes:
+      - ../../.generated/caddy/app-roles.tsv:/etc/vps-auth/app-roles.tsv:ro
+```
+
+### Checking the routes
+
+`docker/check-routes.sh` requests every path the manifest declares, without
+signing in, and fails if a guarded path is served or an open path is sent to
+the sign-in page. Beside each open path it also requests one path that the
+open path does not cover, such as `/faq/scaffold-route-check-beside` for
+`/faq` or `/static` for `/static/*`, and fails if that path is served without
+sign-in. On the server, from `/opt/deploy`, run:
+
+```bash
+bash scaffold/docker/check-routes.sh --connect 127.0.0.1 example.org
+```
+
+`--connect` sends the requests to the local Caddy while keeping each host
+name, and `--insecure` skips the certificate check for a local Caddy with its
+own certificate authority. Only a redirect to `/login` on the gateway's
+own host counts as being sent to sign in, so an app that sends a visitor to
+its own `/login` page fails the check. The gateway's host is taken to be
+`auth.<DOMAIN>`; if the server runs it under another name, pass that name
+with `--auth-host`, for example `--auth-host auth.example.net`. Run the check from outside any network that the
+gateway admits by itself, because a network assignment can grant a role
+without sign-in. The check does not yet sign in with each role, since that
+needs a test session the script cannot create.
+
 ## Admin two-factor (default on)
 
 Email codes inherit the security of the user's inbox. For the higher-trust admin

@@ -180,7 +180,28 @@ VPS_DEPLOY_PROBES_FAILED_FILE="$work/failed" run || fail "a healthy estate faile
 [[ -f "$work/failed" && ! -s "$work/failed" ]] || fail "a passing run did not leave an empty failed-hosts file"
 ok "the caller's outcome is used, an empty notifier sends nothing, and the failing hosts are written to the file"
 
-# 7. No access table means nothing to probe, and a clean exit.
+# 7. A site guarded by app roles ("roles" rows) is a gated site: it must send
+#    a signed-out request to the gateway's /login page, forged header or not,
+#    and a 200 fails it. With an open path beside the guard it is mixed.
+cat >"$table" <<'EOF'
+cases.{$DOMAIN}	roles	cases user
+cases.{$DOMAIN}	roles	cases admin
+enquiries.{$DOMAIN}	roles	enquiries user
+enquiries.{$DOMAIN}	public	/ /faq: read before a person signs in
+EOF
+answers 'cases.example.org|-|302|https://auth.example.org/login?rd=x' \
+        'cases.example.org|Remote-Email: forged@example.invalid|302|https://auth.example.org/login?rd=x' \
+        'enquiries.example.org|-|200|'
+run || fail "a healthy role-guarded estate failed: $(cat "$work/out.log")"
+grep -q 'curl cases.example.org Remote-Email' "$CURL_LOG" || fail "a role-guarded site got no forged-identity probe"
+answers 'cases.example.org|-|200|' \
+        'cases.example.org|Remote-Email: forged@example.invalid|200|' \
+        'enquiries.example.org|-|200|'
+if run; then fail "a role-guarded site answering 200 signed out passed"; fi
+grep -q 'FAIL cases.example.org: answered 200' "$work/out.log" || fail "the open role-guarded site was not reported: $(cat "$work/out.log")"
+ok "a role-guarded site is probed as a gate, and as mixed beside an open path"
+
+# 8. No access table means nothing to probe, and a clean exit.
 rm -f "$table"
 run || fail "a stack without an access table failed: $(cat "$work/out.log")"
 grep -q 'nothing to probe' "$work/out.log" || fail "the missing table was not reported"

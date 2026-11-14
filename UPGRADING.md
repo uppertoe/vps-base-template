@@ -33,6 +33,29 @@ of the actions, once.
 
 ---
 
+## 2026-11-12 — The renderer writes the app-roles manifest
+
+`render-caddy-routes.sh` now writes a fifth file, `.generated/caddy/app-roles.tsv`,
+the manifest of every app guarded with `import role "<app>" "<role>" <upstream>`.
+The gateway reads it as `APP_ROLES_FILE`. Until an app is migrated to role
+guards the file holds only its header, and every other rendered file is
+unchanged. The renderer refuses a site that mixes `import role` with the older
+guards, and docs/07 "Protecting an app with roles" lists the markers and the
+other refusals. `route-access.tsv` lists a role guard as a `roles` row, and
+`vps-deploy-probes` treats that row as a gate. `docker/check-routes.sh`
+requests every path in the manifest without signing in and reports each path
+that does not answer as the manifest declares.
+
+**Operator actions:** after bumping the pointer, re-render and commit
+`.generated` (step 2 above), or the drift check fails on the new file. The
+auth service reads the manifest only once `apps/auth/docker-compose.yml`
+mounts it at `/etc/vps-auth/app-roles.tsv` and sets
+`APP_ROLES_FILE=/etc/vps-auth/app-roles.tsv`; that change belongs with the
+first app migrated to role guards. `vps-deploy-probes` learns the `roles` row
+at the next site play.
+
+---
+
 ## 2026-11-06 — A failed probe set rolls the deploy back when no image or hook changed
 
 Under the release tree, `vps-deploy` now undoes a deploy whose acceptance

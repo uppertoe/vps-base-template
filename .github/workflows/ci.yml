@@ -99,7 +99,7 @@ jobs:
       - name: Run the deploy wrapper checks
         run: |
           docker run --rm -v "$PWD/ansible/roles/deploy-user":/t:ro \
-            ubuntu:24.04@sha256:2198e4c65076e9cb0b3d695219df667c0e3b0072da64ca3c2648aca17dcecaf5 \
+            ubuntu:24.04@sha256:73b999393d07f2bf65a40373778a44dc9a6d54ad7718d29247d8ff9413c4d6a8 \
             bash /t/files/test_vps_deploy.sh
       # The post-deploy acceptance probes, against a stub curl: bash and awk
       # only, so they run on the runner itself.
@@ -108,7 +108,7 @@ jobs:
       - name: Run the release tree checks
         run: |
           docker run --rm -v "$PWD/ansible/roles/deploy-user/files":/t:ro \
-            ubuntu:24.04@sha256:2198e4c65076e9cb0b3d695219df667c0e3b0072da64ca3c2648aca17dcecaf5 \
+            ubuntu:24.04@sha256:73b999393d07f2bf65a40373778a44dc9a6d54ad7718d29247d8ff9413c4d6a8 \
             bash /t/test_vps_release.sh
 
   molecule-default:

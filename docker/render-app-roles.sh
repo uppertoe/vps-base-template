@@ -85,7 +85,9 @@
 # (ignoring case) but that decide differently, because Caddy does not always
 # try the more specific handle first; a marker on a site with no role guard
 # and no app marker; an app marker that names an app other than the
-# guards'; and a handle, handle_path or invoke nested inside a guarded
+# guards'; in a site whose catch-all is open, a guarded exact path P whose
+# paths below (P/*, or P* for a P that ends in /) the same role does not
+# guard; and a handle, handle_path or invoke nested inside a guarded
 # handle, which Caddy runs before the route the guard expands to.
 #
 # An open handle may still ask the gateway who is signed in, so that a public
@@ -289,8 +291,17 @@ if [[ ${#snippets[@]} -gt 0 ]]; then
       if (pb == "") { return substr(b, 1, length(pa)) == pa }
       return substr(pa, 1, length(pb)) == pb || substr(pb, 1, length(pa)) == pa
     }
+    # Whether pattern p is on a @path line with the role of line i.
+    function same_role(p, i,    j, m, u, k) {
+      for (j = 1; j <= nl; j++) {
+        if (l_kind[j] != "@path" || l_value[j] != l_value[i]) { continue }
+        m = split(l_pats[j], u, " ")
+        for (k = 1; k <= m; k++) { if (u[k] == p) { return 1 } }
+      }
+      return 0
+    }
     function decision(i) { return l_kind[i] == "@open" ? "open" : "the " l_value[i] " role" }
-    function finish_site(    i, j, m, q, u, app, guarded, has_user, pats, buf, k, n, t, d) {
+    function finish_site(    i, j, m, q, u, app, guarded, has_user, pats, buf, k, n, t, d, open_rest) {
       app = ""; guarded = 0; has_user = 0
       if (top_app != "") { app = top_app; guarded = 1 }
       for (i = 1; i <= nh; i++) {
@@ -386,6 +397,23 @@ if [[ ${#snippets[@]} -gt 0 ]]; then
         else { add_line("@path", pats, h_role[i], h_guard_line[i]) }
       }
       if (top_app != "") { add_line("@path", "*", top_role, top_line) }
+      # With the catch-all open, a guarded exact path P leaves P/ and the
+      # paths below it to the catch-all, which a file server or an app may
+      # answer as the same page or directory. The paths below must be
+      # guarded by the same role.
+      open_rest = 0
+      for (i = 1; i <= nl; i++) { if (l_kind[i] == "@open" && l_pats[i] == "*") { open_rest = 1 } }
+      for (i = 1; open_rest && i <= nl; i++) {
+        if (l_kind[i] != "@path") { continue }
+        n = split(l_pats[i], t, " ")
+        for (k = 1; k <= n; k++) {
+          if (t[k] == "*" || t[k] ~ /\*$/) { continue }
+          q = (t[k] ~ /\/$/) ? t[k] "*" : t[k] "/*"
+          if (!(same_role(q, i) || (t[k] !~ /\/$/ && same_role(t[k] "*", i)))) {
+            err(FILENAME, l_line[i], "guarded path " t[k] " is exact, but the open catch-all of site " site_addr " would answer " (t[k] ~ /\/$/ ? "" : t[k] "/ and ") "every path below it; add " q " to the same guarded matcher")
+          }
+        }
+      }
       # Caddy does not always try the more specific of two handles first: it
       # sorts handles by path length only when both have a single path, and
       # keeps the written order otherwise, so the manifest cannot know which

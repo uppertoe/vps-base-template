@@ -888,6 +888,65 @@ app.{$DOMAIN} {
 	import role "app" "user" app:8080
 }
 EOF
+# With the catch-all open, a guarded exact path leaves the paths below it,
+# /guidelines/ included, to the catch-all: the file server would list or
+# serve them. The paths below must be guarded by the same role.
+render_case roles-open-site-exact fail 'guarded path /guidelines is exact, but the open catch-all of site app.{.DOMAIN} would answer /guidelines/ and every path below it; add /guidelines/\* to the same guarded matcher' <<'EOF'
+app.{$DOMAIN} {
+	handle /guidelines {
+		import role_gate "app" "user"
+		file_server
+	}
+	handle {
+		# scaffold-lint: open-path -- /*: the public pages
+		file_server
+	}
+}
+EOF
+render_case roles-open-site-exact-slash fail 'guarded path /guidelines/ is exact, but the open catch-all of site app.{.DOMAIN} would answer every path below it; add /guidelines/\* to the same guarded matcher' <<'EOF'
+app.{$DOMAIN} {
+	handle /guidelines/ {
+		import role_gate "app" "user"
+		file_server
+	}
+	handle {
+		# scaffold-lint: open-path -- /*: the public pages
+		file_server
+	}
+}
+EOF
+# The paths below guarded by another role do not count.
+render_case roles-open-site-exact-other-role fail 'guarded path /reports is exact' <<'EOF'
+# scaffold-roles: admin "Administrator"
+app.{$DOMAIN} {
+	handle /reports {
+		import role_gate "app" "user"
+		file_server
+	}
+	handle /reports/* {
+		import role_gate "app" "admin"
+		file_server
+	}
+	handle {
+		# scaffold-lint: open-path -- /*: the public pages
+		file_server
+	}
+}
+EOF
+# P/* or P* beside P, guarded by the same role, renders.
+render_case roles-open-site-exact-covered pass <<'EOF'
+app.{$DOMAIN} {
+	@gated path /guidelines /guidelines/* /cardiac /cardiac*
+	handle @gated {
+		import role_gate "app" "user"
+		file_server
+	}
+	handle {
+		# scaffold-lint: open-path -- /*: the public pages
+		file_server
+	}
+}
+EOF
 render_case roles-open-top-level fail 'an open-path marker at the top level' <<'EOF'
 app.{$DOMAIN} {
 	handle /account/* {

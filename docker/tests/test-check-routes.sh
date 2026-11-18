@@ -231,6 +231,36 @@ else
   fail "an open \"*\" sent to sign in was not reported: $(cat "$work/out.log")"
 fi
 
+# 8. Below an exact guarded path, a path is asked for and must be sent to
+#    sign in, even where the manifest leaves it to the open "*"; one that an
+#    open pattern names outright is not asked for.
+cat > "$work/app-roles.tsv" <<'EOF'
+home	user	User	{$DOMAIN}
+@path	home	/guidelines /staff/	user
+@open	home	/staff/scaffold-route-check	a page that happens to share the name
+@open	home	*	the homepage is public
+EOF
+below_answers() {
+  answers "https://example.org/guidelines|302|$login" \
+          "https://example.org/staff/|302|$login" \
+          "https://example.org/staff/scaffold-route-check|200|" \
+          "https://example.org/scaffold-route-check-elsewhere|200|" \
+          "$@"
+}
+below_answers "https://example.org/guidelines/scaffold-route-check|302|$login"
+if run && grep -q '5 path(s) answered as the manifest declares' "$work/out.log" \
+   && grep -q 'ok   example.org/guidelines/scaffold-route-check (home, user, below the guarded path /guidelines)' "$work/out.log"; then
+  pass "a path below an exact guarded path is asked for and sent to sign in"
+else
+  fail "the path below an exact guarded path was not checked: $(cat "$work/out.log")"
+fi
+below_answers "https://example.org/guidelines/scaffold-route-check|200|"
+if ! run && grep -q 'FAIL example.org/guidelines/scaffold-route-check (home, user, below the guarded path /guidelines): answered 200 without sign-in' "$work/out.log"; then
+  pass "a path below an exact guarded path served by the open \"*\" fails"
+else
+  fail "a path below an exact guarded path served open was not reported: $(cat "$work/out.log")"
+fi
+
 echo
 if [[ $failures -gt 0 ]]; then
   echo "$failures check(s) failed" >&2

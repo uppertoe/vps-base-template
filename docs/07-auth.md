@@ -282,6 +282,9 @@ The render fails, naming the file and line, in each of these cases:
 - an open-path marker sits at the top level of the site, or on a catch-all
   `handle` and names paths other than the whole site (`/*` or `*`), where it
   would open every path that no other handle names;
+- in a site whose catch-all is open, a guarded exact path such as
+  `/guidelines` lacks `/guidelines/*` (or `/guidelines*`) guarded by the same
+  role, so the catch-all would answer `/guidelines/` and the paths below it;
 - a `handle`, `handle_path` or `invoke` sits inside a guarded handle, where
   Caddy would run it before the gate (put those paths in a top-level handle
   with a guard of their own; a `route` inside a guarded handle is fine);
@@ -337,7 +340,10 @@ catch-all must name the whole site, as `/*` or `*`:
 ```
 
 The manifest then holds `@open	home	*	<reason>`, and the guarded handle still
-decides its own paths. The renderer refuses a catch-all marker that lists
+decides its own paths. Each guarded section needs its exact path and its
+prefix, as `/guidelines /guidelines/*`, because the open catch-all would
+otherwise answer `/guidelines/` and every path below it; the renderer refuses
+an exact path without its prefix. The renderer refuses a catch-all marker that lists
 anything narrower than the whole site, and an open-path marker at the top
 level of the site, so the open directives belong in the catch-all `handle`. A
 card page must sit under a guarded section, not on a page the catch-all
@@ -389,7 +395,10 @@ the sign-in page. Beside each open path it also requests one path that the
 open path does not cover, such as `/faq/scaffold-route-check-beside` for
 `/faq` or `/static` for `/static/*`, and fails if that path is served without
 sign-in. For an open `*` it requests a made-up path,
-`/scaffold-route-check-elsewhere`, which must be served without sign-in. On
+`/scaffold-route-check-elsewhere`, which must be served without sign-in.
+Below each exact guarded path it requests one more, such as
+`/guidelines/scaffold-route-check` for `/guidelines`, which must be sent to
+sign in. On
 the server, from `/opt/deploy`, run:
 
 ```bash

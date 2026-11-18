@@ -33,6 +33,34 @@ of the actions, once.
 
 ---
 
+## 2026-11-18 — Roles can be declared before the switch; two more role guards
+
+A site still on the older guards may now name its app with
+`# scaffold-app: <app>` and carry the `scaffold-roles`, `scaffold-app-label`
+and `scaffold-card-pages` markers. `app-roles.tsv` then lists the app's roles
+with a `@pending` line and no paths, so that roles can be assigned on the
+gateway before the site moves to role guards. The older guards render as
+before, and `apps.caddy`, `route-access.tsv` and `route-groups.tsv` change only
+by the marker lines. Markers without `# scaffold-app:` on such a site are still
+refused. On a site that has role guards, `# scaffold-app:` must name the
+guards' app.
+
+The renderer also recognises `import role_gate "<app>" "<role>"`, for a site
+that serves files itself, and `import role_redir "<app>" "<role>" "<target>"`,
+which redirects once the person is admitted. Both count as role guards
+everywhere `import role` does, including the `roles` rows that
+`vps-deploy-probes` reads. docs/07 "Declaring roles before switching" and "A
+site that serves files or redirects" describe both changes.
+
+**Operator actions:** none for a server that adds no new markers or guards;
+the rendered files do not change. Add `# scaffold-app:` only on a gateway
+image that reads the `@pending` line, because an older gateway skips the line
+and shows the app as one with no paths. Before using `import role_gate` or
+`import role_redir`, copy both snippets from the gateway's `deploy/auth.caddy`
+into the server repo's copy, from a gateway release that defines them.
+
+---
+
 ## 2026-11-16 — The renderer writes the member-readers manifest
 
 `render-caddy-routes.sh` now writes a sixth file,

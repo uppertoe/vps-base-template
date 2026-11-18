@@ -708,17 +708,130 @@ app.{$DOMAIN} {
 	}
 }
 EOF
-render_case roles-open-catch-all fail 'an open-path marker on a catch-all handle' <<'EOF'
+# A catch-all handle opens every path no other handle names, so its marker
+# must say so outright, "/*" or "*"; a narrower list, or prose in place of
+# the paths, is refused.
+render_case roles-open-catch-all fail 'an open-path marker on a catch-all handle would open every path of app "app" that no other handle names, but it lists "/ /faq"' <<'EOF'
 app.{$DOMAIN} {
 	handle /account/* {
 		import role "app" "user" app:8080
 	}
 	handle {
-		# scaffold-lint: open-path -- /*: everything else is public
+		# scaffold-lint: open-path -- / /faq: the landing page and the faq
 		reverse_proxy app:8080 {
 			import strip_public
 		}
 	}
+}
+EOF
+render_case roles-open-catch-all-prose fail 'but it lists "everything else"' <<'EOF'
+app.{$DOMAIN} {
+	handle /account/* {
+		import role "app" "user" app:8080
+	}
+	handle * {
+		# scaffold-lint: open-path -- everything else: the public pages
+		reverse_proxy app:8080 {
+			import strip_public
+		}
+	}
+}
+EOF
+# A public site with protected sections, in the shape of RCH's home page: the
+# catch-all handle is open with the marker "/*", and the manifest says "*"
+# is open while the guarded handle decides its own paths.
+render_case roles-open-site pass <<'EOF'
+# scaffold-app: home
+# scaffold-app-label: "RCH Anaesthesia"
+{$DOMAIN}, www.{$DOMAIN} {
+	@gated path /useful-numbers /useful-numbers/* /guidelines /guidelines/* /cardiac /cardiac/*
+	handle @gated {
+		import role_gate "home" "user"
+		file_server
+	}
+	handle {
+		# scaffold-lint: open-path -- /*: the homepage and service directory are public; the paths above are gated
+		file_server
+	}
+}
+EOF
+cat > "$work/roles-open-site.golden" <<'EOF'
+home	user	User	{$DOMAIN},www.{$DOMAIN}
+@label	home	RCH Anaesthesia
+@source	home	apps/app/app.caddy
+@path	home	/useful-numbers /useful-numbers/* /guidelines /guidelines/* /cardiac /cardiac/*	user
+@open	home	*	the homepage and service directory are public; the paths above are gated
+EOF
+if diff -u "$work/roles-open-site.golden" <(grep -v '^#' "$work/roles-open-site-out/app-roles.tsv" | sed '/^$/d') >&2; then
+  pass "manifest: a public site with protected sections opens \"*\" and guards its sections"
+else
+  fail "manifest: the public site with protected sections differs (diff above)"
+fi
+expect_row roles-open-site $'{$DOMAIN},www.{$DOMAIN}\troles\thome user'
+expect_row roles-open-site $'{$DOMAIN},www.{$DOMAIN}\tpublic\t/*: the homepage and service directory are public; the paths above are gated'
+# A card page that the open catch-all decides is refused; one under a
+# guarded section is accepted.
+render_case roles-open-site-card fail 'card page /contacts is not under a path guarded by import role "home" "user"; a break-glass card holds only the user role (an open path decides it)' <<'EOF'
+# scaffold-card-pages: /contacts "Contacts" /guidelines/airway "Airway"
+{$DOMAIN} {
+	@gated path /guidelines /guidelines/*
+	handle @gated {
+		import role_gate "home" "user"
+		file_server
+	}
+	handle {
+		# scaffold-lint: open-path -- /*: the homepage is public
+		file_server
+	}
+}
+EOF
+if grep -q 'card page /guidelines/airway' "$work/roles-open-site-card.err"; then
+  fail "manifest: a card page under the guarded section was refused"; cat "$work/roles-open-site-card.err" >&2
+else
+  pass "manifest: a card page under the guarded section of an open site is accepted"
+fi
+# An open catch-all beside a guarded handle that also matches every path
+# ("/*"): Caddy tries the handle with a path matcher first, so every path is
+# guarded, and the gateway agrees, since the prefix "/*" decides before "*".
+# The marker may also name the whole site as "*".
+render_case roles-open-site-guarded-everything pass <<'EOF'
+# scaffold-card-pages: /anything "Anything"
+app.{$DOMAIN} {
+	handle /* {
+		import role "app" "user" app:8080
+	}
+	handle {
+		# scaffold-lint: open-path -- *: never reached
+		reverse_proxy app:8080 {
+			import strip_public
+		}
+	}
+}
+EOF
+cat > "$work/roles-open-site-guarded-everything.golden" <<'EOF'
+app	user	User	app.{$DOMAIN}
+@label	app	App
+@source	app	apps/app/app.caddy
+@path	app	/*	user
+@open	app	*	never reached
+@card-page	app	/anything	Anything
+EOF
+if diff -u "$work/roles-open-site-guarded-everything.golden" <(grep -v '^#' "$work/roles-open-site-guarded-everything-out/app-roles.tsv" | sed '/^$/d') >&2; then
+  pass "manifest: a guarded /* beside an open catch-all decides every path with the role"
+else
+  fail "manifest: the guarded /* beside an open catch-all differs (diff above)"
+fi
+# An open catch-all cannot sit beside a role guard at the top level, which
+# also decides "*".
+render_case roles-open-site-top-guard fail 'path \* is already decided' <<'EOF'
+app.{$DOMAIN} {
+	handle {
+		# scaffold-lint: open-path -- /*: the public pages
+		reverse_proxy app:8080 {
+			import strip_public
+		}
+	}
+	import role "app" "user" app:8080
 }
 EOF
 render_case roles-open-top-level fail 'an open-path marker at the top level' <<'EOF'

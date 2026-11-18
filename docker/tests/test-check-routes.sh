@@ -194,6 +194,43 @@ else
   fail "an app declared before the switch was requested: $(cat "$work/out.log") $(cat "$CURL_LOG")"
 fi
 
+# 7. A public site with protected sections: "@open home *" asks for a made-up
+#    path, which must be served without sign-in, and the guarded sections
+#    and the path beside an open path inside them are still asked for.
+cat > "$work/app-roles.tsv" <<'EOF'
+home	user	User	{$DOMAIN}
+@label	home	RCH Anaesthesia
+@source	home	apps/home/home.caddy
+@path	home	/useful-numbers /useful-numbers/* /guidelines /guidelines/* /cardiac /cardiac/*	user
+@open	home	/guidelines/index.json	the search index
+@open	home	*	the homepage and service directory are public
+EOF
+site_answers() {
+  answers "https://example.org/useful-numbers|302|$login" \
+          "https://example.org/useful-numbers/scaffold-route-check|302|$login" \
+          "https://example.org/guidelines|302|$login" \
+          "https://example.org/guidelines/scaffold-route-check|302|$login" \
+          "https://example.org/cardiac|302|$login" \
+          "https://example.org/cardiac/scaffold-route-check|302|$login" \
+          "https://example.org/guidelines/index.json|200|" \
+          "https://example.org/guidelines/index.json/scaffold-route-check-beside|302|$login" \
+          "$@"
+}
+site_answers "https://example.org/scaffold-route-check-elsewhere|404|"
+if run && grep -q '9 path(s) answered as the manifest declares' "$work/out.log" \
+   && grep -q 'ok   example.org/scaffold-route-check-elsewhere (home, open): 404' "$work/out.log" \
+   && grep -q 'ok   example.org/guidelines/index.json/scaffold-route-check-beside (home, user, beside the open path /guidelines/index.json)' "$work/out.log"; then
+  pass "an open \"*\" is asked for at a made-up path, beside the guarded sections"
+else
+  fail "the public site with protected sections was not checked as declared: $(cat "$work/out.log")"
+fi
+site_answers "https://example.org/scaffold-route-check-elsewhere|302|$login"
+if ! run && grep -q 'FAIL example.org/scaffold-route-check-elsewhere (home, open): an open path was sent to sign in' "$work/out.log"; then
+  pass "an open \"*\" that is sent to sign in fails"
+else
+  fail "an open \"*\" sent to sign in was not reported: $(cat "$work/out.log")"
+fi
+
 echo
 if [[ $failures -gt 0 ]]; then
   echo "$failures check(s) failed" >&2

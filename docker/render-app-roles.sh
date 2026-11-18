@@ -59,9 +59,16 @@
 # top-level handle (an inline path, a one-line "@name path ..." matcher, or no
 # matcher at all, which is "*"); an open handle is the one carrying the
 # renderer's "# scaffold-lint: open-path -- <paths>: <reason>" marker, and the
-# manifest takes its reason from the text after the colon. A path_regexp
-# matcher is refused, open or guarded, because Caddy may answer more paths
-# than any list of patterns says.
+# manifest takes its reason from the text after the colon. A catch-all handle
+# may be open only when its marker names the whole site outright, as
+#
+#   # scaffold-lint: open-path -- /*: <reason>
+#
+# (or "*"), for a site that is public apart from the sections its other
+# handles guard; the manifest then has "@open app * reason", and the guarded
+# handles still decide their own paths. A path_regexp matcher is refused,
+# open or guarded, because Caddy may answer more paths than any list of
+# patterns says.
 #
 # The render fails, with the file and line, on: a guard that names a role the
 # app does not declare; one app in two site blocks (in one snippet or two); a
@@ -70,7 +77,9 @@
 # X-Auth-Policy), which the gateway would refuse; a route block at the top level
 # of the site, which Caddy runs after every handle whatever its path (import
 # role or a role gate at the top level is the one exception, and decides
-# "*"); an open-path marker on a catch-all handle, or at the top level of the site; a card page that a user-guarded path does not decide;
+# "*"); an open-path marker at the top level of the site; an open-path
+# marker on a catch-all handle that lists anything but the whole site (see
+# below); a card page that a user-guarded path does not decide;
 # an app with role guards but none for the user role; a path the manifest
 # cannot express; a path declared twice; two handles whose paths overlap
 # (ignoring case) but that decide differently, because Caddy does not always
@@ -341,7 +350,7 @@ if [[ ${#snippets[@]} -gt 0 ]]; then
         err(FILENAME, site_line, "app \"" app "\" has role guards but none for the user role: guard the paths every signed-in user may open with import role \"" app "\" \"user\" <upstream>")
       }
       if (top_open_line) {
-        err(FILENAME, top_open_line, "an open-path marker at the top level of site " site_addr " would open every path of app \"" app "\" that no handle names; give the open paths their own handle and matcher")
+        err(FILENAME, top_open_line, "an open-path marker at the top level of site " site_addr " would open every path of app \"" app "\" that no handle names; give the open paths their own handle and matcher, or, if every path no other handle names is public, put the directive in a catch-all handle with the marker \"# scaffold-lint: open-path -- /*: <reason>\"")
       }
       # The path lines, in the order of the handles.
       split("", pat_line); split("", l_kind); split("", l_pats); split("", l_value); split("", l_line); nl = 0
@@ -350,8 +359,15 @@ if [[ ${#snippets[@]} -gt 0 ]]; then
           err(FILENAME, h_line[i], "this handle carries both a role guard and an open-path marker; a path is either guarded or open")
           continue
         }
+        # A catch-all handle may be open only when its marker names the
+        # whole site outright, "/*" or "*": a public site with protected
+        # sections. Any other list would open more than it says.
         if (h_open[i] && (h_spec[i] == "" || h_spec[i] == "*")) {
-          err(FILENAME, h_line[i], "an open-path marker on a catch-all handle would open every path of app \"" app "\" that no other handle names; give the open paths their own matcher")
+          if (h_mpaths[i] != "/*" && h_mpaths[i] != "*") {
+            err(FILENAME, h_line[i], "an open-path marker on a catch-all handle would open every path of app \"" app "\" that no other handle names, but it lists \"" h_mpaths[i] "\"; give those paths their own matcher, or, if every path no other handle names is public, write the marker as \"# scaffold-lint: open-path -- /*: <reason>\"")
+            continue
+          }
+          add_line("@open", "*", h_reason[i], h_line[i])
           continue
         }
         if (h_app[i] == "" && !h_open[i]) { continue }

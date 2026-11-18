@@ -279,8 +279,15 @@ The render fails, naming the file and line, in each of these cases:
 - a `route` block sits at the top level of the site, where Caddy runs it
   after every `handle` whatever its path (write it as a `handle`; a `route`
   inside a `handle` is fine, and `import role` at the top level decides `*`);
-- an open-path marker sits on a catch-all `handle` or at the top level of the
-  site, where it would open every path that no other handle names;
+- an open-path marker sits at the top level of the site, or on a catch-all
+  `handle` and names paths other than the whole site (`/*` or `*`), where it
+  would open every path that no other handle names;
+- in a site whose catch-all is open, a guarded exact path such as
+  `/guidelines` lacks `/guidelines/*` (or `/guidelines*`) guarded by the same
+  role, so the catch-all would answer `/guidelines/` and the paths below it;
+- a `handle`, `handle_path` or `invoke` sits inside a guarded handle, where
+  Caddy would run it before the gate (put those paths in a top-level handle
+  with a guard of their own; a `route` inside a guarded handle is fine);
 - a card page is decided by an open path or by a role other than `user`;
 - a handle's matcher is not a path matcher (`path_regexp` included), a path
   cannot be written as an exact path or a prefix ending in `*`, or two
@@ -311,6 +318,43 @@ The list of groups each app may read from the members endpoint,
 `.generated/caddy/member-readers.tsv`, is mounted beside it in the same way
 as `MEMBER_READERS_FILE`; docs/04 "An app that reads group members" gives
 the lines.
+
+### A public site with protected sections
+
+A site that is public apart from a few sections guards those sections in a
+handle of their own and leaves the catch-all `handle` open. The marker on the
+catch-all must name the whole site, as `/*` or `*`:
+
+```caddyfile
+{$DOMAIN} {
+	@gated path /guidelines /guidelines/* /cardiac /cardiac/*
+	handle @gated {
+		import role_gate "home" "user"
+		file_server
+	}
+	handle {
+		# scaffold-lint: open-path -- /*: the homepage and service directory are public
+		file_server
+	}
+}
+```
+
+The manifest then holds `@open	home	*	<reason>`, and the guarded handle still
+decides its own paths. Each guarded section needs its exact path and its
+prefix, as `/guidelines /guidelines/*`, because the open catch-all would
+otherwise answer `/guidelines/` and every path below it; the renderer refuses
+an exact path without its prefix. The renderer also refuses a catch-all
+marker that lists anything narrower than the whole site, and an open-path
+marker at the top level of the site, so the open directives belong in the
+catch-all `handle`. A card page must sit under a guarded section, not on a
+page the catch-all decides.
+
+This shape is meant for a site that Caddy's `file_server` answers, or for an
+upstream that reads a path exactly as Caddy matches it. Caddy decides which
+handle answers from the path as it arrives, so an upstream that drops a
+`;parameter` from a path segment, or reads `\` as `/`, can be asked for a
+guarded page by a path that Caddy sends to the open catch-all. Such an app
+should keep a guarded catch-all and open only the paths it names.
 
 ### Declaring roles before switching
 
@@ -357,7 +401,12 @@ signing in, and fails if a guarded path is served or an open path is sent to
 the sign-in page. Beside each open path it also requests one path that the
 open path does not cover, such as `/faq/scaffold-route-check-beside` for
 `/faq` or `/static` for `/static/*`, and fails if that path is served without
-sign-in. On the server, from `/opt/deploy`, run:
+sign-in. For an open `*` it requests a made-up path,
+`/scaffold-route-check-elsewhere`, which must be served without sign-in.
+Below each exact guarded path it requests one more, such as
+`/guidelines/scaffold-route-check` for `/guidelines`, which must be sent to
+sign in. On
+the server, from `/opt/deploy`, run:
 
 ```bash
 bash scaffold/docker/check-routes.sh --connect 127.0.0.1 example.org

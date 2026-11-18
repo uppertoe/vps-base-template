@@ -328,6 +328,60 @@ app.{$DOMAIN} {
 }
 EOF
 
+# A handle nested beside a guard snippet in a handle: Caddy sorts the nested
+# handle ahead of the route (or the reverse_proxy of auth_gate) that the
+# snippet expands to, so the nested handle answers before the gate runs.
+render_case nested-handle-under-guard fail "$open_err" <<'EOF'
+app.{$DOMAIN} {
+	root * /srv/www/app
+	handle /staff/* {
+		import protected_domains_gate "example.org"
+		handle /staff/sub/* {
+			file_server
+		}
+		file_server
+	}
+	handle {
+		# scaffold-lint: open-path -- /*: the public pages
+		file_server
+	}
+}
+EOF
+# Inside a route the written order holds, so handles after the gate are
+# covered (the Planka shape); so are handles beside a forward_auth, which
+# Caddy sorts ahead of handle.
+render_case nested-handle-in-gated-route pass <<'EOF'
+app.{$DOMAIN} {
+	@cover path /cover.jpg
+	route {
+		import strip_client_identity
+		import auth_gate "groups=app-users"
+		handle @cover {
+			file_server
+		}
+		handle {
+			reverse_proxy app:8080 {
+				import strip_auth_cookie
+			}
+		}
+	}
+}
+EOF
+render_case nested-handle-beside-forward-auth pass <<'EOF'
+app.{$DOMAIN} {
+	handle /staff/* {
+		forward_auth auth:8080 {
+			uri /verify
+			header_up X-Auth-Policy "domains=example.org"
+		}
+		handle /staff/sub/* {
+			file_server
+		}
+		file_server
+	}
+}
+EOF
+
 # The site block is the outermost frame: a reverse_proxy at the site's top
 # level beside a guard that sits only inside a handle answers every path the
 # handle does not match, and is refused like an open handle would be.
@@ -708,16 +762,188 @@ app.{$DOMAIN} {
 	}
 }
 EOF
-render_case roles-open-catch-all fail 'an open-path marker on a catch-all handle' <<'EOF'
+# A catch-all handle opens every path no other handle names, so its marker
+# must say so outright, "/*" or "*"; a narrower list, or prose in place of
+# the paths, is refused.
+render_case roles-open-catch-all fail 'an open-path marker on a catch-all handle would open every path of app "app" that no other handle names, but it lists "/ /faq"' <<'EOF'
 app.{$DOMAIN} {
 	handle /account/* {
 		import role "app" "user" app:8080
 	}
 	handle {
-		# scaffold-lint: open-path -- /*: everything else is public
+		# scaffold-lint: open-path -- / /faq: the landing page and the faq
 		reverse_proxy app:8080 {
 			import strip_public
 		}
+	}
+}
+EOF
+render_case roles-open-catch-all-prose fail 'but it lists "everything else"' <<'EOF'
+app.{$DOMAIN} {
+	handle /account/* {
+		import role "app" "user" app:8080
+	}
+	handle * {
+		# scaffold-lint: open-path -- everything else: the public pages
+		reverse_proxy app:8080 {
+			import strip_public
+		}
+	}
+}
+EOF
+# A public site with protected sections, in the shape of RCH's home page: the
+# catch-all handle is open with the marker "/*", and the manifest says "*"
+# is open while the guarded handle decides its own paths.
+render_case roles-open-site pass <<'EOF'
+# scaffold-app: home
+# scaffold-app-label: "RCH Anaesthesia"
+{$DOMAIN}, www.{$DOMAIN} {
+	@gated path /useful-numbers /useful-numbers/* /guidelines /guidelines/* /cardiac /cardiac/*
+	handle @gated {
+		import role_gate "home" "user"
+		file_server
+	}
+	handle {
+		# scaffold-lint: open-path -- /*: the homepage and service directory are public; the paths above are gated
+		file_server
+	}
+}
+EOF
+cat > "$work/roles-open-site.golden" <<'EOF'
+home	user	User	{$DOMAIN},www.{$DOMAIN}
+@label	home	RCH Anaesthesia
+@source	home	apps/app/app.caddy
+@path	home	/useful-numbers /useful-numbers/* /guidelines /guidelines/* /cardiac /cardiac/*	user
+@open	home	*	the homepage and service directory are public; the paths above are gated
+EOF
+if diff -u "$work/roles-open-site.golden" <(grep -v '^#' "$work/roles-open-site-out/app-roles.tsv" | sed '/^$/d') >&2; then
+  pass "manifest: a public site with protected sections opens \"*\" and guards its sections"
+else
+  fail "manifest: the public site with protected sections differs (diff above)"
+fi
+expect_row roles-open-site $'{$DOMAIN},www.{$DOMAIN}\troles\thome user'
+expect_row roles-open-site $'{$DOMAIN},www.{$DOMAIN}\tpublic\t/*: the homepage and service directory are public; the paths above are gated'
+# A card page that the open catch-all decides is refused; one under a
+# guarded section is accepted.
+render_case roles-open-site-card fail 'card page /contacts is not under a path guarded by import role "home" "user"; a break-glass card holds only the user role (an open path decides it)' <<'EOF'
+# scaffold-card-pages: /contacts "Contacts" /guidelines/airway "Airway"
+{$DOMAIN} {
+	@gated path /guidelines /guidelines/*
+	handle @gated {
+		import role_gate "home" "user"
+		file_server
+	}
+	handle {
+		# scaffold-lint: open-path -- /*: the homepage is public
+		file_server
+	}
+}
+EOF
+if grep -q 'card page /guidelines/airway' "$work/roles-open-site-card.err"; then
+  fail "manifest: a card page under the guarded section was refused"; cat "$work/roles-open-site-card.err" >&2
+else
+  pass "manifest: a card page under the guarded section of an open site is accepted"
+fi
+# An open catch-all beside a guarded handle that also matches every path
+# ("/*"): Caddy tries the handle with a path matcher first, so every path is
+# guarded, and the gateway agrees, since the prefix "/*" decides before "*".
+# The marker may also name the whole site as "*".
+render_case roles-open-site-guarded-everything pass <<'EOF'
+# scaffold-card-pages: /anything "Anything"
+app.{$DOMAIN} {
+	handle /* {
+		import role "app" "user" app:8080
+	}
+	handle {
+		# scaffold-lint: open-path -- *: never reached
+		reverse_proxy app:8080 {
+			import strip_public
+		}
+	}
+}
+EOF
+cat > "$work/roles-open-site-guarded-everything.golden" <<'EOF'
+app	user	User	app.{$DOMAIN}
+@label	app	App
+@source	app	apps/app/app.caddy
+@path	app	/*	user
+@open	app	*	never reached
+@card-page	app	/anything	Anything
+EOF
+if diff -u "$work/roles-open-site-guarded-everything.golden" <(grep -v '^#' "$work/roles-open-site-guarded-everything-out/app-roles.tsv" | sed '/^$/d') >&2; then
+  pass "manifest: a guarded /* beside an open catch-all decides every path with the role"
+else
+  fail "manifest: the guarded /* beside an open catch-all differs (diff above)"
+fi
+# An open catch-all cannot sit beside a role guard at the top level, which
+# also decides "*".
+render_case roles-open-site-top-guard fail 'path \* is already decided' <<'EOF'
+app.{$DOMAIN} {
+	handle {
+		# scaffold-lint: open-path -- /*: the public pages
+		reverse_proxy app:8080 {
+			import strip_public
+		}
+	}
+	import role "app" "user" app:8080
+}
+EOF
+# With the catch-all open, a guarded exact path leaves the paths below it,
+# /guidelines/ included, to the catch-all: the file server would list or
+# serve them. The paths below must be guarded by the same role.
+render_case roles-open-site-exact fail 'guarded path /guidelines is exact, but the open catch-all of site app.{.DOMAIN} would answer /guidelines/ and every path below it; add /guidelines/\* to the same guarded matcher' <<'EOF'
+app.{$DOMAIN} {
+	handle /guidelines {
+		import role_gate "app" "user"
+		file_server
+	}
+	handle {
+		# scaffold-lint: open-path -- /*: the public pages
+		file_server
+	}
+}
+EOF
+render_case roles-open-site-exact-slash fail 'guarded path /guidelines/ is exact, but the open catch-all of site app.{.DOMAIN} would answer every path below it; add /guidelines/\* to the same guarded matcher' <<'EOF'
+app.{$DOMAIN} {
+	handle /guidelines/ {
+		import role_gate "app" "user"
+		file_server
+	}
+	handle {
+		# scaffold-lint: open-path -- /*: the public pages
+		file_server
+	}
+}
+EOF
+# The paths below guarded by another role do not count.
+render_case roles-open-site-exact-other-role fail 'guarded path /reports is exact' <<'EOF'
+# scaffold-roles: admin "Administrator"
+app.{$DOMAIN} {
+	handle /reports {
+		import role_gate "app" "user"
+		file_server
+	}
+	handle /reports/* {
+		import role_gate "app" "admin"
+		file_server
+	}
+	handle {
+		# scaffold-lint: open-path -- /*: the public pages
+		file_server
+	}
+}
+EOF
+# P/* or P* beside P, guarded by the same role, renders.
+render_case roles-open-site-exact-covered pass <<'EOF'
+app.{$DOMAIN} {
+	@gated path /guidelines /guidelines/* /cardiac /cardiac*
+	handle @gated {
+		import role_gate "app" "user"
+		file_server
+	}
+	handle {
+		# scaffold-lint: open-path -- /*: the public pages
+		file_server
 	}
 }
 EOF
@@ -879,6 +1105,48 @@ app.{$DOMAIN} {
 	}
 	handle {
 		import role "app" "user" app:8080
+	}
+}
+EOF
+# A role guard expands to a route, and Caddy sorts a nested handle,
+# handle_path or invoke ahead of it, so each would answer before the gate.
+# The marker satisfies the route lint; the roles renderer still refuses.
+render_case roles-nested-handle fail 'app.caddy:5: this block sits inside a handle guarded by import role (line 4), but Caddy runs a nested handle, handle_path or invoke before the gate' <<'EOF'
+app.{$DOMAIN} {
+	@gated path /guidelines /guidelines/*
+	handle @gated {
+		import role_gate "app" "user"
+		handle /guidelines/sub/* {
+			# scaffold-lint: open-path -- /guidelines/sub/*: meant to be gated
+			file_server
+		}
+		file_server
+	}
+	handle {
+		# scaffold-lint: open-path -- /*: the public pages
+		file_server
+	}
+}
+EOF
+render_case roles-nested-handle-path fail 'Caddy runs a nested handle, handle_path or invoke before the gate' <<'EOF'
+app.{$DOMAIN} {
+	handle /docs/* {
+		import role "app" "user" app:8080
+		handle_path /docs/old/* {
+			# scaffold-lint: open-path -- /docs/old/*: meant to be gated
+			reverse_proxy app:8080 {
+				import strip_public
+			}
+		}
+	}
+}
+EOF
+render_case roles-nested-invoke fail 'Caddy runs a nested handle, handle_path or invoke before the gate' <<'EOF'
+app.{$DOMAIN} {
+	handle {
+		import role_gate "app" "user"
+		invoke public_pages
+		file_server
 	}
 }
 EOF

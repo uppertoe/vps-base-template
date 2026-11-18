@@ -25,7 +25,11 @@
 # not cover and a guarded line decides: below an exact open path ("/faq"
 # asks for /faq/scaffold-route-check-beside) and, for a prefix ending in "/*",
 # the prefix without its slash ("/static/*" asks for /static), so that an
-# open matcher wider than the manifest says is caught. The expectations are:
+# open matcher wider than the manifest says is caught. Below each exact path a
+# role guards it asks for one more path ("/guidelines" asks for
+# /guidelines/scaffold-route-check), which must be sent to sign in unless an
+# open pattern other than "*" names it, so that a guarded page whose paths
+# below fall to an open catch-all is caught. The expectations are:
 #
 #   * a path that needs a role answers a redirect to the gateway's /login
 #     page (on the --auth-host), because the request carries no session; an
@@ -107,6 +111,7 @@ plan() {
           if (s > score) { score = s; best = i }
         }
       }
+      dscore = score
       return best
     }
     # A path just outside an open pattern, or "" when there is none to ask.
@@ -150,6 +155,22 @@ plan() {
               if (d == 0 || kind[app, d] != "guarded") { continue }
               asked[path] = 1
               printf "guarded\t%s\t%s\t%s\t%s\n", host, path, app, value[app, d] ", beside the open path " t[k]
+            }
+          }
+          # Below each exact guarded path: the same role in the manifest, or
+          # the open "*", which must not serve what sits below a guarded
+          # path. A path an open pattern names outright is not asked for.
+          for (i = 1; i <= nl[app]; i++) {
+            if (kind[app, i] != "guarded") { continue }
+            m = split(pats[app, i], t, " ")
+            for (k = 1; k <= m; k++) {
+              if (t[k] == "*" || t[k] ~ /\*$/) { continue }
+              path = t[k] (t[k] ~ /\/$/ ? "" : "/") "scaffold-route-check"
+              if (path in asked) { continue }
+              d = decide(app, path)
+              if (d == 0 || (kind[app, d] == "open" && dscore > 0)) { continue }
+              asked[path] = 1
+              printf "guarded\t%s\t%s\t%s\t%s\n", host, path, app, (kind[app, d] == "guarded" ? value[app, d] : value[app, i]) ", below the guarded path " t[k]
             }
           }
           for (c = 1; c <= nc[app]; c++) { printf "guarded\t%s\t%s\t%s\t%s\n", host, card[app, c], app, "user (card page)" }

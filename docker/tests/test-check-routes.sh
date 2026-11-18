@@ -194,6 +194,73 @@ else
   fail "an app declared before the switch was requested: $(cat "$work/out.log") $(cat "$CURL_LOG")"
 fi
 
+# 7. A public site with protected sections: "@open home *" asks for a made-up
+#    path, which must be served without sign-in, and the guarded sections
+#    and the path beside an open path inside them are still asked for.
+cat > "$work/app-roles.tsv" <<'EOF'
+home	user	User	{$DOMAIN}
+@label	home	RCH Anaesthesia
+@source	home	apps/home/home.caddy
+@path	home	/useful-numbers /useful-numbers/* /guidelines /guidelines/* /cardiac /cardiac/*	user
+@open	home	/guidelines/index.json	the search index
+@open	home	*	the homepage and service directory are public
+EOF
+site_answers() {
+  answers "https://example.org/useful-numbers|302|$login" \
+          "https://example.org/useful-numbers/scaffold-route-check|302|$login" \
+          "https://example.org/guidelines|302|$login" \
+          "https://example.org/guidelines/scaffold-route-check|302|$login" \
+          "https://example.org/cardiac|302|$login" \
+          "https://example.org/cardiac/scaffold-route-check|302|$login" \
+          "https://example.org/guidelines/index.json|200|" \
+          "https://example.org/guidelines/index.json/scaffold-route-check-beside|302|$login" \
+          "$@"
+}
+site_answers "https://example.org/scaffold-route-check-elsewhere|404|"
+if run && grep -q '9 path(s) answered as the manifest declares' "$work/out.log" \
+   && grep -q 'ok   example.org/scaffold-route-check-elsewhere (home, open): 404' "$work/out.log" \
+   && grep -q 'ok   example.org/guidelines/index.json/scaffold-route-check-beside (home, user, beside the open path /guidelines/index.json)' "$work/out.log"; then
+  pass "an open \"*\" is asked for at a made-up path, beside the guarded sections"
+else
+  fail "the public site with protected sections was not checked as declared: $(cat "$work/out.log")"
+fi
+site_answers "https://example.org/scaffold-route-check-elsewhere|302|$login"
+if ! run && grep -q 'FAIL example.org/scaffold-route-check-elsewhere (home, open): an open path was sent to sign in' "$work/out.log"; then
+  pass "an open \"*\" that is sent to sign in fails"
+else
+  fail "an open \"*\" sent to sign in was not reported: $(cat "$work/out.log")"
+fi
+
+# 8. Below an exact guarded path, a path is asked for and must be sent to
+#    sign in, even where the manifest leaves it to the open "*"; one that an
+#    open pattern names outright is not asked for.
+cat > "$work/app-roles.tsv" <<'EOF'
+home	user	User	{$DOMAIN}
+@path	home	/guidelines /staff/	user
+@open	home	/staff/scaffold-route-check	a page that happens to share the name
+@open	home	*	the homepage is public
+EOF
+below_answers() {
+  answers "https://example.org/guidelines|302|$login" \
+          "https://example.org/staff/|302|$login" \
+          "https://example.org/staff/scaffold-route-check|200|" \
+          "https://example.org/scaffold-route-check-elsewhere|200|" \
+          "$@"
+}
+below_answers "https://example.org/guidelines/scaffold-route-check|302|$login"
+if run && grep -q '5 path(s) answered as the manifest declares' "$work/out.log" \
+   && grep -q 'ok   example.org/guidelines/scaffold-route-check (home, user, below the guarded path /guidelines)' "$work/out.log"; then
+  pass "a path below an exact guarded path is asked for and sent to sign in"
+else
+  fail "the path below an exact guarded path was not checked: $(cat "$work/out.log")"
+fi
+below_answers "https://example.org/guidelines/scaffold-route-check|200|"
+if ! run && grep -q 'FAIL example.org/guidelines/scaffold-route-check (home, user, below the guarded path /guidelines): answered 200 without sign-in' "$work/out.log"; then
+  pass "a path below an exact guarded path served by the open \"*\" fails"
+else
+  fail "a path below an exact guarded path served open was not reported: $(cat "$work/out.log")"
+fi
+
 echo
 if [[ $failures -gt 0 ]]; then
   echo "$failures check(s) failed" >&2

@@ -33,6 +33,37 @@ of the actions, once.
 
 ---
 
+## 2026-11-18 — A site guarded by roles may be public apart from its protected sections
+
+In a site guarded by app roles, the renderer now accepts an open-path marker
+on the catch-all `handle` when the marker names the whole site, as
+`# scaffold-lint: open-path -- /*: <reason>` (or `*`). The manifest then
+holds `@open<TAB><app><TAB>*<TAB><reason>`, and the guarded handles still
+decide their own paths. A catch-all marker that lists any other paths, and an
+open-path marker at the top level of the site, are still refused.
+`check-routes.sh` asks for a made-up path under the open `*` and fails if it
+is sent to sign in. docs/07 "A public site with protected sections" gives
+the shape.
+
+With the catch-all open, a guarded exact path such as `/guidelines` must be
+paired with `/guidelines/*` under the same role, or the render fails.
+`check-routes.sh` now also asks for a path below every exact guarded path,
+such as `/guidelines/scaffold-route-check`, and expects it to be sent to sign
+in.
+
+The render now also fails on a `handle`, `handle_path` or `invoke` nested
+inside a handle guarded by a role, because Caddy runs it before the gate. The
+route lint no longer counts a guard snippet in an enclosing handle as
+covering a nested `handle`, for the same reason; a guard inside a `route`,
+and a `forward_auth`, still cover what is nested beside them.
+
+**Operator actions:** none for RCH, MCH and markbot, whose snippets render
+unchanged. A server repo with a handle nested beside a guard import must give
+those paths a handle of their own with the guard inside it. The gateway
+already reads an open `*` line.
+
+---
+
 ## 2026-11-18 — Roles can be declared before the switch; two more role guards
 
 A site still on the older guards may now name its app with

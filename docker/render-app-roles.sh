@@ -59,9 +59,16 @@
 # top-level handle (an inline path, a one-line "@name path ..." matcher, or no
 # matcher at all, which is "*"); an open handle is the one carrying the
 # renderer's "# scaffold-lint: open-path -- <paths>: <reason>" marker, and the
-# manifest takes its reason from the text after the colon. A path_regexp
-# matcher is refused, open or guarded, because Caddy may answer more paths
-# than any list of patterns says.
+# manifest takes its reason from the text after the colon. A catch-all handle
+# may be open only when its marker names the whole site outright, as
+#
+#   # scaffold-lint: open-path -- /*: <reason>
+#
+# (or "*"), for a site that is public apart from the sections its other
+# handles guard; the manifest then has "@open app * reason", and the guarded
+# handles still decide their own paths. A path_regexp matcher is refused,
+# open or guarded, because Caddy may answer more paths than any list of
+# patterns says.
 #
 # The render fails, with the file and line, on: a guard that names a role the
 # app does not declare; one app in two site blocks (in one snippet or two); a
@@ -70,13 +77,18 @@
 # X-Auth-Policy), which the gateway would refuse; a route block at the top level
 # of the site, which Caddy runs after every handle whatever its path (import
 # role or a role gate at the top level is the one exception, and decides
-# "*"); an open-path marker on a catch-all handle, or at the top level of the site; a card page that a user-guarded path does not decide;
+# "*"); an open-path marker at the top level of the site; an open-path
+# marker on a catch-all handle that lists anything but the whole site (see
+# below); a card page that a user-guarded path does not decide;
 # an app with role guards but none for the user role; a path the manifest
 # cannot express; a path declared twice; two handles whose paths overlap
 # (ignoring case) but that decide differently, because Caddy does not always
 # try the more specific handle first; a marker on a site with no role guard
-# and no app marker; and an app marker that names an app other than the
-# guards'.
+# and no app marker; an app marker that names an app other than the
+# guards'; in a site whose catch-all is open, a guarded exact path P whose
+# paths below (P/*, or P* for a P that ends in /) the same role does not
+# guard; and a handle, handle_path or invoke nested inside a guarded
+# handle, which Caddy runs before the route the guard expands to.
 #
 # An open handle may still ask the gateway who is signed in, so that a public
 # page can greet a signed-in visitor: a reverse_proxy to the gateway's /verify,
@@ -174,7 +186,7 @@ if [[ ${#snippets[@]} -gt 0 ]]; then
       split("", role_label); split("", role_order); nroles = 0
       split("", card_path); split("", card_label); split("", card_line); ncards = 0
       split("", mkind); split("", mpats)
-      split("", h_line); split("", h_spec); split("", h_open); split("", h_reason); split("", h_mpaths)
+      split("", h_line); split("", h_spec); split("", h_open); split("", h_reason); split("", h_mpaths); split("", h_nested)
       split("", h_app); split("", h_role); split("", h_guard_line); nh = 0
       split("", ask_kind); split("", ask_value); split("", ask_line); nask = 0
       app_label = ""; has_marker = 0; marker_line = 0; decl_app = ""; decl_app_line = 0
@@ -279,8 +291,17 @@ if [[ ${#snippets[@]} -gt 0 ]]; then
       if (pb == "") { return substr(b, 1, length(pa)) == pa }
       return substr(pa, 1, length(pb)) == pb || substr(pb, 1, length(pa)) == pa
     }
+    # Whether pattern p is on a @path line with the role of line i.
+    function same_role(p, i,    j, m, u, k) {
+      for (j = 1; j <= nl; j++) {
+        if (l_kind[j] != "@path" || l_value[j] != l_value[i]) { continue }
+        m = split(l_pats[j], u, " ")
+        for (k = 1; k <= m; k++) { if (u[k] == p) { return 1 } }
+      }
+      return 0
+    }
     function decision(i) { return l_kind[i] == "@open" ? "open" : "the " l_value[i] " role" }
-    function finish_site(    i, j, m, q, u, app, guarded, has_user, pats, buf, k, n, t, d) {
+    function finish_site(    i, j, m, q, u, app, guarded, has_user, pats, buf, k, n, t, d, open_rest) {
       app = ""; guarded = 0; has_user = 0
       if (top_app != "") { app = top_app; guarded = 1 }
       for (i = 1; i <= nh; i++) {
@@ -341,7 +362,15 @@ if [[ ${#snippets[@]} -gt 0 ]]; then
         err(FILENAME, site_line, "app \"" app "\" has role guards but none for the user role: guard the paths every signed-in user may open with import role \"" app "\" \"user\" <upstream>")
       }
       if (top_open_line) {
-        err(FILENAME, top_open_line, "an open-path marker at the top level of site " site_addr " would open every path of app \"" app "\" that no handle names; give the open paths their own handle and matcher")
+        err(FILENAME, top_open_line, "an open-path marker at the top level of site " site_addr " would open every path of app \"" app "\" that no handle names; give the open paths their own handle and matcher, or, if every path no other handle names is public, put the directive in a catch-all handle with the marker \"# scaffold-lint: open-path -- /*: <reason>\"")
+      }
+      # A role guard expands to a route, and Caddy sorts handle, handle_path
+      # and invoke ahead of route inside a block, so anything nested that way
+      # in a guarded handle answers before the gate does.
+      for (i = 1; i <= nh; i++) {
+        if (h_app[i] != "" && h_nested[i]) {
+          err(FILENAME, h_nested[i], "this block sits inside a handle guarded by import role (line " h_guard_line[i] "), but Caddy runs a nested handle, handle_path or invoke before the gate, so it would answer without one; give these paths a top-level handle of their own with the guard inside it")
+        }
       }
       # The path lines, in the order of the handles.
       split("", pat_line); split("", l_kind); split("", l_pats); split("", l_value); split("", l_line); nl = 0
@@ -350,8 +379,15 @@ if [[ ${#snippets[@]} -gt 0 ]]; then
           err(FILENAME, h_line[i], "this handle carries both a role guard and an open-path marker; a path is either guarded or open")
           continue
         }
+        # A catch-all handle may be open only when its marker names the
+        # whole site outright, "/*" or "*": a public site with protected
+        # sections. Any other list would open more than it says.
         if (h_open[i] && (h_spec[i] == "" || h_spec[i] == "*")) {
-          err(FILENAME, h_line[i], "an open-path marker on a catch-all handle would open every path of app \"" app "\" that no other handle names; give the open paths their own matcher")
+          if (h_mpaths[i] != "/*" && h_mpaths[i] != "*") {
+            err(FILENAME, h_line[i], "an open-path marker on a catch-all handle would open every path of app \"" app "\" that no other handle names, but it lists \"" h_mpaths[i] "\"; give those paths their own matcher, or, if every path no other handle names is public, write the marker as \"# scaffold-lint: open-path -- /*: <reason>\"")
+            continue
+          }
+          add_line("@open", "*", h_reason[i], h_line[i])
           continue
         }
         if (h_app[i] == "" && !h_open[i]) { continue }
@@ -361,6 +397,23 @@ if [[ ${#snippets[@]} -gt 0 ]]; then
         else { add_line("@path", pats, h_role[i], h_guard_line[i]) }
       }
       if (top_app != "") { add_line("@path", "*", top_role, top_line) }
+      # With the catch-all open, a guarded exact path P leaves P/ and the
+      # paths below it to the catch-all, which a file server or an app may
+      # answer as the same page or directory. The paths below must be
+      # guarded by the same role.
+      open_rest = 0
+      for (i = 1; i <= nl; i++) { if (l_kind[i] == "@open" && l_pats[i] == "*") { open_rest = 1 } }
+      for (i = 1; open_rest && i <= nl; i++) {
+        if (l_kind[i] != "@path") { continue }
+        n = split(l_pats[i], t, " ")
+        for (k = 1; k <= n; k++) {
+          if (t[k] == "*" || t[k] ~ /\*$/) { continue }
+          q = (t[k] ~ /\/$/) ? t[k] "*" : t[k] "/*"
+          if (!(same_role(q, i) || (t[k] !~ /\/$/ && same_role(t[k] "*", i)))) {
+            err(FILENAME, l_line[i], "guarded path " t[k] " is exact, but the open catch-all of site " site_addr " would answer " (t[k] ~ /\/$/ ? "" : t[k] "/ and ") "every path below it; add " q " to the same guarded matcher")
+          }
+        }
+      }
       # Caddy does not always try the more specific of two handles first: it
       # sorts handles by path length only when both have a single path, and
       # keeps the written order otherwise, so the manifest cannot know which
@@ -486,6 +539,10 @@ if [[ ${#snippets[@]} -gt 0 ]]; then
             } else {
               if (pending_open) { top_open_line = pending_open; pending_open = 0 }
             }
+          } else if (cur && !in_errors && (trimmed ~ /^(handle|handle_path)([[:space:]]|\{)/ && line ~ /\{[[:space:]]*$/ || trimmed ~ /^invoke([[:space:]]|$)/)) {
+            # Caddy sorts a nested handle, handle_path or invoke ahead of the
+            # route a role guard expands to; checked when the site closes.
+            if (!h_nested[cur]) { h_nested[cur] = FNR }
           } else if (cur && !in_errors && trimmed ~ /^import (role|role_gate|role_redir|auth_gate_role)([[:space:]]|$)/) {
             if (guard(trimmed, FNR)) {
               if (h_app[cur] != "") { err(FILENAME, FNR, "a second role guard in one handle; give each role its own handle") }

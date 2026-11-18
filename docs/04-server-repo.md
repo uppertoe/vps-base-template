@@ -44,7 +44,8 @@ server-myserver/
 │   ├── networks.yml             ← per-app proxy-network wiring
 │   ├── route-groups.tsv         ← groups each route requires, for the auth service
 │   ├── route-access.tsv         ← each site's access rules, for the auth service
-│   └── app-roles.tsv            ← each app's roles and paths, for the auth service
+│   ├── app-roles.tsv            ← each app's roles and paths, for the auth service
+│   └── member-readers.tsv       ← the groups each app may read, for the auth service
 ├── Caddyfile.local              ← local dev (self-signed certs)
 ├── docker-compose.yml           ← includes scaffold base + each app
 ├── docker-compose.override.yml.example
@@ -150,8 +151,10 @@ site's guard requires, which the auth service mounts so its Groups page can
 list the groups the routes use), `.generated/caddy/route-access.tsv` (who
 can reach each site, described below) and `.generated/caddy/app-roles.tsv`
 (the roles and paths of every app guarded with `import role`, which the auth
-service reads as `APP_ROLES_FILE`; docs/07 "Protecting an app with roles").
-All five are committed like lockfiles; CI fails if they drift from the
+service reads as `APP_ROLES_FILE`; docs/07 "Protecting an app with roles")
+and `.generated/caddy/member-readers.tsv` (the groups each app may read from
+the gateway, described under "An app that reads group members" below).
+All six are committed like lockfiles; CI fails if they drift from the
 sources, and `audit-compose.yml` fails at runtime if two apps ever share a
 proxy network.
 
@@ -229,10 +232,18 @@ nobody is signed in, such as a weekly email to a group, reads the group's
 members from the gateway's members endpoint at the moment it needs them. It
 keeps no copy.
 
-Such an app's snippet carries a line written by vps-app-kit from the app's
-`app.yaml`:
+Put the groups the app reads in a marker line in the app's snippet;
+vps-app-kit writes it from the app's `app.yaml`:
 
     # scaffold-members: <groups> -- <why>
+
+The groups are separated by spaces or commas, and the text after ` -- ` is
+for the app and for people reading the snippet. An app may carry several
+marker lines, and the renderer takes every group they name. A group name
+follows the gateway's grammar, `^[a-z0-9][a-z0-9_-]*$`: lower case letters,
+digits, hyphens and underscores, starting with a letter or digit. The
+renderer refuses any other name, a marker that names no group, and the base
+roles `admin`, `user` and `guest` in any case.
 
 The renderer then gives the app an internal network, `<app>_members`, which
 only the gateway and that app join, so the app reaches `http://auth:8081`
@@ -240,15 +251,30 @@ and no other app can. Never put an app on `auth_proxy`, and never publish
 port 8081. The compose audit accepts the gateway on each `*_members` network
 and fails a second app on one.
 
-Enable the reading in `apps/auth/.env`, and give the app the same token:
+The renderer also writes `.generated/caddy/member-readers.tsv`, one
+`<app><TAB><group>` line for each group an app may read, and writes it with
+its header alone when no app has a marker. The gateway reads it as its list
+of readers once `apps/auth/docker-compose.yml` mounts it:
 
-    MEMBER_READERS=<app>=<group>,<group>
+```yaml
+    environment:
+      - MEMBER_READERS_FILE=/etc/vps-auth/member-readers.tsv
+    volumes:
+      - ../../.generated/caddy/member-readers.tsv:/etc/vps-auth/member-readers.tsv:ro
+```
+
+The only secret for each app is its token. Put it in `apps/auth/.env`:
+
     MEMBER_READER_TOKEN_<APP>=<openssl rand -hex 32>   # the app's name upper-cased, - as _
 
-and in `apps/<app>/.env`:
+and the same value in `apps/<app>/.env`:
 
     GATEWAY_MEMBERS_URL=http://auth:8081
     GATEWAY_MEMBERS_TOKEN=<the same token>
+
+The gateway still accepts `MEMBER_READERS=<app>=<group>,<group>` in
+`apps/auth/.env` and takes the union of it and the file, but a server whose
+apps carry the marker no longer needs it.
 
 After deploying, `docker compose exec <app> /app -members <group>` shows what
 the app receives. The gateway's README ("Group members for apps") describes

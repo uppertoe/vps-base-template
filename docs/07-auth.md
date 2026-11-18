@@ -343,11 +343,18 @@ The manifest then holds `@open	home	*	<reason>`, and the guarded handle still
 decides its own paths. Each guarded section needs its exact path and its
 prefix, as `/guidelines /guidelines/*`, because the open catch-all would
 otherwise answer `/guidelines/` and every path below it; the renderer refuses
-an exact path without its prefix. The renderer refuses a catch-all marker that lists
-anything narrower than the whole site, and an open-path marker at the top
-level of the site, so the open directives belong in the catch-all `handle`. A
-card page must sit under a guarded section, not on a page the catch-all
-decides.
+an exact path without its prefix. The renderer also refuses a catch-all
+marker that lists anything narrower than the whole site, and an open-path
+marker at the top level of the site, so the open directives belong in the
+catch-all `handle`. A card page must sit under a guarded section, not on a
+page the catch-all decides.
+
+This shape is meant for a site that Caddy's `file_server` answers, or for an
+upstream that reads a path exactly as Caddy matches it. Caddy decides which
+handle answers from the path as it arrives, so an upstream that drops a
+`;parameter` from a path segment, or reads `\` as `/`, can be asked for a
+guarded page by a path that Caddy sends to the open catch-all. Such an app
+should keep a guarded catch-all and open only the paths it names.
 
 ### Declaring roles before switching
 

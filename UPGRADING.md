@@ -45,8 +45,22 @@ open-path marker at the top level of the site, are still refused.
 is sent to sign in. docs/07 "A public site with protected sections" gives
 the shape.
 
-**Operator actions:** none. The rendered files change only for a site that
-moves to this shape, and the gateway already reads an open `*` line.
+With the catch-all open, a guarded exact path such as `/guidelines` must be
+paired with `/guidelines/*` under the same role, or the render fails.
+`check-routes.sh` now also asks for a path below every exact guarded path,
+such as `/guidelines/scaffold-route-check`, and expects it to be sent to sign
+in.
+
+The render now also fails on a `handle`, `handle_path` or `invoke` nested
+inside a handle guarded by a role, because Caddy runs it before the gate. The
+route lint no longer counts a guard snippet in an enclosing handle as
+covering a nested `handle`, for the same reason; a guard inside a `route`,
+and a `forward_auth`, still cover what is nested beside them.
+
+**Operator actions:** none for RCH, MCH and markbot, whose snippets render
+unchanged. A server repo with a handle nested beside a guard import must give
+those paths a handle of their own with the guard inside it. The gateway
+already reads an open `*` line.
 
 ---
 

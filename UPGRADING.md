@@ -33,6 +33,23 @@ of the actions, once.
 
 ---
 
+## 2026-11-18 — A site guarded by roles may be public apart from its protected sections
+
+In a site guarded by app roles, the renderer now accepts an open-path marker
+on the catch-all `handle` when the marker names the whole site, as
+`# scaffold-lint: open-path -- /*: <reason>` (or `*`). The manifest then
+holds `@open<TAB><app><TAB>*<TAB><reason>`, and the guarded handles still
+decide their own paths. A catch-all marker that lists any other paths, and an
+open-path marker at the top level of the site, are still refused.
+`check-routes.sh` asks for a made-up path under the open `*` and fails if it
+is sent to sign in. docs/07 "A public site with protected sections" gives
+the shape.
+
+**Operator actions:** none. The rendered files change only for a site that
+moves to this shape, and the gateway already reads an open `*` line.
+
+---
+
 ## 2026-11-18 — Roles can be declared before the switch; two more role guards
 
 A site still on the older guards may now name its app with

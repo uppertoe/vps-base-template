@@ -41,7 +41,10 @@
 #    against a golden file, and every refusal has a case. The gate written
 #    out in a route (import auth_gate_role) counts as import role does, and
 #    a cookie-optional verify on an open path is checked but is not a guard.
-#    So do import role_gate and import role_redir.
+#    So do import role_gate and import role_redir. A site still on the older
+#    guards may name its app with # scaffold-app: and declare its roles
+#    before the switch: the manifest marks the app @pending, and the older
+#    guards render byte for byte as they did.
 #
 # Go is needed for part 1 (it is on every GitHub-hosted runner); the test
 # fails plainly if it is missing rather than pretending to pass.
@@ -1266,6 +1269,156 @@ docs.{$DOMAIN} {
 	}
 }
 EOF
+
+# --- roles declared before the switch ------------------------------------------
+# A site still on the older guards names its app with # scaffold-app: and
+# declares its roles. The manifest has the role lines, @label, @source and
+# @pending, and no path or card-page lines; the older guards render as
+# before, in apps.caddy, route-access.tsv and route-groups.tsv alike.
+# shellcheck disable=SC2016 # {$DOMAIN} is Caddy's placeholder, written literally
+pending_site='roster.{$DOMAIN}, www.roster.{$DOMAIN} {
+	@feed path /feeds/*
+	handle @feed {
+		# scaffold-lint: open-path -- /feeds/*: the app checks the bearer token
+		reverse_proxy app:8080 {
+			import strip_public
+		}
+	}
+	handle {
+		import protected_access "example.org" "staff admin" app:8080
+	}
+}'
+mkdir -p "$work/pending-before/apps/app"
+printf '%s\n' "$pending_site" > "$work/pending-before/apps/app/app.caddy"
+bash "$renderer" "$work/pending-before" "$work/pending-before-out" >/dev/null
+{
+  printf '%s\n' '# scaffold-app: roster-insights' \
+    '# scaffold-app-label: "Roster insights"' \
+    '# scaffold-roles: admin "Administrator" editor "Editor"' \
+    '# scaffold-card-pages: /today "Today"'
+  printf '%s\n' "$pending_site"
+} | render_case pending pass
+manifest_is pending "a site on the older guards declares its roles before the switch" <<'EOF'
+roster-insights	user	User	roster.{$DOMAIN},www.roster.{$DOMAIN}
+roster-insights	admin	Administrator	roster.{$DOMAIN},www.roster.{$DOMAIN}
+roster-insights	editor	Editor	roster.{$DOMAIN},www.roster.{$DOMAIN}
+@label	roster-insights	Roster insights
+@source	roster-insights	apps/app/app.caddy
+@pending	roster-insights
+EOF
+for f in route-access.tsv route-groups.tsv networks.yml; do
+  if cmp -s "$work/pending-before-out/$f" "$work/pending-out/$f"; then
+    pass "pending: $f is what the site renders without the markers"
+  else
+    fail "pending: $f changed with the markers"; diff "$work/pending-before-out/$f" "$work/pending-out/$f" >&2 || true
+  fi
+done
+if diff <(grep -v 'scaffold-\(app\|app-label\|roles\|card-pages\):' "$work/pending-out/apps.caddy") "$work/pending-before-out/apps.caddy" >/dev/null; then
+  pass "pending: apps.caddy differs only by the marker lines"
+else
+  fail "pending: apps.caddy changed beyond the marker lines"
+fi
+
+# The app marker may sit inside the block, and an app may declare only the
+# user role.
+render_case pending-inside pass <<'EOF'
+app.{$DOMAIN} {
+	# scaffold-app: app
+	import protected app:8080
+}
+EOF
+manifest_is pending-inside "an app marker inside the block, with the user role alone" <<'EOF'
+app	user	User	app.{$DOMAIN}
+@label	app	App
+@source	app	apps/app/app.caddy
+@pending	app
+EOF
+
+# On a site guarded by roles the marker names the guards' app, and adds no
+# @pending line.
+render_case pending-guarded pass <<'EOF'
+# scaffold-app: app
+app.{$DOMAIN} {
+	import role "app" "user" app:8080
+}
+EOF
+manifest_is pending-guarded "an app marker that names the guards' app adds no @pending line" <<'EOF'
+app	user	User	app.{$DOMAIN}
+@label	app	App
+@source	app	apps/app/app.caddy
+@path	app	*	user
+EOF
+
+# The refusals.
+# shellcheck disable=SC2016 # {$DOMAIN} is Caddy's placeholder, written literally
+render_case pending-mismatch fail '1: # scaffold-app: names app "other", but site app.{$DOMAIN} guards with app "app"' <<'EOF'
+# scaffold-app: other
+app.{$DOMAIN} {
+	import role "app" "user" app:8080
+}
+EOF
+render_case pending-malformed fail '1: the marker must read: # scaffold-app: <app>, with the app name in lower-case letters, digits, - or _' <<'EOF'
+# scaffold-app: Roster Insights
+app.{$DOMAIN} {
+	import protected app:8080
+}
+EOF
+render_case pending-twice fail '2: the app is named twice' <<'EOF'
+# scaffold-app: app
+# scaffold-app: app
+app.{$DOMAIN} {
+	import protected app:8080
+}
+EOF
+render_case pending-two-sites fail '6: app "app" is already declared by the site at .*app.caddy:2' <<'EOF'
+# scaffold-app: app
+app.{$DOMAIN} {
+	import protected app:8080
+}
+# scaffold-app: app
+www.app.{$DOMAIN} {
+	import protected app:8080
+}
+EOF
+# shellcheck disable=SC2016 # {$DOMAIN} is Caddy's placeholder, written literally
+render_case pending-marker-without-app fail '1: site app.{$DOMAIN} carries an app-roles marker but has no import role guard; to declare the roles before the switch, name the app with # scaffold-app: <app>' <<'EOF'
+# scaffold-roles: admin "Administrator"
+app.{$DOMAIN} {
+	import protected app:8080
+}
+EOF
+render_case pending-ask fail 'sends X-Auth-App to the gateway but has no import role guard' <<'EOF'
+# scaffold-app: app
+app.{$DOMAIN} {
+	handle /about {
+		# scaffold-lint: open-path -- /about: a public page
+		route {
+			reverse_proxy auth:8080 {
+				header_up X-Auth-App "app"
+			}
+			reverse_proxy app:8080 {
+				import strip_auth_cookie
+			}
+		}
+	}
+	handle {
+		import protected app:8080
+	}
+}
+EOF
+# A pending app and a guarded app of one name, in two snippets.
+mkdir -p "$work/pending-two-snippets/apps/one" "$work/pending-two-snippets/apps/two"
+# shellcheck disable=SC2016 # {$DOMAIN} is Caddy's placeholder, written literally
+printf '%s\n' '# scaffold-app: shared' 'one.{$DOMAIN} {' '	import protected one:8080' '}' > "$work/pending-two-snippets/apps/one/one.caddy"
+# shellcheck disable=SC2016 # {$DOMAIN} is Caddy's placeholder, written literally
+printf '%s\n' 'two.{$DOMAIN} {' '	import role "shared" "user" two:8080' '}' > "$work/pending-two-snippets/apps/two/two.caddy"
+if bash "$renderer" "$work/pending-two-snippets" "$work/pending-two-snippets-out" >/dev/null 2>"$work/pending-two-snippets.err"; then
+  fail "a pending app and a guarded app of one name were accepted"
+elif grep -q 'apps/two/two.caddy:1: app "shared" is already declared by the site at .*apps/one/one.caddy:2' "$work/pending-two-snippets.err"; then
+  pass "a pending app and a guarded app of one name are refused"
+else
+  fail "unexpected error for a pending app and a guarded app: $(cat "$work/pending-two-snippets.err")"
+fi
 
 echo
 if [[ $failures -gt 0 ]]; then

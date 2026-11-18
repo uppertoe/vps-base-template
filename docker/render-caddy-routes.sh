@@ -35,7 +35,9 @@
 #                    target.
 #   app-roles.tsv -- the app-roles manifest (APP_ROLES_FILE) for every site
 #                    guarded with "import role" (or "import auth_gate_role",
-#                    "import role_gate" or "import role_redir"), rendered by the sibling
+#                    "import role_gate" or "import role_redir"), and for every
+#                    site that names its app with "# scaffold-app:" before
+#                    moving to role guards, rendered by the sibling
 #                    render-app-roles.sh, which describes the format and the
 #                    markers it reads. Mounted read-only into the auth
 #                    service at /etc/vps-auth/app-roles.tsv.

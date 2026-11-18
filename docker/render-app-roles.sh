@@ -35,13 +35,23 @@
 #   @path  app  patterns  role        paths that need role
 #   @open  app  patterns  reason      paths open by design, and why
 #   @card-page  app  path  label      a page a break-glass card may open
+#   @pending  app                     the roles are declared, the site not
+#                                     yet moved to role guards
 #
 # The snippet declares what the app is with markers on comment lines just
 # above the site address or inside the site block:
 #
+#   # scaffold-app: enquiries
 #   # scaffold-app-label: "Fellowship enquiries"
 #   # scaffold-roles: admin "Administrator" editor "Editor"
 #   # scaffold-card-pages: /enquiry "Your enquiry" /status "Status"
+#
+# The app marker is optional on a site guarded by roles, and must then name
+# the guards' app. On a site still on the older guards it declares the app
+# before the switch: the manifest has the app's role lines, @label, @source
+# and @pending, and no @path, @open or @card-page lines; the card pages are
+# checked once the site moves to role guards. The older guards render as
+# before.
 #
 # The user role is always declared, with the label "User". Without an
 # app-label marker the label is the app name with its first letter in
@@ -64,8 +74,9 @@
 # an app with role guards but none for the user role; a path the manifest
 # cannot express; a path declared twice; two handles whose paths overlap
 # (ignoring case) but that decide differently, because Caddy does not always
-# try the more specific handle first; and a marker on a site with no role
-# guard.
+# try the more specific handle first; a marker on a site with no role guard
+# and no app marker; and an app marker that names an app other than the
+# guards'.
 #
 # An open handle may still ask the gateway who is signed in, so that a public
 # page can greet a signed-in visitor: a reverse_proxy to the gateway's /verify,
@@ -144,6 +155,12 @@ if [[ ${#snippets[@]} -gt 0 ]]; then
         if (cnt <= 0) { err(FILENAME, n, "the marker must read: # scaffold-card-pages: <path> \"<Label>\" ..."); return }
         for (k = 1; k <= cnt; k++) { ncards++; card_path[ncards] = nm[k]; card_label[ncards] = lb[k]; card_line[ncards] = n }
         has_marker = 1; if (!marker_line) { marker_line = n }
+      } else if (trimmed ~ /scaffold-app:/) {
+        text = trimmed; sub(/.*scaffold-app:[[:space:]]*/, "", text); sub(/[[:space:]]+$/, "", text)
+        if (!valid_name(text)) { err(FILENAME, n, "the marker must read: # scaffold-app: <app>, with the app name in lower-case letters, digits, - or _"); return }
+        if (decl_app != "") { err(FILENAME, n, "the app is named twice"); return }
+        decl_app = text; decl_app_line = n
+        has_marker = 1; if (!marker_line) { marker_line = n }
       } else if (trimmed ~ /scaffold-app-label:/) {
         text = trimmed; sub(/.*scaffold-app-label:[[:space:]]*/, "", text); sub(/[[:space:]]+$/, "", text)
         if (text !~ /^"[^"\t]+"$/) { err(FILENAME, n, "the marker must read: # scaffold-app-label: \"<Label>\""); return }
@@ -152,7 +169,7 @@ if [[ ${#snippets[@]} -gt 0 ]]; then
         has_marker = 1; if (!marker_line) { marker_line = n }
       }
     }
-    function is_app_marker(t) { return t ~ /scaffold-(roles|card-pages|app-label):/ }
+    function is_app_marker(t) { return t ~ /scaffold-(app|roles|card-pages|app-label):/ }
     function reset_site(    k) {
       split("", role_label); split("", role_order); nroles = 0
       split("", card_path); split("", card_label); split("", card_line); ncards = 0
@@ -160,7 +177,7 @@ if [[ ${#snippets[@]} -gt 0 ]]; then
       split("", h_line); split("", h_spec); split("", h_open); split("", h_reason); split("", h_mpaths)
       split("", h_app); split("", h_role); split("", h_guard_line); nh = 0
       split("", ask_kind); split("", ask_value); split("", ask_line); nask = 0
-      app_label = ""; has_marker = 0; marker_line = 0
+      app_label = ""; has_marker = 0; marker_line = 0; decl_app = ""; decl_app_line = 0
       top_app = ""; top_role = ""; top_line = 0; top_open_line = 0; route_line = 0
       old_line = 0; cur = 0; in_errors = 0; pending_open = 0
     }
@@ -263,7 +280,7 @@ if [[ ${#snippets[@]} -gt 0 ]]; then
       return substr(pa, 1, length(pb)) == pb || substr(pb, 1, length(pa)) == pa
     }
     function decision(i) { return l_kind[i] == "@open" ? "open" : "the " l_value[i] " role" }
-    function finish_site(    i, j, m, q, u, app, guarded, has_user, pats, buf, hosts, k, n, t, d, label) {
+    function finish_site(    i, j, m, q, u, app, guarded, has_user, pats, buf, k, n, t, d) {
       app = ""; guarded = 0; has_user = 0
       if (top_app != "") { app = top_app; guarded = 1 }
       for (i = 1; i <= nh; i++) {
@@ -273,9 +290,25 @@ if [[ ${#snippets[@]} -gt 0 ]]; then
         else if (h_app[i] != app) { err(FILENAME, h_guard_line[i], "site " site_addr " guards with two apps, \"" app "\" and \"" h_app[i] "\"; one site block is one app") }
       }
       if (!guarded) {
-        if (has_marker) { err(FILENAME, marker_line, "site " site_addr " carries an app-roles marker but has no import role guard") }
         if (nask) { err(FILENAME, ask_line[1], "site " site_addr " sends " ask_kind[1] " to the gateway but has no import role guard") }
+        if (decl_app == "") {
+          if (has_marker) { err(FILENAME, marker_line, "site " site_addr " carries an app-roles marker but has no import role guard; to declare the roles before the switch, name the app with # scaffold-app: <app>") }
+          return
+        }
+        # Roles declared before the switch: the app and its roles, with no
+        # paths, until the site moves to role guards. The card pages wait
+        # for the switch, when they are checked against the guards.
+        app = decl_app
+        if (app in app_file) {
+          err(FILENAME, site_line, "app \"" app "\" is already declared by the site at " app_file[app] ":" app_line[app] "; one app is one site block (list several addresses on it to serve more hosts)")
+          return
+        }
+        app_file[app] = FILENAME; app_line[app] = site_line
+        napps++; out[napps] = records(app) "@pending\t" app "\n"
         return
+      }
+      if (decl_app != "" && decl_app != app) {
+        err(FILENAME, decl_app_line, "# scaffold-app: names app \"" decl_app "\", but site " site_addr " guards with app \"" app "\"")
       }
       if (route_line) {
         err(FILENAME, route_line, "in site " site_addr ", which is guarded by app roles, a route block at the top level runs after every handle whatever its path, so the manifest cannot say which paths it decides; write it as a handle with the same matcher (a route inside a handle is fine)")
@@ -361,16 +394,19 @@ if [[ ${#snippets[@]} -gt 0 ]]; then
         }
       }
       # The records.
-      hosts = site_addr
-      label = app_label
-      if (label == "") { label = app; gsub(/[-_]/, " ", label); label = toupper(substr(label, 1, 1)) substr(label, 2) }
-      buf = app "\tuser\tUser\t" hosts "\n"
-      for (k = 1; k <= nroles; k++) { buf = buf app "\t" role_order[k] "\t" role_label[role_order[k]] "\t" hosts "\n" }
-      src = FILENAME; if (index(src, root) == 1) { src = substr(src, length(root) + 1) }
-      buf = buf "@label\t" app "\t" label "\n@source\t" app "\t" src "\n"
+      buf = records(app)
       for (i = 1; i <= nl; i++) { buf = buf l_kind[i] "\t" app "\t" l_pats[i] "\t" l_value[i] "\n" }
       for (k = 1; k <= ncards; k++) { buf = buf "@card-page\t" app "\t" card_path[k] "\t" card_label[k] "\n" }
       napps++; out[napps] = buf
+    }
+    # The role lines, @label and @source of the app this site declares.
+    function records(app,    buf, k, label, src) {
+      label = app_label
+      if (label == "") { label = app; gsub(/[-_]/, " ", label); label = toupper(substr(label, 1, 1)) substr(label, 2) }
+      buf = app "\tuser\tUser\t" site_addr "\n"
+      for (k = 1; k <= nroles; k++) { buf = buf app "\t" role_order[k] "\t" role_label[role_order[k]] "\t" site_addr "\n" }
+      src = FILENAME; if (index(src, root) == 1) { src = substr(src, length(root) + 1) }
+      return buf "@label\t" app "\t" label "\n@source\t" app "\t" src "\n"
     }
     # Markers left over after the last site of a file belong to no site.
     function flush_pending(    k) {

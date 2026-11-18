@@ -282,6 +282,9 @@ The render fails, naming the file and line, in each of these cases:
 - an open-path marker sits at the top level of the site, or on a catch-all
   `handle` and names paths other than the whole site (`/*` or `*`), where it
   would open every path that no other handle names;
+- a `handle`, `handle_path` or `invoke` sits inside a guarded handle, where
+  Caddy would run it before the gate (put those paths in a top-level handle
+  with a guard of their own; a `route` inside a guarded handle is fine);
 - a card page is decided by an open path or by a role other than `user`;
 - a handle's matcher is not a path matcher (`path_regexp` included), a path
   cannot be written as an exact path or a prefix ending in `*`, or two

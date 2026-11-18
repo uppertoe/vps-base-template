@@ -204,7 +204,11 @@ The marker is listed in `route-access.tsv` as a `public` row whose value is
 the text after `--`, so it must name the paths, then a colon, then the reason.
 A block counts as guarded when a guard import or `forward_auth` appears inside
 it, inside a `route` block nested in it, or in an enclosing block; a guard in
-a sibling `handle` block covers only that block. A comment line never counts
+a sibling `handle` block covers only that block. A guard import in an
+enclosing block covers a nested `handle` or `handle_path` only when the guard
+sits inside a `route` block or the nested block sits inside one, because
+Caddy otherwise runs the nested block before the guard. A `forward_auth`,
+which Caddy runs before any `handle`, covers the blocks nested beside it. A comment line never counts
 as code, a `handle_errors` block is not a door, and a site without any guard
 is governed by the `public` marker alone. A block that serves without a guard
 and without the marker fails the render with the file and line of the block.

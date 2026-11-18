@@ -84,8 +84,9 @@
 # cannot express; a path declared twice; two handles whose paths overlap
 # (ignoring case) but that decide differently, because Caddy does not always
 # try the more specific handle first; a marker on a site with no role guard
-# and no app marker; and an app marker that names an app other than the
-# guards'.
+# and no app marker; an app marker that names an app other than the
+# guards'; and a handle, handle_path or invoke nested inside a guarded
+# handle, which Caddy runs before the route the guard expands to.
 #
 # An open handle may still ask the gateway who is signed in, so that a public
 # page can greet a signed-in visitor: a reverse_proxy to the gateway's /verify,
@@ -183,7 +184,7 @@ if [[ ${#snippets[@]} -gt 0 ]]; then
       split("", role_label); split("", role_order); nroles = 0
       split("", card_path); split("", card_label); split("", card_line); ncards = 0
       split("", mkind); split("", mpats)
-      split("", h_line); split("", h_spec); split("", h_open); split("", h_reason); split("", h_mpaths)
+      split("", h_line); split("", h_spec); split("", h_open); split("", h_reason); split("", h_mpaths); split("", h_nested)
       split("", h_app); split("", h_role); split("", h_guard_line); nh = 0
       split("", ask_kind); split("", ask_value); split("", ask_line); nask = 0
       app_label = ""; has_marker = 0; marker_line = 0; decl_app = ""; decl_app_line = 0
@@ -352,6 +353,14 @@ if [[ ${#snippets[@]} -gt 0 ]]; then
       if (top_open_line) {
         err(FILENAME, top_open_line, "an open-path marker at the top level of site " site_addr " would open every path of app \"" app "\" that no handle names; give the open paths their own handle and matcher, or, if every path no other handle names is public, put the directive in a catch-all handle with the marker \"# scaffold-lint: open-path -- /*: <reason>\"")
       }
+      # A role guard expands to a route, and Caddy sorts handle, handle_path
+      # and invoke ahead of route inside a block, so anything nested that way
+      # in a guarded handle answers before the gate does.
+      for (i = 1; i <= nh; i++) {
+        if (h_app[i] != "" && h_nested[i]) {
+          err(FILENAME, h_nested[i], "this block sits inside a handle guarded by import role (line " h_guard_line[i] "), but Caddy runs a nested handle, handle_path or invoke before the gate, so it would answer without one; give these paths a top-level handle of their own with the guard inside it")
+        }
+      }
       # The path lines, in the order of the handles.
       split("", pat_line); split("", l_kind); split("", l_pats); split("", l_value); split("", l_line); nl = 0
       for (i = 1; i <= nh; i++) {
@@ -502,6 +511,10 @@ if [[ ${#snippets[@]} -gt 0 ]]; then
             } else {
               if (pending_open) { top_open_line = pending_open; pending_open = 0 }
             }
+          } else if (cur && !in_errors && (trimmed ~ /^(handle|handle_path)([[:space:]]|\{)/ && line ~ /\{[[:space:]]*$/ || trimmed ~ /^invoke([[:space:]]|$)/)) {
+            # Caddy sorts a nested handle, handle_path or invoke ahead of the
+            # route a role guard expands to; checked when the site closes.
+            if (!h_nested[cur]) { h_nested[cur] = FNR }
           } else if (cur && !in_errors && trimmed ~ /^import (role|role_gate|role_redir|auth_gate_role)([[:space:]]|$)/) {
             if (guard(trimmed, FNR)) {
               if (h_app[cur] != "") { err(FILENAME, FNR, "a second role guard in one handle; give each role its own handle") }

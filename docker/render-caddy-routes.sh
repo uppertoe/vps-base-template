@@ -172,7 +172,7 @@ if [[ -d "$repo_root/apps" ]]; then
             nframes++
             frame_depth[nframes] = depth; frame_line[nframes] = FNR
             frame_route[nframes] = (trimmed ~ /^route/)
-            frame_code[nframes] = 0; frame_guard[nframes] = 0
+            frame_code[nframes] = 0; frame_guard[nframes] = 0; frame_fwd[nframes] = 0
             frame_marker[nframes] = pending_open; pending_open = 0
             frame_exempt[nframes] = (trimmed ~ /^handle_errors/) || (nframes > 1 && frame_exempt[nframes - 1])
           } else if (trimmed != "" && substr(trimmed, 1, 1) != "@") {
@@ -183,6 +183,7 @@ if [[ -d "$repo_root/apps" ]]; then
             if (nframes > 0) {
               if (trimmed ~ /^(reverse_proxy|file_server|respond)([[:space:]]|\{|$)/) { frame_code[nframes] = 1 }
               if (trimmed ~ /^import (protected|auth_gate|role(_gate|_redir)?[[:space:]])/ || trimmed ~ /^forward_auth([[:space:]]|$)/) { frame_guard[nframes] = 1 }
+              if (trimmed ~ /^forward_auth([[:space:]]|$)/) { frame_fwd[nframes] = 1 }
             } else if (depth == 1) {
               if (trimmed ~ /^(reverse_proxy|file_server|respond)([[:space:]]|\{|$)/ && !top_code) { top_code = 1; top_code_line = FNR }
               if (trimmed ~ /^import (protected|auth_gate|role(_gate|_redir)?[[:space:]])/ || trimmed ~ /^forward_auth([[:space:]]|$)/) { top_guard = 1 }
@@ -301,7 +302,17 @@ if [[ -d "$repo_root/apps" ]]; then
         }
         while (nframes > 0 && depth <= frame_depth[nframes]) {
           covered = frame_guard[nframes] || frame_marker[nframes] || frame_exempt[nframes]
-          for (k = 1; k < nframes && !covered; k++) { if (frame_guard[k] || frame_marker[k]) { covered = 1 } }
+          # An enclosing marker covers the block. An enclosing guard covers
+          # it only where Caddy runs the guard first: inside a route block,
+          # which keeps the written order, or where the block on the way down
+          # is itself a route, or where the guard is a forward_auth, which
+          # Caddy sorts ahead of handle. Elsewhere Caddy sorts a nested handle
+          # or handle_path ahead of the guard (the route a guard snippet
+          # expands to, or the reverse_proxy of auth_gate), so it would answer
+          # before the guard runs.
+          for (k = nframes - 1; k >= 1 && !covered; k--) {
+            if (frame_marker[k] || (frame_guard[k] && (frame_route[k] || frame_route[k + 1] || frame_fwd[k]))) { covered = 1 }
+          }
           if (frame_code[nframes] && !covered) { nopen++; open_line[nopen] = frame_line[nframes] }
           # A route block runs its directives and falls through, so a guard
           # inside it also guards what follows in the enclosing block. A

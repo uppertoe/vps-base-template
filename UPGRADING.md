@@ -33,6 +33,30 @@ of the actions, once.
 
 ---
 
+## 2026-11-16 — The renderer writes the member-readers manifest
+
+`render-caddy-routes.sh` now writes a sixth file,
+`.generated/caddy/member-readers.tsv`, which lists the groups each app may
+read from the gateway's members endpoint, one `<app><TAB><group>` line each.
+The renderer takes the groups from every `# scaffold-members:` marker in an
+enabled app's snippets, so the marker is now the one place an app's groups
+are entered. A group name must match the gateway's grammar,
+`^[a-z0-9][a-z0-9_-]*$`. The renderer refuses any other name, a marker that
+names no group, and the base roles `admin`, `user` and `guest` in any case.
+When no app has a marker, the file holds only its header.
+
+**Operator actions:** after bumping the pointer, re-render and commit
+`.generated` (step 2 above), or the drift check fails on the new file. To
+let the gateway read the file, mount it in `apps/auth/docker-compose.yml` at
+`/etc/vps-auth/member-readers.tsv` with `:ro` and set
+`MEMBER_READERS_FILE=/etc/vps-auth/member-readers.tsv` (docs/04 "An app that
+reads group members"), on a gateway image that reads `MEMBER_READERS_FILE`.
+Once the gateway reads the file, `MEMBER_READERS` can be removed from
+`apps/auth/.env`; the gateway takes the union of the two, so leaving it in
+place does no harm. Each app's `MEMBER_READER_TOKEN_<APP>` stays as it is.
+
+---
+
 ## 2026-11-12 — The renderer writes the app-roles manifest
 
 `render-caddy-routes.sh` now writes a fifth file, `.generated/caddy/app-roles.tsv`,

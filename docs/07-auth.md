@@ -281,6 +281,11 @@ the server repos add in this form:
       - ../../.generated/caddy/app-roles.tsv:/etc/vps-auth/app-roles.tsv:ro
 ```
 
+The list of groups each app may read from the members endpoint,
+`.generated/caddy/member-readers.tsv`, is mounted beside it in the same way
+as `MEMBER_READERS_FILE`; docs/04 "An app that reads group members" gives
+the lines.
+
 ### Checking the routes
 
 `docker/check-routes.sh` requests every path the manifest declares, without

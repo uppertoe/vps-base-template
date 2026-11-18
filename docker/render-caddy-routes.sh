@@ -15,8 +15,9 @@
 #                    cannot reach another app's backend or forge Remote-* headers.
 #   route-access.tsv -- each site's access rules, one "host<TAB>kind<TAB>value"
 #                    line each (kind: groups, domains, signed-in, guests,
-#                    roles -- "<app> <role>" for an "import role" guard, or
-#                    an "import auth_gate_role" written out in a route --,
+#                    roles -- "<app> <role>" for an "import role" guard, an
+#                    "import auth_gate_role" written out in a route, or an
+#                    "import role_gate" or "import role_redir" --,
 #                    network -- open on a named network via an
 #                    "import <name>_network" snippet -- or public with the
 #                    marker's reason; an open path beside a gate, declared
@@ -33,8 +34,8 @@
 #                    them, and which refuses a declared group as a break-glass
 #                    target.
 #   app-roles.tsv -- the app-roles manifest (APP_ROLES_FILE) for every site
-#                    guarded with "import role" (or "import auth_gate_role"
-#                    in a route written out), rendered by the sibling
+#                    guarded with "import role" (or "import auth_gate_role",
+#                    "import role_gate" or "import role_redir"), rendered by the sibling
 #                    render-app-roles.sh, which describes the format and the
 #                    markers it reads. Mounted read-only into the auth
 #                    service at /etc/vps-auth/app-roles.tsv.
@@ -112,7 +113,7 @@ if [[ -d "$repo_root/apps" ]]; then
         }
 
         # Every site must declare who may reach it: import one of the gateway
-        # guards (protected*, auth_gate*, role) or forward_auth somewhere in the
+        # guards (protected*, auth_gate*, role*) or forward_auth somewhere in the
         # block, or carry the marker
         #   # scaffold-lint: public -- <why this site is open to everyone>
         # on a comment line just above the site address or inside the block.
@@ -133,7 +134,7 @@ if [[ -d "$repo_root/apps" ]]; then
           in_site = 1; site_line = FNR; site_addr = trimmed; sub(/[[:space:]]*\{[[:space:]]*$/, "", site_addr)
           site_declared = pending_public; site_guarded = 0; pending_public = 0
         } else if (in_site && depth > 0) {
-          if (trimmed ~ /^import (protected|auth_gate|role[[:space:]])/ || trimmed ~ /^forward_auth([[:space:]]|$)/) { site_guarded = 1 }
+          if (trimmed ~ /^import (protected|auth_gate|role(_gate|_redir)?[[:space:]])/ || trimmed ~ /^forward_auth([[:space:]]|$)/) { site_guarded = 1 }
           if (substr(trimmed, 1, 1) == "#" && trimmed ~ /scaffold-lint: public/) { site_declared = 1 }
         }
 
@@ -179,10 +180,10 @@ if [[ -d "$repo_root/apps" ]]; then
             }
             if (nframes > 0) {
               if (trimmed ~ /^(reverse_proxy|file_server|respond)([[:space:]]|\{|$)/) { frame_code[nframes] = 1 }
-              if (trimmed ~ /^import (protected|auth_gate|role[[:space:]])/ || trimmed ~ /^forward_auth([[:space:]]|$)/) { frame_guard[nframes] = 1 }
+              if (trimmed ~ /^import (protected|auth_gate|role(_gate|_redir)?[[:space:]])/ || trimmed ~ /^forward_auth([[:space:]]|$)/) { frame_guard[nframes] = 1 }
             } else if (depth == 1) {
               if (trimmed ~ /^(reverse_proxy|file_server|respond)([[:space:]]|\{|$)/ && !top_code) { top_code = 1; top_code_line = FNR }
-              if (trimmed ~ /^import (protected|auth_gate|role[[:space:]])/ || trimmed ~ /^forward_auth([[:space:]]|$)/) { top_guard = 1 }
+              if (trimmed ~ /^import (protected|auth_gate|role(_gate|_redir)?[[:space:]])/ || trimmed ~ /^forward_auth([[:space:]]|$)/) { top_guard = 1 }
             }
           }
         }
@@ -662,7 +663,7 @@ mv "$groups_file.tmp" "$groups_file"
                 else if (trimmed ~ /^import protected_domains[a-z_]*[[:space:]]/)    { rule("domains", norm(quoted(trimmed, 1))) }
                 else if (trimmed ~ /^import auth_gate(_labeled|_alt)?[[:space:]]/)  { policy(quoted(trimmed, 1)) }
                 else if (trimmed ~ /^header_up X-Auth-Policy[[:space:]]/)            { policy(quoted(trimmed, 1)) }
-                else if (trimmed ~ /^import (role|auth_gate_role)[[:space:]]/)       { rule("roles", quoted(trimmed, 1) " " quoted(trimmed, 2)) }
+                else if (trimmed ~ /^import (role|role_gate|role_redir|auth_gate_role)[[:space:]]/) { rule("roles", quoted(trimmed, 1) " " quoted(trimmed, 2)) }
               }
               opens = gsub(/\{/, "{", line)
               closes = gsub(/\}/, "}", line)

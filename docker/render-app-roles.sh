@@ -14,8 +14,17 @@
 #
 #   import auth_gate_role "<app>" "<role>"
 #
-# counts as the same guard everywhere below. The gateway reads the manifest this script
-# writes (APP_ROLES_FILE; the format is described in the gateway's
+# counts as the same guard everywhere below. So do the gate for a site that
+# serves files itself, with its own handler after the gate,
+#
+#   import role_gate "<app>" "<role>"
+#
+# and the gate that redirects once the person is let through,
+#
+#   import role_redir "<app>" "<role>" "<target>"
+#
+# all three defined in the gateway's deploy/auth.caddy. The gateway reads the
+# manifest this script writes (APP_ROLES_FILE; the format is described in the gateway's
 # internal/roles/manifest.go) to learn each app's roles, which paths need
 # which role, which paths are open by design and why, and which pages a
 # break-glass card may open. One TAB separates the fields:
@@ -50,8 +59,8 @@
 # guards (protected*, auth_gate and its other variants, forward_auth,
 # X-Auth-Policy), which the gateway would refuse; a route block at the top level
 # of the site, which Caddy runs after every handle whatever its path (import
-# role at the top level is the one exception, and decides "*"); an open-path
-# marker on a catch-all handle, or at the top level of the site; a card page that a user-guarded path does not decide;
+# role or a role gate at the top level is the one exception, and decides
+# "*"); an open-path marker on a catch-all handle, or at the top level of the site; a card page that a user-guarded path does not decide;
 # an app with role guards but none for the user role; a path the manifest
 # cannot express; a path declared twice; two handles whose paths overlap
 # (ignoring case) but that decide differently, because Caddy does not always
@@ -155,14 +164,22 @@ if [[ ${#snippets[@]} -gt 0 ]]; then
       top_app = ""; top_role = ""; top_line = 0; top_open_line = 0; route_line = 0
       old_line = 0; cur = 0; in_errors = 0; pending_open = 0
     }
-    # The guard line: import role "<app>" "<role>" <upstream>, or the gate
-    # written out in a route, import auth_gate_role "<app>" "<role>". Sets
-    # g_app and g_role, or reports the malformed line.
+    # The guard line: import role "<app>" "<role>" <upstream>; the gate
+    # written out in a route, import auth_gate_role "<app>" "<role>"; the
+    # gate in front of a site handler, import role_gate "<app>" "<role>";
+    # or import role_redir "<app>" "<role>" "<target>". Sets g_app and
+    # g_role, or reports the malformed line.
     function guard(trimmed, n,    p, k) {
       k = split(trimmed, p, "\"")
-      if (trimmed ~ /^import auth_gate_role/) {
-        if (k != 5 || p[1] !~ /^import auth_gate_role[[:space:]]+$/ || p[3] !~ /^[[:space:]]+$/ || p[5] != "") {
-          err(FILENAME, n, "the gate must read import auth_gate_role \"<app>\" \"<role>\"")
+      if (trimmed ~ /^import (auth_gate_role|role_gate)([[:space:]]|$)/) {
+        g_kind = trimmed; sub(/^import[[:space:]]+/, "", g_kind); sub(/[[:space:]].*/, "", g_kind)
+        if (k != 5 || p[1] !~ /^import (auth_gate_role|role_gate)[[:space:]]+$/ || p[3] !~ /^[[:space:]]+$/ || p[5] != "") {
+          err(FILENAME, n, "the gate must read import " g_kind " \"<app>\" \"<role>\"")
+          return 0
+        }
+      } else if (trimmed ~ /^import role_redir([[:space:]]|$)/) {
+        if (k != 7 || p[1] !~ /^import role_redir[[:space:]]+$/ || p[3] !~ /^[[:space:]]+$/ || p[5] !~ /^[[:space:]]+$/ || p[6] !~ /[^[:space:]]/ || p[7] != "") {
+          err(FILENAME, n, "the guard must read import role_redir \"<app>\" \"<role>\" \"<target>\"")
           return 0
         }
       } else if (k < 5 || p[1] !~ /^import role[[:space:]]+$/ || p[3] !~ /^[[:space:]]+$/ || p[5] !~ /^[[:space:]]+[^[:space:]]/) {
@@ -424,7 +441,7 @@ if [[ ${#snippets[@]} -gt 0 ]]; then
               spec = trimmed; sub(/^[a-z_]+[[:space:]]*/, "", spec); sub(/[[:space:]]*\{$/, "", spec)
               h_spec[nh] = spec; h_app[nh] = ""
               if (pending_open) { h_open[nh] = 1; h_reason[nh] = p_reason; h_mpaths[nh] = p_mpaths; pending_open = 0 }
-            } else if (trimmed ~ /^import (role|auth_gate_role)([[:space:]]|$)/) {
+            } else if (trimmed ~ /^import (role|role_gate|role_redir|auth_gate_role)([[:space:]]|$)/) {
               if (guard(trimmed, FNR)) {
                 if (top_app != "") { err(FILENAME, FNR, "a second role guard at the top level of the site") }
                 else { top_app = g_app; top_role = g_role; top_line = FNR }
@@ -433,7 +450,7 @@ if [[ ${#snippets[@]} -gt 0 ]]; then
             } else {
               if (pending_open) { top_open_line = pending_open; pending_open = 0 }
             }
-          } else if (cur && !in_errors && trimmed ~ /^import (role|auth_gate_role)([[:space:]]|$)/) {
+          } else if (cur && !in_errors && trimmed ~ /^import (role|role_gate|role_redir|auth_gate_role)([[:space:]]|$)/) {
             if (guard(trimmed, FNR)) {
               if (h_app[cur] != "") { err(FILENAME, FNR, "a second role guard in one handle; give each role its own handle") }
               else { h_app[cur] = g_app; h_role[cur] = g_role; h_guard_line[cur] = FNR }

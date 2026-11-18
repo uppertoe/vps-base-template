@@ -236,6 +236,29 @@ manifest and in every refusal below.
 The renderer does not read inside a snippet that the app defines, so the
 route must be written out in each guarded handle.
 
+### A site that serves files or redirects
+
+Two further guards cover a site with no upstream. `import role_gate "<app>"
+"<role>"` admits a person who holds the role and lets the site's own handler,
+such as a `file_server`, answer the request. `import role_redir "<app>"
+"<role>" "<target>"` admits the same person and then redirects to the target.
+
+```caddyfile
+	handle /old/* {
+		import role_redir "handbook" "user" "https://handbook.{$DOMAIN}/"
+	}
+	handle {
+		import role_gate "handbook" "user"
+		root * /srv/handbook
+		file_server
+	}
+```
+
+The gateway's `deploy/auth.caddy` defines both snippets, and each server repo
+copies them with the other guards. The renderer counts both as it counts
+`import role`, in the manifest, in the route lint, in `route-access.tsv` and
+in every refusal below.
+
 A public page that greets a signed-in visitor by name may ask `/verify` only
 when a session cookie is present, sending `header_up X-Auth-App "<app>"` and
 `header_up X-Auth-Role "<role>"`, and serve the page whatever the answer.
@@ -266,10 +289,13 @@ The render fails, naming the file and line, in each of these cases:
   Caddy does) and the two handles decide differently, for example
   `handle /users/*` for `user` beside `@adm path /a /users/admin` for
   `admin`;
-- an app-roles marker sits on a site that has no role guard.
+- an app-roles marker sits on a site that has neither a role guard nor a
+  `# scaffold-app:` marker;
+- a `# scaffold-app:` marker names an app other than the one the site's role
+  guards name.
 
-A site still guarded by the older guards renders exactly as before and adds
-nothing to the manifest.
+A site still guarded by the older guards renders exactly as before, and adds
+nothing to the manifest unless it names its app (below).
 
 The auth service reads the manifest once its compose file mounts it, which
 the server repos add in this form:
@@ -285,6 +311,44 @@ The list of groups each app may read from the members endpoint,
 `.generated/caddy/member-readers.tsv`, is mounted beside it in the same way
 as `MEMBER_READERS_FILE`; docs/04 "An app that reads group members" gives
 the lines.
+
+### Declaring roles before switching
+
+The gateway's admin pages can assign an app's roles before the site moves to
+role guards, so that everyone who needs a role holds it on the day of the
+switch. To declare the roles, add `# scaffold-app: <app>` and the other
+markers to the site, and leave its guards as they are:
+
+```caddyfile
+# scaffold-app: roster-insights
+# scaffold-roles: admin "Administrator"
+roster.{$DOMAIN} {
+	import protected_groups "rosters" roster:8080
+}
+```
+
+The app name follows the rules for role names. The manifest then holds the
+app's role lines, `@label`, `@source` and a `@pending` line, and no path or
+card-page lines:
+
+```tsv
+roster-insights	user	User	roster.{$DOMAIN}
+roster-insights	admin	Administrator	roster.{$DOMAIN}
+@label	roster-insights	Roster insights
+@source	roster-insights	apps/roster/roster.caddy
+@pending	roster-insights
+```
+
+The older guards still decide every request, and `apps.caddy`,
+`route-access.tsv` and `route-groups.tsv` are unchanged apart from the marker
+lines. A `# scaffold-card-pages:` marker may be added now, but the renderer
+checks the card pages only once the site has role guards. At the switch,
+replace the older guards with role guards for the same app and keep the
+markers. The `@pending` line then disappears from the manifest.
+
+A site that has role guards may also carry `# scaffold-app:`, which must then
+name the guards' app. Two sites may not declare the same app, whether or not
+either has switched.
 
 ### Checking the routes
 

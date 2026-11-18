@@ -178,6 +178,22 @@ else
   fail "the shadowed pattern was not skipped: $(cat "$work/out.log")"
 fi
 
+# 6. An app whose roles are declared before the switch has no paths in the
+#    manifest, so nothing is requested for it.
+cat > "$work/app-roles.tsv" <<'EOF'
+roster	user	User	roster.{$DOMAIN}
+roster	admin	Administrator	roster.{$DOMAIN}
+@label	roster	Roster
+@source	roster	apps/roster/roster.caddy
+@pending	roster
+EOF
+answers "https://roster.example.org/|200|"
+if run && [[ ! -s "$CURL_LOG" ]] && grep -q '0 path(s) answered as the manifest declares' "$work/out.log"; then
+  pass "an app declared before the switch is not requested"
+else
+  fail "an app declared before the switch was requested: $(cat "$work/out.log") $(cat "$CURL_LOG")"
+fi
+
 echo
 if [[ $failures -gt 0 ]]; then
   echo "$failures check(s) failed" >&2

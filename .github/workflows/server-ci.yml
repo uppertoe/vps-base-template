@@ -77,10 +77,11 @@ jobs:
         if: steps.cfg.outputs.secrets_sops == 'true'
         run: bash scaffold/docker/check-secrets-encrypted.sh
 
-      # Guards the auth lynchpin: the (protected) snippet in apps/auth/auth.caddy
-      # must strip client-supplied Remote-* headers, redirect unauthenticated
-      # requests, and scope protection by path. Uses a mock auth.
-      - name: Verify forward_auth header-stripping and path scoping
+      # Guards the auth lynchpin: the (role) snippet in apps/auth/auth.caddy
+      # must strip client-supplied Remote-* headers, keep the session cookie
+      # from the app, redirect unauthenticated requests, and scope protection
+      # by path. Uses a mock auth.
+      - name: Verify the role guard's header stripping and path scoping
         if: hashFiles('apps/auth/auth.caddy') != ''
         run: bash scaffold/scripts/server/ci-forward-auth-test.sh
 

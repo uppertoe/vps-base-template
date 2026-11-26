@@ -35,8 +35,6 @@
 #   @path  app  patterns  role        paths that need role
 #   @open  app  patterns  reason      paths open by design, and why
 #   @card-page  app  path  label      a page a break-glass card may open
-#   @pending  app                     the roles are declared, the site not
-#                                     yet moved to role guards
 #
 # The snippet declares what the app is with markers on comment lines just
 # above the site address or inside the site block:
@@ -46,12 +44,7 @@
 #   # scaffold-roles: admin "Administrator" editor "Editor"
 #   # scaffold-card-pages: /enquiry "Your enquiry" /status "Status"
 #
-# The app marker is optional on a site guarded by roles, and must then name
-# the guards' app. On a site still on the older guards it declares the app
-# before the switch: the manifest has the app's role lines, @label, @source
-# and @pending, and no @path, @open or @card-page lines; the card pages are
-# checked once the site moves to role guards. The older guards render as
-# before.
+# The app marker is optional, and when present must name the guards' app.
 #
 # The user role is always declared, with the label "User". Without an
 # app-label marker the label is the app name with its first letter in
@@ -72,19 +65,18 @@
 #
 # The render fails, with the file and line, on: a guard that names a role the
 # app does not declare; one app in two site blocks (in one snippet or two); a
-# site that guards with two apps; a site that mixes a role guard with the older
-# guards (protected*, auth_gate and its other variants, forward_auth,
-# X-Auth-Policy), which the gateway would refuse; a route block at the top level
-# of the site, which Caddy runs after every handle whatever its path (import
-# role or a role gate at the top level is the one exception, and decides
-# "*"); an open-path marker at the top level of the site; an open-path
+# site that guards with two apps; a site that mixes a role guard with
+# forward_auth, which names no app; a route block at the top level of the
+# site, which Caddy runs after every handle whatever its path (import role or
+# a role gate at the top level is the one exception, and decides "*"); an
+# open-path marker at the top level of the site; an open-path
 # marker on a catch-all handle that lists anything but the whole site (see
 # below); a card page that a user-guarded path does not decide;
 # an app with role guards but none for the user role; a path the manifest
 # cannot express; a path declared twice; two handles whose paths overlap
 # (ignoring case) but that decide differently, because Caddy does not always
-# try the more specific handle first; a marker on a site with no role guard
-# and no app marker; an app marker that names an app other than the
+# try the more specific handle first; a marker on a site with no role guard;
+# an app marker that names an app other than the
 # guards'; in a site whose catch-all is open, a guarded exact path P whose
 # paths below (P/*, or P* for a P that ends in /) the same role does not
 # guard; and a handle, handle_path or invoke nested inside a guarded
@@ -98,10 +90,9 @@
 #   header_up X-Auth-Role "<role>"
 #
 # and serves the page whatever the answer. Such a handle is an open path, with
-# its marker and reason, and is not a guard; it sends no X-Auth-Policy, so it is
-# not an older guard either. The render fails when X-Auth-App names an app
-# other than the one the site guards with, when X-Auth-Role names a role the
-# app does not declare, or when the site has no role guard at all.
+# its marker and reason, and is not a guard. The render fails when X-Auth-App
+# names an app other than the one the site guards with, when X-Auth-Role names
+# a role the app does not declare, or when the site has no role guard at all.
 set -euo pipefail
 export LC_ALL=C
 
@@ -191,7 +182,7 @@ if [[ ${#snippets[@]} -gt 0 ]]; then
       split("", ask_kind); split("", ask_value); split("", ask_line); nask = 0
       app_label = ""; has_marker = 0; marker_line = 0; decl_app = ""; decl_app_line = 0
       top_app = ""; top_role = ""; top_line = 0; top_open_line = 0; route_line = 0
-      old_line = 0; cur = 0; in_errors = 0; pending_open = 0
+      fwd_line = 0; cur = 0; in_errors = 0; pending_open = 0
     }
     # The guard line: import role "<app>" "<role>" <upstream>; the gate
     # written out in a route, import auth_gate_role "<app>" "<role>"; the
@@ -312,20 +303,7 @@ if [[ ${#snippets[@]} -gt 0 ]]; then
       }
       if (!guarded) {
         if (nask) { err(FILENAME, ask_line[1], "site " site_addr " sends " ask_kind[1] " to the gateway but has no import role guard") }
-        if (decl_app == "") {
-          if (has_marker) { err(FILENAME, marker_line, "site " site_addr " carries an app-roles marker but has no import role guard; to declare the roles before the switch, name the app with # scaffold-app: <app>") }
-          return
-        }
-        # Roles declared before the switch: the app and its roles, with no
-        # paths, until the site moves to role guards. The card pages wait
-        # for the switch, when they are checked against the guards.
-        app = decl_app
-        if (app in app_file) {
-          err(FILENAME, site_line, "app \"" app "\" is already declared by the site at " app_file[app] ":" app_line[app] "; one app is one site block (list several addresses on it to serve more hosts)")
-          return
-        }
-        app_file[app] = FILENAME; app_line[app] = site_line
-        napps++; out[napps] = records(app) "@pending\t" app "\n"
+        if (has_marker) { err(FILENAME, marker_line, "site " site_addr " carries an app-roles marker but has no import role guard") }
         return
       }
       if (decl_app != "" && decl_app != app) {
@@ -334,8 +312,8 @@ if [[ ${#snippets[@]} -gt 0 ]]; then
       if (route_line) {
         err(FILENAME, route_line, "in site " site_addr ", which is guarded by app roles, a route block at the top level runs after every handle whatever its path, so the manifest cannot say which paths it decides; write it as a handle with the same matcher (a route inside a handle is fine)")
       }
-      if (old_line) {
-        err(FILENAME, old_line, "site " site_addr " mixes import role with an older guard (protected, auth_gate, forward_auth or X-Auth-Policy); the gateway refuses a request that carries both, so migrate the whole site to role guards")
+      if (fwd_line) {
+        err(FILENAME, fwd_line, "site " site_addr " mixes import role with forward_auth, which names no app, so the manifest cannot say who may reach it; guard the whole site by app role")
       }
       if (app in app_file) {
         err(FILENAME, site_line, "app \"" app "\" is already declared by the site at " app_file[app] ":" app_line[app] "; one app is one site block (list several addresses on it to serve more hosts)")
@@ -505,8 +483,8 @@ if [[ ${#snippets[@]} -gt 0 ]]; then
             else { pending_open = FNR; p_reason = reason; p_mpaths = mpaths }
           }
         } else if (trimmed != "") {
-          if ((trimmed ~ /^import (protected|auth_gate)/ && trimmed !~ /^import auth_gate_role([[:space:]]|$)/) || trimmed ~ /^forward_auth([[:space:]]|\{|$)/ || trimmed ~ /^header_up X-Auth-Policy[[:space:]]/) {
-            if (!old_line) { old_line = FNR }
+          if (trimmed ~ /^forward_auth([[:space:]]|\{|$)/) {
+            if (!fwd_line) { fwd_line = FNR }
           }
           # header_up X-Auth-App "<app>" or X-Auth-Role "<role>": a
           # cookie-optional verify, checked when the site closes.

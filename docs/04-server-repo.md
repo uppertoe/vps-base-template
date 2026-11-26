@@ -42,7 +42,6 @@ server-myserver/
 ├── .generated/caddy/            ← rendered bundle (committed, CI-checked)
 │   ├── apps.caddy               ← all app routes, mounted into Caddy
 │   ├── networks.yml             ← per-app proxy-network wiring
-│   ├── route-groups.tsv         ← groups each route requires, for the auth service
 │   ├── route-access.tsv         ← each site's access rules, for the auth service
 │   ├── app-roles.tsv            ← each app's roles and paths, for the auth service
 │   └── member-readers.tsv       ← the groups each app may read, for the auth service
@@ -146,22 +145,21 @@ git add .generated
 The renderer regenerates `.generated/caddy/apps.caddy` (every app's routes —
 Caddy mounts this file instead of the deploy repo, keeping `.env` and backup
 secrets off the reverse proxy), `.generated/caddy/networks.yml` (the per-app
-proxy networks), `.generated/caddy/route-groups.tsv` (each gateway group a
-site's guard requires, which the auth service mounts so its Groups page can
-list the groups the routes use), `.generated/caddy/route-access.tsv` (who
-can reach each site, described below) and `.generated/caddy/app-roles.tsv`
-(the roles and paths of every app guarded with `import role`, which the auth
-service reads as `APP_ROLES_FILE`; docs/07 "Protecting an app with roles")
-and `.generated/caddy/member-readers.tsv` (the groups each app may read from
-the gateway, described under "An app that reads group members" below).
-All six are committed like lockfiles; CI fails if they drift from the
+proxy networks), `.generated/caddy/route-access.tsv` (who can reach each
+site, described below), `.generated/caddy/app-roles.tsv` (the roles and
+paths of every app guarded by role, which the auth service reads as
+`APP_ROLES_FILE`; docs/07 "Protecting an app") and
+`.generated/caddy/member-readers.tsv` (the groups each app may read from the
+gateway, described under "An app that reads group members" below). All five
+are committed like lockfiles; CI fails if they drift from the
 sources, and `audit-compose.yml` fails at runtime if two apps ever share a
 proxy network.
 
 The renderer also refuses a site that does not declare who may reach it.
-Every site block must import a gateway guard (`protected*`, `auth_gate*`,
-`role`) or `forward_auth`, or carry a marker on a comment line just above its
-address or inside the block:
+Every site block must import a role guard (`role`, `role_gate`, `role_redir`,
+or `auth_gate_role` written out in a route) or use `forward_auth` to another
+sign-in service, or carry a marker on a comment line just above its address
+or inside the block:
 
 ```caddyfile
 # scaffold-lint: public -- the feed checks its own token
@@ -169,17 +167,18 @@ rvg.{$DOMAIN} {
 ```
 
 A forgotten gate on a new app therefore fails the render, and CI with it,
-instead of reaching the server. The markers, guards and `import <name>_network`
-hooks are collected into `.generated/caddy/route-access.tsv`, which the auth
-service shows to administrators as a "who can reach what" table. Each row is
-`host`, a kind (`groups`, `domains`, `signed-in`, `guests`, `roles`,
-`network` or `public`) and a value. A `roles` row is an `import role` guard,
-and its value is the app and the role.
+instead of reaching the server. The renderer refuses the older guards too
+(`protected` and its forms, `auth_gate` and its variants, and the other
+`*_gate` and `*_redir` snippets), naming the snippet, because the gateway no
+longer accepts them. The markers and role guards are collected into
+`.generated/caddy/route-access.tsv`, which the auth service shows to
+administrators as a "who can reach what" table. Each row is `host`, a kind
+(`roles` or `public`) and a value. The value of a `roles` row is the app and
+the role its guard names.
 
 A site that has a gate may still serve some paths without one: a public QR
 view beside a gated editor, a webhook that checks its own signature, a
-calendar feed that a calendar app fetches with a token in the URL, an app that
-is open on the office network and gated from anywhere else. The renderer
+calendar feed that a calendar app fetches with a token in the URL. The renderer
 requires each such path to be declared, so the table shows the open paths of
 a gated site and not only its gate. Inside a site that has a guard, every
 `handle`, `handle_path` or `route` block that serves something itself (a
@@ -213,27 +212,12 @@ as code, a `handle_errors` block is not a door, and a site without any guard
 is governed by the `public` marker alone. A block that serves without a guard
 and without the marker fails the render with the file and line of the block.
 
-An app that reads `Remote-Groups` itself, to decide what a person may do
-inside it, declares those groups in its `.caddy` file so the auth service does
-not report them as unused:
-
-```caddyfile
-# scaffold-groups: insights-admins -- the app's admin pages
-roster.{$DOMAIN} {
-```
-
-They are listed in `.generated/caddy/route-groups.tsv` against the site with
-`declared` as a third tab-separated field, where a group a guard requires has
-two fields only. The auth service uses the third field to tell an app's own
-admin group from a route gate, and refuses a declared group as the target of a
-break-glass card. A group that is both is listed twice, once in each form.
-
 ### An app that reads group members
 
-Group membership is set in the gateway. An app learns a signed-in person's
-groups from `Remote-Groups` on each request, and an app that must act when
-nobody is signed in, such as a weekly email to a group, reads the group's
-members from the gateway's members endpoint at the moment it needs them. It
+Group membership is set in the gateway, and an app learns a signed-in
+person's roles in it from `Remote-Roles` on each request. An app that must act
+when nobody is signed in, such as a weekly email to a group, reads the group's
+members from the gateway's members endpoint at the moment it needs them, and
 keeps no copy.
 
 Put the groups the app reads in a marker line in the app's snippet;
@@ -290,7 +274,7 @@ The renderer stamps every site with a static-asset cache rule, so an app gets
 long-lived caching for free — it just has to serve **fingerprinted** asset URLs.
 A fingerprinted URL changes whenever the bytes change, so the browser may cache
 it for a year and never revalidate: no round-trip, and on a gated app (behind
-`import protected*`) no repeat hit on the `forward_auth` check either — a warm
+a role guard) no repeat hit on the gateway check either — a warm
 asset never touches the network. That is the fix for the slow-navigation feel of
 a gated app whose CSS/JS/fonts are re-fetched (or 304-revalidated) on every page
 load. Prefer this over making `/static` public: the assets stay behind the login
@@ -512,7 +496,7 @@ docker compose exec caddy caddy trust   # once per machine
 
 The scaffold ships an opt-in static admin hub at `admin.<DOMAIN>` — a card grid
 linking to the estate's management surfaces (User portal, SSO), served by
-`busybox httpd` behind `import protected_admin`. The page shell is
+`busybox httpd` behind a role guard. The page shell is
 scaffold-owned and domain-agnostic, so a server gets it by adding a small
 `apps/dashboard/` (a §5 compose that mounts `scaffold/docker/dashboard/www` +
 the one-line caddy route) and enabling the include. Full instructions,

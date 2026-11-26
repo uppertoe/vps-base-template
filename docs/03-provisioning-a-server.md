@@ -287,7 +287,7 @@ ansible-playbook -i ansible/hosts scaffold/ansible/site-quick.yml
 
 Uncomment the `apps/auth` include, create the gateway's settings (keep
 `TOTP_ENABLED=true` — admins get email-OTP **plus** TOTP), and guard routes
-with `import protected <upstream>`. On a SOPS server the settings are
+by app role with `import role "<app>" "<role>" <upstream>`. On a SOPS server the settings are
 `secrets/apps/auth/.env.sops`; on a server without SOPS they are
 `apps/auth/.env` on the box. See [07-auth.md](07-auth.md).
 

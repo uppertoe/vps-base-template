@@ -33,6 +33,33 @@ of the actions, once.
 
 ---
 
+## 2026-11-27 — The older guards are refused, and route-groups.tsv is gone
+
+The renderer now refuses any import of an older guard: `protected` and its
+`protected_*` forms, `auth_gate` and its variants, and every `*_gate` or
+`*_redir` snippet other than `role_gate` and `role_redir`. The error names
+the file, the line and the snippet. The gateway has decided by app role alone
+since its release 7360625, and it refuses a request that carries
+`X-Auth-Policy`.
+
+The renderer no longer writes `.generated/caddy/route-groups.tsv`, and it
+removes a copy left by an older scaffold. The `# scaffold-groups:` marker and
+the `@pending` line are retired, `route-access.tsv` lists only `roles` and
+`public` rows, and a `# scaffold-app:` marker on a site with no role guard is
+refused. `ci-forward-auth-test.sh` now tests the `(role)` snippet, so a
+server's `apps/auth/auth.caddy` must define it.
+
+**Operator actions:** in each server repo, replace `apps/auth/auth.caddy`
+with the role guards and strip snippets from the gateway's
+`deploy/auth.caddy`, keeping any server-specific snippets. Remove
+`ROUTE_GROUPS_FILE` and its mount from `apps/auth/docker-compose.yml`, then
+re-render and commit with `git add -A .generated`, so that the old
+`route-groups.tsv` is removed too. Nobody is signed out. A server that no
+longer uses an older guard keeps the same access, which a comparison of
+`route-access.tsv` and `app-roles.tsv` before and after confirms.
+
+---
+
 ## 2026-11-18 — A site guarded by roles may be public apart from its protected sections
 
 In a site guarded by app roles, the renderer now accepts an open-path marker

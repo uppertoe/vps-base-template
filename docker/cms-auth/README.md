@@ -54,6 +54,5 @@ backend:
   auth_scope: repo          # public_repo if the source repo is public
 ```
 
-Then add that site's origin to `ALLOWED_ORIGINS`. Gate the `/admin/` page behind
-`import protected_admin` (or `protected_domains`) for defence-in-depth if the
-site is otherwise public.
+Then add that site's origin to `ALLOWED_ORIGINS`. If the site is otherwise
+public, guard its `/admin/` page by app role as well, for defence-in-depth.

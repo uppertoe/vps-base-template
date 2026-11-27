@@ -3,8 +3,8 @@
 <!--
   Admin dashboard shell (scaffold-provided).
 
-  A static admin hub served by busybox httpd behind the gateway admin guard
-  (import protected_admin dashboard:8080). It derives the base domain from the
+  A static admin hub served by busybox httpd behind a role guard
+  (import role "dashboard" "user" dashboard:8080). It derives the base domain from the
   browser, so it works unmodified on any deployment: the page is served at
   admin.<DOMAIN>, and each card's href is built from location.hostname at load.
   Nothing here is hardcoded to a specific domain.

@@ -178,23 +178,7 @@ else
   fail "the shadowed pattern was not skipped: $(cat "$work/out.log")"
 fi
 
-# 6. An app whose roles are declared before the switch has no paths in the
-#    manifest, so nothing is requested for it.
-cat > "$work/app-roles.tsv" <<'EOF'
-roster	user	User	roster.{$DOMAIN}
-roster	admin	Administrator	roster.{$DOMAIN}
-@label	roster	Roster
-@source	roster	apps/roster/roster.caddy
-@pending	roster
-EOF
-answers "https://roster.example.org/|200|"
-if run && [[ ! -s "$CURL_LOG" ]] && grep -q '0 path(s) answered as the manifest declares' "$work/out.log"; then
-  pass "an app declared before the switch is not requested"
-else
-  fail "an app declared before the switch was requested: $(cat "$work/out.log") $(cat "$CURL_LOG")"
-fi
-
-# 7. A public site with protected sections: "@open home *" asks for a made-up
+# 6. A public site with protected sections: "@open home *" asks for a made-up
 #    path, which must be served without sign-in, and the guarded sections
 #    and the path beside an open path inside them are still asked for.
 cat > "$work/app-roles.tsv" <<'EOF'
@@ -231,7 +215,7 @@ else
   fail "an open \"*\" sent to sign in was not reported: $(cat "$work/out.log")"
 fi
 
-# 8. Below an exact guarded path, a path is asked for and must be sent to
+# 7. Below an exact guarded path, a path is asked for and must be sent to
 #    sign in, even where the manifest leaves it to the open "*"; one that an
 #    open pattern names outright is not asked for.
 cat > "$work/app-roles.tsv" <<'EOF'

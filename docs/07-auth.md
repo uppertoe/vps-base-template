@@ -1,9 +1,9 @@
 # Authentication (email one-time-code)
 
 The scaffold can put a passwordless login wall in front of any app using
-[vps-scaffold-auth](https://github.com/uppertoe/vps-scaffold-auth) — a small Go
-`forward_auth` gateway. Users enter their email, receive a 6-digit code, type it
-in, and get a session. No passwords, no passkeys, no third-party identity
+[vps-scaffold-auth](https://github.com/uppertoe/vps-scaffold-auth), a small Go
+gateway that Caddy asks before each guarded request. Users enter their email,
+receive a 6-digit code, type it in, and get a session. No passwords, no passkeys, no third-party identity
 provider.
 
 It runs as a normal app under `apps/auth/`, consumed as a prebuilt image from
@@ -14,27 +14,30 @@ with no credentials.
 
 ```
 browser ─▶ Caddy (app.example.com)
-              │  import protected ─▶ forward_auth GET auth:8080/verify
-              │                        ├─ valid session → 200 + Remote-User/Email/Groups → app
+              │  import role "app" "user" ─▶ GET auth:8080/verify, naming the app and role
+              │                        ├─ holds the role → 200 + Remote-User/Email/Roles → app
+              │                        ├─ signed in, no role → the gateway's "no access" page
               │                        └─ no session    → 302 → auth.example.com/login
               ▼
            auth.example.com  ── email → 6-digit code → HMAC-signed session cookie (.example.com)
 ```
 
-- Caddy calls `GET /verify` on every request to a protected app.
-- A valid session returns `200` plus `Remote-User`, `Remote-Email`, and
-  `Remote-Groups`, which Caddy forwards to the app. `Remote-Groups` carries
-  the gateway groups the person belongs to.
-- Otherwise `/verify` returns a 302 to the login page.
+- Caddy calls `GET /verify` on every request to a guarded path, naming the
+  app and the role the path needs.
+- When the person holds that role, the gateway returns `200` with
+  `Remote-User`, `Remote-Email` and `Remote-Roles`, which Caddy forwards to
+  the app. `Remote-Roles` lists the roles the person holds in that app.
+- A request without a session is sent to the login page, and a signed-in
+  person who holds no role in the app is shown the gateway's "no access" page.
 - The session is a stateless, HMAC-signed cookie scoped to the parent domain, so
   one login covers every app subdomain.
 
-Access rule: a verified email at an **allowed domain** is a regular user; an
-email on the **admin whitelist** is an admin. A guard can require a group, an
-email domain, or any signed-in user (the snippet catalogue is in the server
-repo's `apps/auth/auth.caddy`), and the route renderer lists what each site
-requires in `.generated/caddy/route-access.tsv`. The service keeps its state
-in a small SQLite file — no Postgres or Redis.
+Each app declares its roles in its Caddy snippet, and the gateway's admin
+pages decide who holds each one. The guard snippets are in the server repo's
+`apps/auth/auth.caddy`, a copy of the gateway's `deploy/auth.caddy`, and the
+route renderer lists what each site requires in
+`.generated/caddy/route-access.tsv`. The service keeps its state in a small
+SQLite file, with no Postgres or Redis.
 
 ## Enabling it
 
@@ -67,80 +70,10 @@ deploy.
 
 ## Protecting an app
 
-Add `import protected` to the app's Caddy snippet:
-
-```caddyfile
-# apps/dashboard/dashboard.caddy
-dashboard.{$DOMAIN} {
-    import protected dashboard:3000
-}
-```
-
-The `(protected)` snippet is defined in `apps/auth/auth.caddy`; because Caddy
-renders every `apps/*/*.caddy` into one generated route bundle, any app can import it.
-Protected apps read identity from the `Remote-User` / `Remote-Email` /
-`Remote-Groups` request headers and do their own per-feature authorization.
-
-> **Requires the auth service enabled.** `import protected` (and the
-> `auth.{$DOMAIN}` login site) route to the `auth` container. The snippet is
-> always defined, so Caddy starts fine — but protected routes return `502` until
-> you [enable auth](#enabling-it).
-
-> **Trust model.** Apps trust these headers because only Caddy should share their
-> per-app proxy network — apps publish no host ports, and `forward_auth`'s
-> `copy_headers` clears any
-> client-supplied `Remote-User` / `Remote-Email` / `Remote-Groups` and replaces
-> them with the auth service's values, removing them entirely when the service
-> doesn't set one. So a client **cannot** smuggle a forged `Remote-Groups: admin`
-> past a non-admin (or unauthenticated) response. Never expose a protected app
-> directly, never put unrelated apps on the same proxy network, and only trust
-> these three header names.
-
-## Protecting a path
-
-`import protected` guards an entire site block. To protect only part of an app —
-say an `/admin` area while the rest stays public — wrap the protected routes in a
-`handle` with a path matcher and import the snippet there:
-
-```caddyfile
-# apps/blog/blog.caddy
-blog.{$DOMAIN} {
-    # Authenticated: /admin and everything under it
-    handle /admin/* {
-        import protected blog:3000
-    }
-    # Public: everything else
-    handle {
-        reverse_proxy blog:3000
-    }
-}
-```
-
-Caddy routes each request to exactly one `handle` block — the most specific
-matching one — so `/admin/*` requests run `forward_auth` first (an unauthenticated
-request gets a `302` to the login page) while every other path skips it. Cover
-several prefixes with one matcher when you need to: `handle /admin/* /settings/*`.
-
-To protect everything *except* a few public paths, give the public paths their own
-`handle` and make the catch-all the protected one:
-
-```caddyfile
-app.{$DOMAIN} {
-    handle /healthz {            # public health check
-        reverse_proxy app:3000
-    }
-    handle {                     # everything else requires login
-        import protected app:3000
-    }
-}
-```
-
-## Protecting an app with roles
-
-An app can instead declare the roles it has and leave the gateway's admin
-pages to decide who holds each one. Guard each `handle` with `import role`,
-naming the app and the role its paths need, and declare every role other
-than `user` above the site address:
+An app declares the roles it has and leaves the gateway's admin pages to
+decide who holds each one. Guard each `handle` with `import role`, naming the
+app, the role its paths need and the app's upstream, and declare every role
+other than `user` above the site address:
 
 ```caddyfile
 # apps/fellows/fellows.caddy
@@ -165,8 +98,9 @@ enquiries.{$DOMAIN} {
 }
 ```
 
-Three markers describe the app. They sit on comment lines just above the
-site address or inside the site block.
+Caddy sends each request to one `handle`, so here `/admin/*` needs the admin
+role, the public pages need none, and every other path needs the user role. Markers describe the app. They sit on comment
+lines just above the site address or inside the site block.
 
 - `# scaffold-roles: <role> "<Label>" ...` declares the app's roles beyond
   `user`, which every app has with the label "User". A role name uses
@@ -177,11 +111,27 @@ site address or inside the site block.
 - `# scaffold-card-pages: <path> "<Label>" ...` lists the pages a break-glass
   card for the app may open. Each must be an exact path that a `user` guard
   decides, because a card holds only the user role.
+- `# scaffold-app: <app>` names the app. The marker is optional, and when
+  present it must name the app that the site's guards name.
 
 An open path is declared with the same `open-path` marker that any gated site
 uses (docs/04), and the gateway shows the text after its colon as the reason.
 Access from a named network is assigned on the gateway's admin pages, so a
 handle with a network matcher has no place in a site guarded by roles.
+
+> **Requires the auth service enabled.** The guards and the `auth.{$DOMAIN}`
+> login site route to the `auth` container. The snippets are always defined,
+> so Caddy starts, but guarded routes return `502` until you
+> [enable auth](#enabling-it).
+
+> **Trust model.** Apps trust the `Remote-*` headers because only Caddy shares
+> each app's proxy network: apps publish no host ports. Every guard deletes
+> any client-supplied `Remote-User`, `Remote-Email`, `Remote-Roles`,
+> `X-Auth-App` and `X-Auth-Role` before it asks the gateway, and copies the
+> gateway's values only when the gateway admits the request, so a client cannot send a forged
+> `Remote-Roles: admin` past the guard. Never expose a guarded app directly,
+> never put unrelated apps on the same proxy network, and have apps read
+> identity from these headers alone.
 
 The renderer writes `.generated/caddy/app-roles.tsv`, which the gateway reads
 as `APP_ROLES_FILE`. For the example above the file holds these lines, with
@@ -223,7 +173,6 @@ manifest and in every refusal below.
 			import strip_client_identity
 			request_header -X-Auth-App
 			request_header -X-Auth-Role
-			request_header -X-Auth-Policy
 			import auth_gate_role "enquiries" "admin"
 			reverse_proxy fellows:8080 {
 				import strip_auth_cookie
@@ -234,7 +183,10 @@ manifest and in every refusal below.
 ```
 
 The renderer does not read inside a snippet that the app defines, so the
-route must be written out in each guarded handle.
+route must be written out in each guarded handle. The render fails unless
+`import strip_client_identity` comes before `import auth_gate_role` in the
+same `route` block, so that the `Remote-*` headers a client sends are deleted
+before the gate runs.
 
 ### A site that serves files or redirects
 
@@ -263,7 +215,7 @@ A public page that greets a signed-in visitor by name may ask `/verify` only
 when a session cookie is present, sending `header_up X-Auth-App "<app>"` and
 `header_up X-Auth-Role "<role>"`, and serve the page whatever the answer.
 Such a handle is an open path: it needs the `open-path` marker and a reason,
-and it is neither a guard nor an older guard. The render fails if
+and it is not a guard. The render fails if
 `X-Auth-App` names an app other than the site's, if `X-Auth-Role` names a
 role the app does not declare, or if the site has no role guard.
 
@@ -273,9 +225,11 @@ The render fails, naming the file and line, in each of these cases:
 - an app has role guards but none for `user`;
 - two site blocks use the same app name, in one snippet or in two, or one
   site guards with two apps;
-- a site mixes a role guard with an older guard (`protected*`, `auth_gate`
-  and its other variants, `forward_auth`, `X-Auth-Policy`), which the gateway
-  refuses at every request, so the whole site must be migrated at once;
+- a snippet imports an older guard: `protected` or any `protected_*` form,
+  `auth_gate` or one of its variants, or a `*_gate` or `*_redir` snippet
+  other than `role_gate` and `role_redir`. The gateway no longer accepts
+  them, and the error names the snippet;
+- a site mixes a role guard with `forward_auth`, which names no app;
 - a `route` block sits at the top level of the site, where Caddy runs it
   after every `handle` whatever its path (write it as a `handle`; a `route`
   inside a `handle` is fine, and `import role` at the top level decides `*`);
@@ -296,13 +250,10 @@ The render fails, naming the file and line, in each of these cases:
   Caddy does) and the two handles decide differently, for example
   `handle /users/*` for `user` beside `@adm path /a /users/admin` for
   `admin`;
-- an app-roles marker sits on a site that has neither a role guard nor a
-  `# scaffold-app:` marker;
+- an app-roles marker, `# scaffold-app:` included, sits on a site that has
+  no role guard;
 - a `# scaffold-app:` marker names an app other than the one the site's role
   guards name.
-
-A site still guarded by the older guards renders exactly as before, and adds
-nothing to the manifest unless it names its app (below).
 
 The auth service reads the manifest once its compose file mounts it, which
 the server repos add in this form:
@@ -355,44 +306,6 @@ handle answers from the path as it arrives, so an upstream that drops a
 `;parameter` from a path segment, or reads `\` as `/`, can be asked for a
 guarded page by a path that Caddy sends to the open catch-all. Such an app
 should keep a guarded catch-all and open only the paths it names.
-
-### Declaring roles before switching
-
-The gateway's admin pages can assign an app's roles before the site moves to
-role guards, so that everyone who needs a role holds it on the day of the
-switch. To declare the roles, add `# scaffold-app: <app>` and the other
-markers to the site, and leave its guards as they are:
-
-```caddyfile
-# scaffold-app: roster-insights
-# scaffold-roles: admin "Administrator"
-roster.{$DOMAIN} {
-	import protected_groups "rosters" roster:8080
-}
-```
-
-The app name follows the rules for role names. The manifest then holds the
-app's role lines, `@label`, `@source` and a `@pending` line, and no path or
-card-page lines:
-
-```tsv
-roster-insights	user	User	roster.{$DOMAIN}
-roster-insights	admin	Administrator	roster.{$DOMAIN}
-@label	roster-insights	Roster insights
-@source	roster-insights	apps/roster/roster.caddy
-@pending	roster-insights
-```
-
-The older guards still decide every request, and `apps.caddy`,
-`route-access.tsv` and `route-groups.tsv` are unchanged apart from the marker
-lines. A `# scaffold-card-pages:` marker may be added now, but the renderer
-checks the card pages only once the site has role guards. At the switch,
-replace the older guards with role guards for the same app and keep the
-markers. The `@pending` line then disappears from the manifest.
-
-A site that has role guards may also carry `# scaffold-app:`, which must then
-name the guards' app. Two sites may not declare the same app, whether or not
-either has switched.
 
 ### Checking the routes
 
@@ -484,8 +397,10 @@ EOF
 docker compose up -d --build
 docker compose exec caddy caddy trust    # trust the local CA once
 
-# Add a dummy protected app (apps/demo/demo.caddy with `import protected demo:3000`),
-# hit it in a browser, request a code, read it from:
+# Add a dummy app guarded by role (apps/demo/demo.caddy with
+# `import role "demo" "user" demo:3000`), give yourself the demo app's User
+# role on the gateway's admin pages, open the app in a browser, request a
+# code, and read it from:
 docker compose logs -f auth              # [email:log] ... text="... 123456 ..."
 # enter the code, and confirm you land on the demo app.
 ```

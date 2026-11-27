@@ -25,7 +25,13 @@
 #    reverse_proxy or file_server at the site's top level beside a
 #    handle-scoped guard fails unless marked, and a top-level route guard
 #    covers it; a site with no guard is not checked; handle_errors is not a
-#    door; a malformed marker and a marker outside a site fail.
+#    door; a malformed marker and a marker outside a site fail. A
+#    forward_auth to another sign-in service (Authelia, say) counts as a
+#    guard here, as a role guard does.
+#    An import counts as serving unless it is a role guard, a strip snippet
+#    or error_pages, so a snippet that wraps a proxy cannot open a door
+#    unseen; and a hand-written import auth_gate_role must follow import
+#    strip_client_identity in the same route block.
 #
 # 3. Members networks: an app with a scaffold-members marker gets its own
 #    internal network to the gateway, and member-readers.tsv lists the groups
@@ -41,10 +47,9 @@
 #    against a golden file, and every refusal has a case. The gate written
 #    out in a route (import auth_gate_role) counts as import role does, and
 #    a cookie-optional verify on an open path is checked but is not a guard.
-#    So do import role_gate and import role_redir. A site still on the older
-#    guards may name its app with # scaffold-app: and declare its roles
-#    before the switch: the manifest marks the app @pending, and the older
-#    guards render byte for byte as they did.
+#    So do import role_gate and import role_redir. The older guards
+#    (protected*, auth_gate and its variants, the other *_gate and *_redir
+#    forms) are refused wherever they are imported, with the snippet named.
 #
 # Go is needed for part 1 (it is on every GitHub-hosted runner); the test
 # fails plainly if it is missing rather than pretending to pass.
@@ -228,7 +233,7 @@ app.{$DOMAIN} {
 		}
 	}
 	handle {
-		import protected_domains "example.org" app:8080
+		import role "app" "user" app:8080
 	}
 }
 EOF
@@ -244,29 +249,29 @@ app.{$DOMAIN} {
 		}
 	}
 	handle {
-		import protected_domains "example.org" app:8080
+		import role "app" "user" app:8080
 	}
 }
 EOF
 expect_row marker-inside $'app.{$DOMAIN}\tpublic\t/healthz /static/*: the health check and the assets'
-expect_row marker-inside $'app.{$DOMAIN}\tdomains\texample.org'
+expect_row marker-inside $'app.{$DOMAIN}\troles\tapp user'
 
 # The marker above the handle, with the named matcher between.
 render_case marker-above-matcher pass <<'EOF'
 app.{$DOMAIN} {
-	# scaffold-lint: open-path -- /feeds/*.json: the feed checks its own bearer token
-	@feed path /feeds/*.json
+	# scaffold-lint: open-path -- /feeds/*: the feed checks its own bearer token
+	@feed path /feeds/*
 	handle @feed {
 		reverse_proxy app:8080 {
 			import strip_public
 		}
 	}
 	handle {
-		import protected_domains "example.org" app:8080
+		import role "app" "user" app:8080
 	}
 }
 EOF
-expect_row marker-above-matcher $'app.{$DOMAIN}\tpublic\t/feeds/*.json: the feed checks its own bearer token'
+expect_row marker-above-matcher $'app.{$DOMAIN}\tpublic\t/feeds/*: the feed checks its own bearer token'
 
 # A marked handle whose proxy sits in a nested route (the strip-then-proxy
 # shape), and the marker written directly above the handle line.
@@ -283,24 +288,23 @@ app.{$DOMAIN} {
 		}
 	}
 	handle {
-		import protected_groups "editors" app:8080
+		import role "app" "user" app:8080
 	}
 }
 EOF
 expect_row nested-route-under-marked-handle $'app.{$DOMAIN}\tpublic\t/ /Q/*: the public view'
 
 # A guard inside a nested route covers the file_server that follows it in the
-# enclosing handle (the hand-written forward_auth shape).
+# enclosing handle (a forward_auth to another sign-in service).
 render_case guard-in-nested-route pass <<'EOF'
 app.{$DOMAIN} {
 	root * /srv/www/app
 	handle /staff/* {
 		route {
 			import strip_client_identity
-			forward_auth auth:8080 {
-				uri /verify
-				copy_headers Remote-User Remote-Email Remote-Groups
-				header_up X-Auth-Policy "domains=example.org"
+			forward_auth authelia:9091 {
+				uri /api/verify
+				copy_headers Remote-User Remote-Email
 			}
 		}
 		file_server
@@ -317,7 +321,7 @@ render_case guard-in-sibling-handle fail "$open_err" <<'EOF'
 app.{$DOMAIN} {
 	route {
 		handle /admin/* {
-			import protected_admin app:8080
+			import role "app" "admin" app:8080
 		}
 		handle {
 			reverse_proxy app:8080 {
@@ -329,13 +333,13 @@ app.{$DOMAIN} {
 EOF
 
 # A handle nested beside a guard snippet in a handle: Caddy sorts the nested
-# handle ahead of the route (or the reverse_proxy of auth_gate) that the
+# handle ahead of the route (or the reverse_proxy of auth_gate_role) that the
 # snippet expands to, so the nested handle answers before the gate runs.
 render_case nested-handle-under-guard fail "$open_err" <<'EOF'
 app.{$DOMAIN} {
 	root * /srv/www/app
 	handle /staff/* {
-		import protected_domains_gate "example.org"
+		import role_gate "app" "user"
 		handle /staff/sub/* {
 			file_server
 		}
@@ -348,14 +352,16 @@ app.{$DOMAIN} {
 }
 EOF
 # Inside a route the written order holds, so handles after the gate are
-# covered (the Planka shape); so are handles beside a forward_auth, which
-# Caddy sorts ahead of handle.
+# covered; so are handles beside a forward_auth, which Caddy sorts ahead of
+# handle.
 render_case nested-handle-in-gated-route pass <<'EOF'
 app.{$DOMAIN} {
 	@cover path /cover.jpg
 	route {
 		import strip_client_identity
-		import auth_gate "groups=app-users"
+		forward_auth authelia:9091 {
+			uri /api/verify
+		}
 		handle @cover {
 			file_server
 		}
@@ -370,9 +376,8 @@ EOF
 render_case nested-handle-beside-forward-auth pass <<'EOF'
 app.{$DOMAIN} {
 	handle /staff/* {
-		forward_auth auth:8080 {
-			uri /verify
-			header_up X-Auth-Policy "domains=example.org"
+		forward_auth authelia:9091 {
+			uri /api/verify
 		}
 		handle /staff/sub/* {
 			file_server
@@ -388,7 +393,7 @@ EOF
 render_case top-level-proxy-beside-handle-guard fail "$open_err" <<'EOF'
 app.{$DOMAIN} {
 	handle /admin/* {
-		import protected_admin app:8080
+		import role "app" "admin" app:8080
 	}
 	reverse_proxy app:8080 {
 		import strip_auth_cookie
@@ -401,7 +406,12 @@ EOF
 render_case top-level-proxy-marked pass <<'EOF'
 app.{$DOMAIN} {
 	handle /admin/* {
-		import protected_admin app:8080
+		forward_auth authelia:9091 {
+			uri /api/verify
+		}
+		reverse_proxy app:8080 {
+			import strip_auth_cookie
+		}
 	}
 	# scaffold-lint: open-path -- /*: the public pages; only /admin/* is gated
 	reverse_proxy app:8080 {
@@ -410,14 +420,13 @@ app.{$DOMAIN} {
 }
 EOF
 expect_row top-level-proxy-marked $'app.{$DOMAIN}\tpublic\t/*: the public pages; only /admin/* is gated'
-expect_row top-level-proxy-marked $'app.{$DOMAIN}\tgroups\tadmin'
 
 # A top-level file_server is refused the same way.
 render_case top-level-file-server-beside-handle-guard fail "$open_err" <<'EOF'
 app.{$DOMAIN} {
 	root * /srv/www/app
 	handle /staff/* {
-		import protected_domains "example.org" app:8080
+		import role_gate "app" "user"
 	}
 	file_server
 }
@@ -430,10 +439,9 @@ app.{$DOMAIN} {
 	root * /srv/www/app
 	route {
 		import strip_client_identity
-		forward_auth auth:8080 {
-			uri /verify
-			copy_headers Remote-User Remote-Email Remote-Groups
-			header_up X-Auth-Policy "domains=example.org"
+		forward_auth authelia:9091 {
+			uri /api/verify
+			copy_headers Remote-User Remote-Email
 		}
 	}
 	file_server
@@ -467,7 +475,7 @@ app.{$DOMAIN} {
 			file_server
 		}
 	}
-	import protected_domains "example.org" app:8080
+	import role "app" "user" app:8080
 }
 EOF
 
@@ -479,36 +487,151 @@ app.{$DOMAIN} {
 		respond 200
 	}
 	handle {
-		import protected_domains "example.org" app:8080
+		import role "app" "user" app:8080
 	}
 }
 EOF
-
-# route-groups.tsv: a guard group is two columns, a scaffold-groups marker
-# group carries "declared" as a third; a group that is both appears in both
-# forms.
-render_case groups-declared pass <<'EOF'
-# scaffold-groups: insights-admins editors -- the app's admin pages
-app.{$DOMAIN} {
-	import protected_groups "editors" app:8080
-}
-EOF
-for row in $'editors\tapp.{$DOMAIN}' $'editors\tapp.{$DOMAIN}\tdeclared' $'insights-admins\tapp.{$DOMAIN}\tdeclared'; do
-  if grep -qxF -- "$row" "$work/groups-declared-out/route-groups.tsv"; then
-    pass "groups: lists $(printf '%s' "$row" | tr '\t' ' ')"
-  else
-    fail "groups: lacks the row '$row'; table is:"; cat "$work/groups-declared-out/route-groups.tsv" >&2
-  fi
-done
-if grep -qxF -- $'insights-admins\tapp.{$DOMAIN}' "$work/groups-declared-out/route-groups.tsv"; then
-  fail "groups: a marker-only group must not appear in the two-column guard form"
-fi
 
 # The marker belongs inside a site.
 render_case marker-outside-site fail 'belongs inside a site block' <<'EOF'
 # scaffold-lint: open-path -- /healthz: the health check
 app.{$DOMAIN} {
-	import protected_domains "example.org" app:8080
+	import role "app" "user" app:8080
+}
+EOF
+
+# The older guards are refused wherever they are imported, with the snippet
+# named: in a site block, and in a snippet definition.
+older_err='is an older guard, which the gateway no longer accepts'
+for guard in 'protected app:8080' 'protected_open app:8080' 'protected_admin app:8080' \
+  'protected_groups "editors" app:8080' 'protected_domains "example.org" app:8080' \
+  'protected_access "example.org" "staff" app:8080' 'protected_domains_gate "example.org"' \
+  'protected_access_gate "example.org" "staff"' 'protected_domains_redir "example.org" "https://example.org/"' \
+  'auth_gate "groups=staff"' 'auth_gate_labeled "domains=example.org" "Staff"' 'auth_gate_alt "any"' \
+  'staff_gate "example.org"' 'staff_redir "example.org" "https://example.org/"'; do
+  name="${guard%% *}"
+  # shellcheck disable=SC2016 # {$DOMAIN} is Caddy's placeholder, written literally
+  printf 'app.{$DOMAIN} {\n\thandle {\n\t\timport %s\n\t}\n}\n' "$guard" \
+    | render_case "older-$name" fail "app.caddy:3: import $name $older_err"
+done
+render_case older-in-definition fail "app.caddy:2: import auth_gate $older_err" <<'EOF'
+(protected) {
+	import auth_gate "any"
+}
+EOF
+
+# route-groups.tsv is no longer written, and a copy left by an older scaffold
+# is removed, so that the drift check does not report it.
+printf 'stale\n' > "$work/fixture-out/route-groups.tsv"
+bash "$renderer" "$work/fixture" "$work/fixture-out" >/dev/null
+if [[ -e "$work/fixture-out/route-groups.tsv" ]]; then
+  fail "a route-groups.tsv left by an older scaffold was kept"
+else
+  pass "a route-groups.tsv left by an older scaffold is removed"
+fi
+
+# An import inside a guarded site counts as serving, because a snippet can
+# wrap a reverse_proxy: a catch-all whose only line is such an import is an
+# open door, and so is one at the top level of the site. The role guards, the
+# strip snippets and error_pages are known to serve nothing.
+render_case snippet-proxy-in-handle fail "$open_err" <<'EOF'
+(myproxy) {
+	reverse_proxy {args[0]} {
+		import strip_auth_cookie
+	}
+}
+app.{$DOMAIN} {
+	handle /admin/* {
+		import role "app" "user" app:8080
+	}
+	handle {
+		import myproxy zz:80
+	}
+}
+EOF
+render_case snippet-proxy-top-level fail "$open_err" <<'EOF'
+app.{$DOMAIN} {
+	handle /admin/* {
+		import role "app" "user" app:8080
+	}
+	import myproxy zz:80
+}
+EOF
+render_case snippet-proxy-marked pass <<'EOF'
+app.{$DOMAIN} {
+	handle /admin/* {
+		import role "app" "user" app:8080
+	}
+	handle {
+		# scaffold-lint: open-path -- /*: the public pages
+		import myproxy zz:80
+	}
+}
+EOF
+render_case known-imports-serve-nothing pass <<'EOF'
+app.{$DOMAIN} {
+	import error_pages /srv/www/app
+	handle /admin/* {
+		import role "app" "user" app:8080
+	}
+	handle {
+		route {
+			import strip_client_identity
+			import auth_gate_role "app" "user"
+			reverse_proxy app:8080 {
+				import strip_auth_cookie
+			}
+		}
+	}
+}
+EOF
+
+# A gate written out by hand needs import strip_client_identity before it in
+# the same route block: missing, after the gate, or only in an enclosing
+# route, it is refused, and so is a gate outside any route block.
+gate_err='import auth_gate_role must sit in a route block after import strip_client_identity'
+render_case gate-without-strip fail "app.caddy:3: $gate_err" <<'EOF'
+app.{$DOMAIN} {
+	route {
+		import auth_gate_role "app" "user"
+		reverse_proxy app:8080 {
+			import strip_auth_cookie
+		}
+	}
+}
+EOF
+render_case gate-strip-after fail "app.caddy:3: $gate_err" <<'EOF'
+app.{$DOMAIN} {
+	route {
+		import auth_gate_role "app" "user"
+		import strip_client_identity
+		reverse_proxy app:8080 {
+			import strip_auth_cookie
+		}
+	}
+}
+EOF
+render_case gate-strip-outer-route fail "app.caddy:5: $gate_err" <<'EOF'
+app.{$DOMAIN} {
+	route {
+		import strip_client_identity
+		route {
+			import auth_gate_role "app" "user"
+		}
+		reverse_proxy app:8080 {
+			import strip_auth_cookie
+		}
+	}
+}
+EOF
+render_case gate-outside-route fail "app.caddy:3: $gate_err" <<'EOF'
+app.{$DOMAIN} {
+	handle {
+		import auth_gate_role "app" "user"
+		reverse_proxy app:8080 {
+			import strip_auth_cookie
+		}
+	}
 }
 EOF
 
@@ -659,7 +782,7 @@ MARKERS
 # --- 4. app roles ---------------------------------------------------------------
 # A site guarded with import role is rendered into app-roles.tsv, the manifest
 # the gateway reads as APP_ROLES_FILE. The golden case is the example in
-# docs/07-auth.md "Protecting an app with roles": its caddyfile block is
+# docs/07-auth.md "Protecting an app": its caddyfile block is
 # rendered as apps/fellows/fellows.caddy and the result must equal the
 # manifest block shown below it, so the documentation cannot drift from the
 # renderer. Every refusal then has a case of its own.
@@ -667,7 +790,7 @@ doc="$(dirname "$docker_dir")/docs/07-auth.md"
 # doc_block <fence language> prints the first such fenced block in the section.
 doc_block() {
   awk -v lang="$1" '
-    /^## Protecting an app with roles/ { sec = 1; next }
+    /^## Protecting an app$/ { sec = 1; next }
     sec && /^## / { exit }
     sec && !inb && $0 == "```" lang { inb = 1; next }
     inb && /^```/ { exit }
@@ -695,12 +818,11 @@ expect_row roles-example $'enquiries.{$DOMAIN}\troles\tenquiries admin'
 expect_row roles-example $'enquiries.{$DOMAIN}\troles\tenquiries user'
 expect_row roles-example $'enquiries.{$DOMAIN}\tpublic\t/ /faq /privacy: read before a person signs in'
 
-# A site with no role guard leaves the manifest with its header only, and the
-# older guards render as before.
-if grep -qv '^#' "$work/marker-inside-out/app-roles.tsv"; then
-  fail "manifest: a site with older guards produced manifest records"; cat "$work/marker-inside-out/app-roles.tsv" >&2
+# A site with no role guard leaves the manifest with its header only.
+if grep -qv '^#' "$work/guard-in-nested-route-out/app-roles.tsv"; then
+  fail "manifest: a site guarded by forward_auth produced manifest records"; cat "$work/guard-in-nested-route-out/app-roles.tsv" >&2
 else
-  pass "manifest: a site with older guards adds nothing to it"
+  pass "manifest: a site guarded by forward_auth adds nothing to it"
 fi
 
 # Several addresses, a scheme, a top-level guard, a derived label, a named
@@ -752,10 +874,15 @@ app.{$DOMAIN} {
 	import role "app" "admin" app:8080
 }
 EOF
-render_case roles-mixed-guards fail 'mixes import role with an older guard' <<'EOF'
+render_case roles-mixed-guards fail 'mixes import role with forward_auth' <<'EOF'
 app.{$DOMAIN} {
 	handle /admin/* {
-		import protected_admin app:8080
+		forward_auth authelia:9091 {
+			uri /api/verify
+		}
+		reverse_proxy app:8080 {
+			import strip_auth_cookie
+		}
 	}
 	handle {
 		import role "app" "user" app:8080
@@ -1171,7 +1298,12 @@ EOF
 render_case roles-marker-without-guard fail 'carries an app-roles marker but has no import role guard' <<'EOF'
 # scaffold-roles: admin "Administrator"
 app.{$DOMAIN} {
-	import protected app:8080
+	forward_auth authelia:9091 {
+		uri /api/verify
+	}
+	reverse_proxy app:8080 {
+		import strip_auth_cookie
+	}
 }
 EOF
 render_case roles-malformed-guard fail 'the guard must read import role' <<'EOF'
@@ -1221,7 +1353,7 @@ EOF
 # The gate written out in a route, for an app that adds a header toward its
 # upstream: import auth_gate_role counts as the role guard. The open handle
 # asks the gateway only when a session cookie is present (a cookie-optional
-# verify): it is an open path, not a guard and not an older guard.
+# verify): it is an open path, not a guard.
 render_case roles-gate-in-route pass <<'EOF'
 # scaffold-roles: admin "Administrator"
 app.{$DOMAIN} {
@@ -1236,7 +1368,6 @@ app.{$DOMAIN} {
 				rewrite /verify
 				header_up X-Auth-App "app"
 				header_up X-Auth-Role "user"
-				header_up -X-Auth-Policy
 				@signedin status 2xx
 				handle_response @signedin {
 					request_header Remote-Roles {http.reverse_proxy.header.Remote-Roles}
@@ -1290,10 +1421,10 @@ fi
 expect_row roles-gate-in-route $'app.{$DOMAIN}\troles\tapp admin'
 expect_row roles-gate-in-route $'app.{$DOMAIN}\troles\tapp user'
 expect_row roles-gate-in-route $'app.{$DOMAIN}\tpublic\t/about /contact: public pages that greet a signed-in visitor'
-if grep -q $'^[^\t]*\tgroups\t' "$work/roles-gate-in-route-out/route-access.tsv"; then
-  fail "table: import auth_gate_role was read as a policy"; cat "$work/roles-gate-in-route-out/route-access.tsv" >&2
+if grep -v '^#' "$work/roles-gate-in-route-out/route-access.tsv" | cut -f2 | grep -qvxE 'roles|public'; then
+  fail "table: a row other than roles or public was written"; cat "$work/roles-gate-in-route-out/route-access.tsv" >&2
 else
-  pass "table: import auth_gate_role is not read as a policy"
+  pass "table: only roles and public rows are written"
 fi
 
 # The gate counts as import role does in every refusal.
@@ -1301,6 +1432,7 @@ render_case roles-gate-undeclared-role fail 'role "admin" is not declared for ap
 app.{$DOMAIN} {
 	handle /admin/* {
 		route {
+			import strip_client_identity
 			import auth_gate_role "app" "admin"
 			reverse_proxy app:8080 {
 				import strip_auth_cookie
@@ -1312,18 +1444,19 @@ app.{$DOMAIN} {
 	}
 }
 EOF
-render_case roles-gate-mixed fail 'mixes import role with an older guard' <<'EOF'
+render_case roles-gate-mixed fail 'mixes import role with forward_auth' <<'EOF'
 app.{$DOMAIN} {
 	handle /admin/* {
-		route {
-			import auth_gate "groups=admin"
-			reverse_proxy app:8080 {
-				import strip_auth_cookie
-			}
+		forward_auth authelia:9091 {
+			uri /api/verify
+		}
+		reverse_proxy app:8080 {
+			import strip_auth_cookie
 		}
 	}
 	handle {
 		route {
+			import strip_client_identity
 			import auth_gate_role "app" "user"
 			reverse_proxy app:8080 {
 				import strip_auth_cookie
@@ -1335,6 +1468,7 @@ EOF
 render_case roles-gate-malformed fail 'the gate must read import auth_gate_role' <<'EOF'
 app.{$DOMAIN} {
 	route {
+		import strip_client_identity
 		import auth_gate_role "app" "user" app:8080
 		reverse_proxy app:8080 {
 			import strip_auth_cookie
@@ -1346,6 +1480,7 @@ render_case roles-gate-two-apps fail 'guards with two apps' <<'EOF'
 app.{$DOMAIN} {
 	handle /other/* {
 		route {
+			import strip_client_identity
 			import auth_gate_role "other" "user"
 			reverse_proxy app:8080 {
 				import strip_auth_cookie
@@ -1382,11 +1517,11 @@ verify_site() {
   printf '%s.{$DOMAIN} {\n\thandle /about {\n\t\t# scaffold-lint: open-path -- /about: a public page\n\t\troute {\n\t\t\treverse_proxy auth:8080 {\n\t\t\t\theader_up X-Auth-App "%s"\n\t\t\t\theader_up X-Auth-Role "%s"\n\t\t\t}\n\t\t\treverse_proxy app:8080 {\n\t\t\t\timport strip_auth_cookie\n\t\t\t}\n\t\t}\n\t}\n%s}\n' "$1" "$2" "$3" "$4"
 }
 guard_user=$'\thandle {\n\t\timport role "app" "user" app:8080\n\t}\n'
-guard_old=$'\thandle {\n\t\timport protected app:8080\n\t}\n'
+guard_fwd=$'\thandle {\n\t\tforward_auth authelia:9091 {\n\t\t\turi /api/verify\n\t\t}\n\t\treverse_proxy app:8080 {\n\t\t\timport strip_auth_cookie\n\t\t}\n\t}\n'
 # shellcheck disable=SC2016 # {$DOMAIN} is Caddy's placeholder, written literally
 verify_site app other user "$guard_user" | render_case roles-verify-other-app fail 'X-Auth-App names app "other", but site app.{$DOMAIN} is app "app"'
 verify_site app app editor "$guard_user" | render_case roles-verify-undeclared-role fail 'X-Auth-Role names role "editor", which app "app" does not declare'
-verify_site app app user "$guard_old" | render_case roles-verify-without-guard fail 'sends X-Auth-App to the gateway but has no import role guard'
+verify_site app app user "$guard_fwd" | render_case roles-verify-without-guard fail 'sends X-Auth-App to the gateway but has no import role guard'
 
 # Two snippets that use the same app name.
 mkdir -p "$work/roles-two-snippets/apps/one" "$work/roles-two-snippets/apps/two"
@@ -1477,10 +1612,15 @@ docs.{$DOMAIN} {
 }
 EOF
 # shellcheck disable=SC2016 # {$DOMAIN} is Caddy's placeholder, written literally
-render_case roles-role-gate-mixed fail 'site docs.{$DOMAIN} mixes import role with an older guard' <<'EOF'
+render_case roles-role-gate-mixed fail 'site docs.{$DOMAIN} mixes import role with forward_auth' <<'EOF'
 docs.{$DOMAIN} {
 	handle /admin/* {
-		import protected_admin app:8080
+		forward_auth authelia:9091 {
+			uri /api/verify
+		}
+		reverse_proxy app:8080 {
+			import strip_auth_cookie
+		}
 	}
 	handle {
 		import role_gate "docs" "user"
@@ -1489,16 +1629,16 @@ docs.{$DOMAIN} {
 }
 EOF
 # shellcheck disable=SC2016 # {$DOMAIN} is Caddy's placeholder, written literally
-render_case roles-role-redir-mixed fail 'site docs.{$DOMAIN} mixes import role with an older guard' <<'EOF'
+render_case roles-role-redir-mixed fail 'site docs.{$DOMAIN} mixes import role with forward_auth' <<'EOF'
 docs.{$DOMAIN} {
 	handle /old/* {
 		import role_redir "docs" "user" "https://example.org/"
 	}
 	handle {
-		route {
-			import auth_gate "groups=staff"
-			file_server
+		forward_auth authelia:9091 {
+			uri /api/verify
 		}
+		file_server
 	}
 }
 EOF
@@ -1538,155 +1678,53 @@ docs.{$DOMAIN} {
 }
 EOF
 
-# --- roles declared before the switch ------------------------------------------
-# A site still on the older guards names its app with # scaffold-app: and
-# declares its roles. The manifest has the role lines, @label, @source and
-# @pending, and no path or card-page lines; the older guards render as
-# before, in apps.caddy, route-access.tsv and route-groups.tsv alike.
-# shellcheck disable=SC2016 # {$DOMAIN} is Caddy's placeholder, written literally
-pending_site='roster.{$DOMAIN}, www.roster.{$DOMAIN} {
-	@feed path /feeds/*
-	handle @feed {
-		# scaffold-lint: open-path -- /feeds/*: the app checks the bearer token
-		reverse_proxy app:8080 {
-			import strip_public
-		}
-	}
-	handle {
-		import protected_access "example.org" "staff admin" app:8080
-	}
-}'
-mkdir -p "$work/pending-before/apps/app"
-printf '%s\n' "$pending_site" > "$work/pending-before/apps/app/app.caddy"
-bash "$renderer" "$work/pending-before" "$work/pending-before-out" >/dev/null
-{
-  printf '%s\n' '# scaffold-app: roster-insights' \
-    '# scaffold-app-label: "Roster insights"' \
-    '# scaffold-roles: admin "Administrator" editor "Editor"' \
-    '# scaffold-card-pages: /today "Today"'
-  printf '%s\n' "$pending_site"
-} | render_case pending pass
-manifest_is pending "a site on the older guards declares its roles before the switch" <<'EOF'
-roster-insights	user	User	roster.{$DOMAIN},www.roster.{$DOMAIN}
-roster-insights	admin	Administrator	roster.{$DOMAIN},www.roster.{$DOMAIN}
-roster-insights	editor	Editor	roster.{$DOMAIN},www.roster.{$DOMAIN}
-@label	roster-insights	Roster insights
-@source	roster-insights	apps/app/app.caddy
-@pending	roster-insights
-EOF
-for f in route-access.tsv route-groups.tsv networks.yml; do
-  if cmp -s "$work/pending-before-out/$f" "$work/pending-out/$f"; then
-    pass "pending: $f is what the site renders without the markers"
-  else
-    fail "pending: $f changed with the markers"; diff "$work/pending-before-out/$f" "$work/pending-out/$f" >&2 || true
-  fi
-done
-if diff <(grep -v 'scaffold-\(app\|app-label\|roles\|card-pages\):' "$work/pending-out/apps.caddy") "$work/pending-before-out/apps.caddy" >/dev/null; then
-  pass "pending: apps.caddy differs only by the marker lines"
-else
-  fail "pending: apps.caddy changed beyond the marker lines"
-fi
-
-# The app marker may sit inside the block, and an app may declare only the
-# user role.
-render_case pending-inside pass <<'EOF'
-app.{$DOMAIN} {
-	# scaffold-app: app
-	import protected app:8080
-}
-EOF
-manifest_is pending-inside "an app marker inside the block, with the user role alone" <<'EOF'
-app	user	User	app.{$DOMAIN}
-@label	app	App
-@source	app	apps/app/app.caddy
-@pending	app
-EOF
-
-# On a site guarded by roles the marker names the guards' app, and adds no
-# @pending line.
-render_case pending-guarded pass <<'EOF'
+# --- the app marker ----------------------------------------------------------------
+# On a site guarded by roles the marker names the guards' app; elsewhere it
+# is refused.
+render_case app-marker-guarded pass <<'EOF'
 # scaffold-app: app
 app.{$DOMAIN} {
 	import role "app" "user" app:8080
 }
 EOF
-manifest_is pending-guarded "an app marker that names the guards' app adds no @pending line" <<'EOF'
+manifest_is app-marker-guarded "an app marker that names the guards' app" <<'EOF'
 app	user	User	app.{$DOMAIN}
 @label	app	App
 @source	app	apps/app/app.caddy
 @path	app	*	user
 EOF
-
-# The refusals.
 # shellcheck disable=SC2016 # {$DOMAIN} is Caddy's placeholder, written literally
-render_case pending-mismatch fail '1: # scaffold-app: names app "other", but site app.{$DOMAIN} guards with app "app"' <<'EOF'
+render_case app-marker-mismatch fail '1: # scaffold-app: names app "other", but site app.{$DOMAIN} guards with app "app"' <<'EOF'
 # scaffold-app: other
 app.{$DOMAIN} {
 	import role "app" "user" app:8080
 }
 EOF
-render_case pending-malformed fail '1: the marker must read: # scaffold-app: <app>, with the app name in lower-case letters, digits, - or _' <<'EOF'
+render_case app-marker-malformed fail '1: the marker must read: # scaffold-app: <app>, with the app name in lower-case letters, digits, - or _' <<'EOF'
 # scaffold-app: Roster Insights
 app.{$DOMAIN} {
-	import protected app:8080
+	import role "app" "user" app:8080
 }
 EOF
-render_case pending-twice fail '2: the app is named twice' <<'EOF'
+render_case app-marker-twice fail '2: the app is named twice' <<'EOF'
 # scaffold-app: app
 # scaffold-app: app
 app.{$DOMAIN} {
-	import protected app:8080
-}
-EOF
-render_case pending-two-sites fail '6: app "app" is already declared by the site at .*app.caddy:2' <<'EOF'
-# scaffold-app: app
-app.{$DOMAIN} {
-	import protected app:8080
-}
-# scaffold-app: app
-www.app.{$DOMAIN} {
-	import protected app:8080
+	import role "app" "user" app:8080
 }
 EOF
 # shellcheck disable=SC2016 # {$DOMAIN} is Caddy's placeholder, written literally
-render_case pending-marker-without-app fail '1: site app.{$DOMAIN} carries an app-roles marker but has no import role guard; to declare the roles before the switch, name the app with # scaffold-app: <app>' <<'EOF'
-# scaffold-roles: admin "Administrator"
-app.{$DOMAIN} {
-	import protected app:8080
-}
-EOF
-render_case pending-ask fail 'sends X-Auth-App to the gateway but has no import role guard' <<'EOF'
+render_case app-marker-without-guard fail '1: site app.{$DOMAIN} carries an app-roles marker but has no import role guard' <<'EOF'
 # scaffold-app: app
 app.{$DOMAIN} {
-	handle /about {
-		# scaffold-lint: open-path -- /about: a public page
-		route {
-			reverse_proxy auth:8080 {
-				header_up X-Auth-App "app"
-			}
-			reverse_proxy app:8080 {
-				import strip_auth_cookie
-			}
-		}
+	forward_auth authelia:9091 {
+		uri /api/verify
 	}
-	handle {
-		import protected app:8080
+	reverse_proxy app:8080 {
+		import strip_auth_cookie
 	}
 }
 EOF
-# A pending app and a guarded app of one name, in two snippets.
-mkdir -p "$work/pending-two-snippets/apps/one" "$work/pending-two-snippets/apps/two"
-# shellcheck disable=SC2016 # {$DOMAIN} is Caddy's placeholder, written literally
-printf '%s\n' '# scaffold-app: shared' 'one.{$DOMAIN} {' '	import protected one:8080' '}' > "$work/pending-two-snippets/apps/one/one.caddy"
-# shellcheck disable=SC2016 # {$DOMAIN} is Caddy's placeholder, written literally
-printf '%s\n' 'two.{$DOMAIN} {' '	import role "shared" "user" two:8080' '}' > "$work/pending-two-snippets/apps/two/two.caddy"
-if bash "$renderer" "$work/pending-two-snippets" "$work/pending-two-snippets-out" >/dev/null 2>"$work/pending-two-snippets.err"; then
-  fail "a pending app and a guarded app of one name were accepted"
-elif grep -q 'apps/two/two.caddy:1: app "shared" is already declared by the site at .*apps/one/one.caddy:2' "$work/pending-two-snippets.err"; then
-  pass "a pending app and a guarded app of one name are refused"
-else
-  fail "unexpected error for a pending app and a guarded app: $(cat "$work/pending-two-snippets.err")"
-fi
 
 echo
 if [[ $failures -gt 0 ]]; then

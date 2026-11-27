@@ -1,8 +1,8 @@
 # Admin dashboard (optional)
 
 A tiny static admin hub at `admin.<DOMAIN>`: a card grid linking to the
-estate's management surfaces, served by `busybox httpd` behind the gateway
-admin guard (`import protected_admin`). It carries no secrets, no database, and
+estate's management surfaces, served by `busybox httpd` behind a role guard
+for the dashboard app. It carries no secrets, no database, and
 trusts no injected headers — it just serves static HTML — so it needs none of
 the shared-secret handshaking that header-trusting apps (e.g. the user portal)
 require.
@@ -20,10 +20,14 @@ This is **opt-in**. Enable it per server by adding the app to the server repo.
 1. Create `apps/dashboard/dashboard.caddy`:
 
    ```caddy
+   # scaffold-app-label: "Dashboard"
    admin.{$DOMAIN} {
-   	import protected_admin dashboard:8080
+   	import role "dashboard" "user" dashboard:8080
    }
    ```
+
+   Then give the dashboard's User role to the server's administrators on the
+   gateway's admin pages.
 
 2. Create `apps/dashboard/docker-compose.yml` — a self-contained CIS Docker §5
    service named `dashboard` (the web-facing service must be named after the
@@ -73,8 +77,8 @@ This is **opt-in**. Enable it per server by adding the app to the server repo.
    bash scaffold/docker/render-caddy-routes.sh && git add .generated apps/dashboard
    ```
 
-Requires `apps/authelia` (for the admin guard + SSO link) and, for the portal
-link, `apps/users`.
+Requires `apps/auth` (for the role guard), `apps/authelia` for the SSO link
+and, for the portal link, `apps/users`.
 
 ## Customise the links
 

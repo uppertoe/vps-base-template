@@ -62,7 +62,7 @@ a submodule and includes the backup configuration structure.
 | [docs/04-server-repo.md](docs/04-server-repo.md) | Server repo structure and conventions |
 | [docs/05-access-model.md](docs/05-access-model.md) | The deploy and admin access model, restricted mode, and the repo-to-root trust boundary |
 | [docs/06-auditing.md](docs/06-auditing.md) | How to run each audit tool (OpenSCAP, Lynis, docker-bench, audit-compose) |
-| [docs/07-auth.md](docs/07-auth.md) | Passwordless email one-time-code login for apps (forward_auth) |
+| [docs/07-auth.md](docs/07-auth.md) | Passwordless email one-time-code login for apps, guarded by app role |
 | [docs/08-security-model.md](docs/08-security-model.md) | Security model: which benchmark governs each layer + the exceptions register |
 | [docs/09-recovery.md](docs/09-recovery.md) | Rebuilding a lost box, the rebuild drill and RTO log, the panic guard and crash record |
 | [docs/10-lts-migration.md](docs/10-lts-migration.md) | Moving instances to the next Ubuntu release |

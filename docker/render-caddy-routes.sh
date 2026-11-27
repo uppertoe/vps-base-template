@@ -14,30 +14,16 @@
 #                    own. Apps never share a proxy network, so a compromised app
 #                    cannot reach another app's backend or forge Remote-* headers.
 #   route-access.tsv -- each site's access rules, one "host<TAB>kind<TAB>value"
-#                    line each (kind: groups, domains, signed-in, guests,
-#                    roles -- "<app> <role>" for an "import role" guard, an
-#                    "import auth_gate_role" written out in a route, or an
-#                    "import role_gate" or "import role_redir" --,
-#                    network -- open on a named network via an
-#                    "import <name>_network" snippet -- or public with the
-#                    marker's reason; an open path beside a gate, declared
-#                    with "# scaffold-lint: open-path -- <paths>: <why>", is a
-#                    public row whose value is "<paths>: <why>"). The auth
+#                    line each: a roles row, "<app> <role>", for each role
+#                    guard ("import role", an "import auth_gate_role" written
+#                    out in a route, "import role_gate" or "import
+#                    role_redir"), and a public row with the marker's reason
+#                    for a public site or for an open path beside a gate,
+#                    declared with "# scaffold-lint: open-path -- <paths>:
+#                    <why>", whose value is "<paths>: <why>". The auth
 #                    service shows it as a "who can reach what" table.
-#   route-groups.tsv -- every gateway group a site's guard requires, one
-#                    "group<TAB>host" line each, and every group an app
-#                    declares it reads itself with
-#                    "# scaffold-groups: <groups> -- <why>", as
-#                    "group<TAB>host<TAB>declared". Mounted read-only into the
-#                    auth service, whose Groups page lists the groups the
-#                    routes use so administrators pick names instead of typing
-#                    them, and which refuses a declared group as a break-glass
-#                    target.
 #   app-roles.tsv -- the app-roles manifest (APP_ROLES_FILE) for every site
-#                    guarded with "import role" (or "import auth_gate_role",
-#                    "import role_gate" or "import role_redir"), and for every
-#                    site that names its app with "# scaffold-app:" before
-#                    moving to role guards, rendered by the sibling
+#                    guarded by a role guard, rendered by the sibling
 #                    render-app-roles.sh, which describes the format and the
 #                    markers it reads. Mounted read-only into the auth
 #                    service at /etc/vps-auth/app-roles.tsv.
@@ -66,7 +52,6 @@ repo_root="${1:-$(pwd)}"
 out_dir="${2:-$repo_root/.generated/caddy}"
 routes_file="$out_dir/apps.caddy"
 networks_file="$out_dir/networks.yml"
-groups_file="$out_dir/route-groups.tsv"
 access_file="$out_dir/route-access.tsv"
 roles_file="$out_dir/app-roles.tsv"
 members_file="$out_dir/member-readers.tsv"
@@ -83,7 +68,7 @@ mkdir -p "$out_dir"
 : > "$snippets"
 : > "$sites"
 
-for f in "$routes_file" "$networks_file" "$groups_file" "$access_file" "$roles_file" "$members_file"; do
+for f in "$routes_file" "$networks_file" "$access_file" "$roles_file" "$members_file"; do
   if [[ -d "$f" ]]; then
     echo "ERROR: $f is a directory (docker compose was started before the bundle" >&2
     echo "was rendered, so Docker created the bind-mount source as a directory)." >&2
@@ -114,9 +99,21 @@ if [[ -d "$repo_root/apps" ]]; then
           target = (substr(trimmed, 1, 1) == "(") ? snip : site
         }
 
-        # Every site must declare who may reach it: import one of the gateway
-        # guards (protected*, auth_gate*, role*) or forward_auth somewhere in the
-        # block, or carry the marker
+        # The older guards are gone: the gateway decides by app role alone, so
+        # an import of protected*, auth_gate and its variants, or a *_gate or
+        # *_redir form other than role_gate and role_redir fails the render,
+        # with the snippet named, wherever it is written.
+        if (substr(trimmed, 1, 1) != "#" && match(trimmed, /^import[[:space:]]+[A-Za-z0-9_-]+/)) {
+          imported = substr(trimmed, 1, RLENGTH); sub(/^import[[:space:]]+/, "", imported)
+          if (imported ~ /^protected/ || imported ~ /^auth_gate(_labeled|_alt|_common)?$/ || (imported ~ /_(gate|redir)$/ && imported !~ /^role_(gate|redir)$/)) {
+            printf "ERROR: %s:%d: import %s is an older guard, which the gateway no longer accepts; guard the site by app role with import role, role_gate or role_redir\n", FILENAME, FNR, imported > "/dev/stderr"
+            bad = 1
+          }
+        }
+
+        # Every site must declare who may reach it: import one of the role
+        # guards (role, role_gate, role_redir, or auth_gate_role written out in
+        # a route) or forward_auth somewhere in the block, or carry the marker
         #   # scaffold-lint: public -- <why this site is open to everyone>
         # on a comment line just above the site address or inside the block.
         # A site with neither fails the render, so a forgotten gate on a new
@@ -136,7 +133,7 @@ if [[ -d "$repo_root/apps" ]]; then
           in_site = 1; site_line = FNR; site_addr = trimmed; sub(/[[:space:]]*\{[[:space:]]*$/, "", site_addr)
           site_declared = pending_public; site_guarded = 0; pending_public = 0
         } else if (in_site && depth > 0) {
-          if (trimmed ~ /^import (protected|auth_gate|role(_gate|_redir)?[[:space:]])/ || trimmed ~ /^forward_auth([[:space:]]|$)/) { site_guarded = 1 }
+          if (trimmed ~ /^import (role(_gate|_redir)?|auth_gate_role)[[:space:]]/ || trimmed ~ /^forward_auth([[:space:]]|$)/) { site_guarded = 1 }
           if (substr(trimmed, 1, 1) == "#" && trimmed ~ /scaffold-lint: public/) { site_declared = 1 }
         }
 
@@ -158,6 +155,14 @@ if [[ -d "$repo_root/apps" ]]; then
         # site, beside a guard that sits only inside a handle, answers every
         # path that handle does not match, so it needs a guard or a marker at
         # the top level just as a handle would (2026-11-03 review, B-M4).
+        # An import counts as serving too, because a snippet can wrap a
+        # reverse_proxy: only the role guards, the strip snippets and
+        # error_pages (a handle_errors block) are known to serve nothing.
+        #
+        # A gate written out by hand, import auth_gate_role, must sit in a
+        # route block after import strip_client_identity in that same block,
+        # so the Remote-* headers a client sends are deleted before the gate
+        # copies in the values the gateway returns.
         if (in_site && depth > 0) {
           if (substr(trimmed, 1, 1) == "#") {
             if (trimmed ~ /scaffold-lint: open-path/) {
@@ -172,7 +177,7 @@ if [[ -d "$repo_root/apps" ]]; then
             nframes++
             frame_depth[nframes] = depth; frame_line[nframes] = FNR
             frame_route[nframes] = (trimmed ~ /^route/)
-            frame_code[nframes] = 0; frame_guard[nframes] = 0; frame_fwd[nframes] = 0
+            frame_code[nframes] = 0; frame_guard[nframes] = 0; frame_fwd[nframes] = 0; frame_sci[nframes] = 0
             frame_marker[nframes] = pending_open; pending_open = 0
             frame_exempt[nframes] = (trimmed ~ /^handle_errors/) || (nframes > 1 && frame_exempt[nframes - 1])
           } else if (trimmed != "" && substr(trimmed, 1, 1) != "@") {
@@ -180,13 +185,19 @@ if [[ -d "$repo_root/apps" ]]; then
               if (nframes > 0) { frame_marker[nframes] = 1 } else { top_marker = 1 }
               pending_open = 0
             }
+            serves = (trimmed ~ /^(reverse_proxy|file_server|respond)([[:space:]]|\{|$)/) || (trimmed ~ /^import[[:space:]]/ && trimmed !~ /^import[[:space:]]+(role|role_gate|role_redir|auth_gate_role|strip_client_identity|strip_public|strip_auth_cookie|error_pages)([[:space:]]|$)/)
+            if (trimmed ~ /^import[[:space:]]+strip_client_identity([[:space:]]|$)/ && nframes > 0) { frame_sci[nframes] = 1 }
+            if (trimmed ~ /^import[[:space:]]+auth_gate_role([[:space:]]|$)/ && (nframes == 0 || !frame_route[nframes] || !frame_sci[nframes])) {
+              printf "ERROR: %s:%d: import auth_gate_role must sit in a route block after import strip_client_identity in that same block, so the Remote-* headers a client sends are deleted before the gate runs\n", FILENAME, FNR > "/dev/stderr"
+              bad = 1
+            }
             if (nframes > 0) {
-              if (trimmed ~ /^(reverse_proxy|file_server|respond)([[:space:]]|\{|$)/) { frame_code[nframes] = 1 }
-              if (trimmed ~ /^import (protected|auth_gate|role(_gate|_redir)?[[:space:]])/ || trimmed ~ /^forward_auth([[:space:]]|$)/) { frame_guard[nframes] = 1 }
+              if (serves) { frame_code[nframes] = 1 }
+              if (trimmed ~ /^import (role(_gate|_redir)?|auth_gate_role)[[:space:]]/ || trimmed ~ /^forward_auth([[:space:]]|$)/) { frame_guard[nframes] = 1 }
               if (trimmed ~ /^forward_auth([[:space:]]|$)/) { frame_fwd[nframes] = 1 }
             } else if (depth == 1) {
-              if (trimmed ~ /^(reverse_proxy|file_server|respond)([[:space:]]|\{|$)/ && !top_code) { top_code = 1; top_code_line = FNR }
-              if (trimmed ~ /^import (protected|auth_gate|role(_gate|_redir)?[[:space:]])/ || trimmed ~ /^forward_auth([[:space:]]|$)/) { top_guard = 1 }
+              if (serves && !top_code) { top_code = 1; top_code_line = FNR }
+              if (trimmed ~ /^import (role(_gate|_redir)?|auth_gate_role)[[:space:]]/ || trimmed ~ /^forward_auth([[:space:]]|$)/) { top_guard = 1 }
             }
           }
         }
@@ -308,7 +319,7 @@ if [[ -d "$repo_root/apps" ]]; then
           # is itself a route, or where the guard is a forward_auth, which
           # Caddy sorts ahead of handle. Elsewhere Caddy sorts a nested handle
           # or handle_path ahead of the guard (the route a guard snippet
-          # expands to, or the reverse_proxy of auth_gate), so it would answer
+          # expands to, or the reverse_proxy of auth_gate_role), so it would answer
           # before the guard runs.
           for (k = nframes - 1; k >= 1 && !covered; k--) {
             if (frame_marker[k] || (frame_guard[k] && (frame_route[k] || frame_route[k + 1] || frame_fwd[k]))) { covered = 1 }
@@ -524,97 +535,17 @@ is_members_app() {
 } > "$networks_file.tmp"
 mv "$networks_file.tmp" "$networks_file"
 
-# --- route-groups.tsv: the gateway groups each site's guard requires --------
-# Recognises the guard snippets by name (apps/auth/auth.caddy) and a policy
-# written out by hand (auth_gate "...", header_up X-Auth-Policy "..."). The
-# host is the enclosing site block's address, with {$DOMAIN} left in place for
-# the auth service to fill in. Domain-only guards name no group and add nothing.
-{
-  printf '# Generated by scaffold/docker/render-caddy-routes.sh; do not edit.\n'
-  printf '# Gateway groups required by each site, one "group<TAB>host" per line; a group\n'
-  printf '# the app reads itself (a scaffold-groups marker) has "declared" as a third field.\n'
-  if [[ -d "$repo_root/apps" ]]; then
-    find "$repo_root/apps" -mindepth 2 -maxdepth 2 -type f -name '*.caddy' | sort \
-      | while IFS= read -r snippet; do
-          awk '
-            # A guard group is two columns; a group the app reads itself (a
-            # scaffold-groups marker) carries "declared" as a third column,
-            # so the auth service can tell the admin group of an application
-            # from a route gate and refuse it as a break-glass target.
-            function emit(list, tag,    n, parts, i) {
-              n = split(list, parts, /[ ,]+/)
-              for (i = 1; i <= n; i++) {
-                if (parts[i] != "" && site != "") {
-                  if (tag != "") { printf "%s\t%s\t%s\n", parts[i], site, tag } else { printf "%s\t%s\n", parts[i], site }
-                }
-              }
-            }
-            # groups=... field of an X-Auth-Policy string
-            function policy_groups(policy,    n, fields, i) {
-              n = split(policy, fields, ";")
-              for (i = 1; i <= n; i++) {
-                if (fields[i] ~ /^[[:space:]]*groups=/) { sub(/^[[:space:]]*groups=/, "", fields[i]); emit(fields[i]) }
-              }
-            }
-            # the k-th double-quoted argument on the line
-            function quoted(line, k,    n, parts) {
-              n = split(line, parts, "\"")
-              return (2 * k <= n) ? parts[2 * k] : ""
-            }
-            {
-              line = $0
-              trimmed = line
-              sub(/^[[:space:]]*/, "", trimmed)
-              # "# scaffold-groups: a b -- <why>" declares groups the app
-              # reads from Remote-Groups itself (an admin page, say), so the
-              # auth service does not call them unused. Above the site
-              # address or inside its block.
-              if (substr(trimmed, 1, 1) == "#") {
-                if (trimmed ~ /scaffold-groups:/) {
-                  declared = trimmed
-                  sub(/.*scaffold-groups:[[:space:]]*/, "", declared)
-                  sub(/[[:space:]]*--.*$/, "", declared)
-                  if (depth == 0) { pending_groups = declared } else { emit(declared, "declared") }
-                }
-                next
-              }
-              if (depth == 0 && line ~ /\{[[:space:]]*$/) {
-                if (substr(trimmed, 1, 1) == "(") {
-                  site = ""
-                } else {
-                  site = trimmed
-                  sub(/[[:space:]]*\{[[:space:]]*$/, "", site)
-                  gsub(/[[:space:]]*,[[:space:]]*/, ",", site)
-                  if (pending_groups != "") { emit(pending_groups, "declared") }
-                }
-                pending_groups = ""
-              } else if (depth == 0 && trimmed != "") {
-                pending_groups = ""
-              }
-              if (site != "") {
-                if (trimmed ~ /^import protected_groups[[:space:]]/)            { emit(quoted(trimmed, 1)) }
-                else if (trimmed ~ /^import protected_access(_gate)?[[:space:]]/) { emit(quoted(trimmed, 2)) }
-                else if (trimmed ~ /^import protected_admin([[:space:]]|$)/)   { emit("admin") }
-                else if (trimmed ~ /^import auth_gate(_labeled|_alt)?[[:space:]]/) { policy_groups(quoted(trimmed, 1)) }
-                else if (trimmed ~ /^header_up X-Auth-Policy[[:space:]]/)      { policy_groups(quoted(trimmed, 1)) }
-              }
-              opens = gsub(/\{/, "{", line)
-              closes = gsub(/\}/, "}", line)
-              depth += opens - closes
-              if (depth == 0) { site = "" }
-            }
-          ' "$snippet"
-        done | sort -u
-  fi
-} > "$groups_file.tmp"
-mv "$groups_file.tmp" "$groups_file"
+# --- route-groups.tsv: no longer written ---------------------------------------
+# The gateway decides by app role alone and no longer reads a list of the
+# groups each route requires. A copy rendered by an older scaffold is removed,
+# so that the drift check does not report it.
+rm -f "$out_dir/route-groups.tsv"
 
 # --- route-access.tsv: who can reach each site --------------------------------
-# Same recognition as route-groups.tsv, plus domain lists, the plain
-# "any signed-in user" guards, the public marker the render lint requires and
-# the open-path marker it requires on an unguarded handle in a gated site.
-# A site can apply different rules to different paths; every rule found in the
-# block is listed against the site.
+# A roles row for each role guard, and a public row for the public marker the
+# render lint requires and for the open-path marker it requires on an
+# unguarded handle in a gated site. A site can apply different rules to
+# different paths; every rule found in the block is listed against the site.
 {
   printf '# Generated by scaffold/docker/render-caddy-routes.sh; do not edit.\n'
   printf '# Access rules per site, one "host<TAB>kind<TAB>value" per line.\n'
@@ -626,16 +557,6 @@ mv "$groups_file.tmp" "$groups_file"
             function quoted(line, k,    n, parts) {
               n = split(line, parts, "\"")
               return (2 * k <= n) ? parts[2 * k] : ""
-            }
-            function norm(list) { gsub(/[ ,]+/, " ", list); sub(/^ /, "", list); sub(/ $/, "", list); return list }
-            function policy(p,    n, fields, i, f) {
-              if (p ~ /^[[:space:]]*any([;[:space:]]|$)/) { rule(p ~ /guests=allow/ ? "guests" : "signed-in", "") ; return }
-              n = split(p, fields, ";")
-              for (i = 1; i <= n; i++) {
-                f = fields[i]; sub(/^[[:space:]]*/, "", f)
-                if (f ~ /^groups=/)  { sub(/^groups=/, "", f);  rule("groups", norm(f)) }
-                if (f ~ /^domains=/) { sub(/^domains=/, "", f); rule("domains", norm(f)) }
-              }
             }
             {
               line = $0
@@ -667,16 +588,7 @@ mv "$groups_file.tmp" "$groups_file"
                 has_pending = 0
               }
               if (site != "") {
-                if (trimmed ~ /^import [a-z0-9-]+_network([[:space:]]|$)/)           { n = trimmed; sub(/^import /, "", n); sub(/_network.*/, "", n); rule("network", n) }
-                else if (trimmed ~ /^import protected[[:space:]]/)                  { rule("signed-in", "") }
-                else if (trimmed ~ /^import protected_open([[:space:]]|$)/)          { rule("guests", "") }
-                else if (trimmed ~ /^import protected_groups[[:space:]]/)            { rule("groups", norm(quoted(trimmed, 1))) }
-                else if (trimmed ~ /^import protected_admin([[:space:]]|$)/)         { rule("groups", "admin") }
-                else if (trimmed ~ /^import protected_access(_gate)?[[:space:]]/)    { rule("domains", norm(quoted(trimmed, 1))); rule("groups", norm(quoted(trimmed, 2))) }
-                else if (trimmed ~ /^import protected_domains[a-z_]*[[:space:]]/)    { rule("domains", norm(quoted(trimmed, 1))) }
-                else if (trimmed ~ /^import auth_gate(_labeled|_alt)?[[:space:]]/)  { policy(quoted(trimmed, 1)) }
-                else if (trimmed ~ /^header_up X-Auth-Policy[[:space:]]/)            { policy(quoted(trimmed, 1)) }
-                else if (trimmed ~ /^import (role|role_gate|role_redir|auth_gate_role)[[:space:]]/) { rule("roles", quoted(trimmed, 1) " " quoted(trimmed, 2)) }
+                if (trimmed ~ /^import (role|role_gate|role_redir|auth_gate_role)[[:space:]]/) { rule("roles", quoted(trimmed, 1) " " quoted(trimmed, 2)) }
               }
               opens = gsub(/\{/, "{", line)
               closes = gsub(/\}/, "}", line)
@@ -691,7 +603,6 @@ mv "$access_file.tmp" "$access_file"
 
 echo "Rendered $routes_file"
 echo "Rendered $networks_file"
-echo "Rendered $groups_file"
 echo "Rendered $access_file"
 echo "Rendered $roles_file"
 echo "Rendered $members_file"

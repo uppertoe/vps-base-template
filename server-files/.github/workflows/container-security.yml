@@ -25,9 +25,13 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# pull-requests and checks: read let the scan see that a merge to main was
+# already scanned in its pull request.
 permissions:
   contents: read
   packages: read
+  pull-requests: read
+  checks: read
 
 jobs:
   container-security:

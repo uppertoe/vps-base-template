@@ -28,6 +28,10 @@
 #    door; a malformed marker and a marker outside a site fail. A
 #    forward_auth to another sign-in service (Authelia, say) counts as a
 #    guard here, as a role guard does.
+#    An import counts as serving unless it is a role guard, a strip snippet
+#    or error_pages, so a snippet that wraps a proxy cannot open a door
+#    unseen; and a hand-written import auth_gate_role must follow import
+#    strip_client_identity in the same route block.
 #
 # 3. Members networks: an app with a scaffold-members marker gets its own
 #    internal network to the gateway, and member-readers.tsv lists the groups
@@ -525,6 +529,111 @@ if [[ -e "$work/fixture-out/route-groups.tsv" ]]; then
 else
   pass "a route-groups.tsv left by an older scaffold is removed"
 fi
+
+# An import inside a guarded site counts as serving, because a snippet can
+# wrap a reverse_proxy: a catch-all whose only line is such an import is an
+# open door, and so is one at the top level of the site. The role guards, the
+# strip snippets and error_pages are known to serve nothing.
+render_case snippet-proxy-in-handle fail "$open_err" <<'EOF'
+(myproxy) {
+	reverse_proxy {args[0]} {
+		import strip_auth_cookie
+	}
+}
+app.{$DOMAIN} {
+	handle /admin/* {
+		import role "app" "user" app:8080
+	}
+	handle {
+		import myproxy zz:80
+	}
+}
+EOF
+render_case snippet-proxy-top-level fail "$open_err" <<'EOF'
+app.{$DOMAIN} {
+	handle /admin/* {
+		import role "app" "user" app:8080
+	}
+	import myproxy zz:80
+}
+EOF
+render_case snippet-proxy-marked pass <<'EOF'
+app.{$DOMAIN} {
+	handle /admin/* {
+		import role "app" "user" app:8080
+	}
+	handle {
+		# scaffold-lint: open-path -- /*: the public pages
+		import myproxy zz:80
+	}
+}
+EOF
+render_case known-imports-serve-nothing pass <<'EOF'
+app.{$DOMAIN} {
+	import error_pages /srv/www/app
+	handle /admin/* {
+		import role "app" "user" app:8080
+	}
+	handle {
+		route {
+			import strip_client_identity
+			import auth_gate_role "app" "user"
+			reverse_proxy app:8080 {
+				import strip_auth_cookie
+			}
+		}
+	}
+}
+EOF
+
+# A gate written out by hand needs import strip_client_identity before it in
+# the same route block: missing, after the gate, or only in an enclosing
+# route, it is refused, and so is a gate outside any route block.
+gate_err='import auth_gate_role must sit in a route block after import strip_client_identity'
+render_case gate-without-strip fail "app.caddy:3: $gate_err" <<'EOF'
+app.{$DOMAIN} {
+	route {
+		import auth_gate_role "app" "user"
+		reverse_proxy app:8080 {
+			import strip_auth_cookie
+		}
+	}
+}
+EOF
+render_case gate-strip-after fail "app.caddy:3: $gate_err" <<'EOF'
+app.{$DOMAIN} {
+	route {
+		import auth_gate_role "app" "user"
+		import strip_client_identity
+		reverse_proxy app:8080 {
+			import strip_auth_cookie
+		}
+	}
+}
+EOF
+render_case gate-strip-outer-route fail "app.caddy:5: $gate_err" <<'EOF'
+app.{$DOMAIN} {
+	route {
+		import strip_client_identity
+		route {
+			import auth_gate_role "app" "user"
+		}
+		reverse_proxy app:8080 {
+			import strip_auth_cookie
+		}
+	}
+}
+EOF
+render_case gate-outside-route fail "app.caddy:3: $gate_err" <<'EOF'
+app.{$DOMAIN} {
+	handle {
+		import auth_gate_role "app" "user"
+		reverse_proxy app:8080 {
+			import strip_auth_cookie
+		}
+	}
+}
+EOF
 
 # --- 3. members networks ------------------------------------------------------
 # An app whose snippet carries "# scaffold-members:" gets an internal
@@ -1323,6 +1432,7 @@ render_case roles-gate-undeclared-role fail 'role "admin" is not declared for ap
 app.{$DOMAIN} {
 	handle /admin/* {
 		route {
+			import strip_client_identity
 			import auth_gate_role "app" "admin"
 			reverse_proxy app:8080 {
 				import strip_auth_cookie
@@ -1346,6 +1456,7 @@ app.{$DOMAIN} {
 	}
 	handle {
 		route {
+			import strip_client_identity
 			import auth_gate_role "app" "user"
 			reverse_proxy app:8080 {
 				import strip_auth_cookie
@@ -1357,6 +1468,7 @@ EOF
 render_case roles-gate-malformed fail 'the gate must read import auth_gate_role' <<'EOF'
 app.{$DOMAIN} {
 	route {
+		import strip_client_identity
 		import auth_gate_role "app" "user" app:8080
 		reverse_proxy app:8080 {
 			import strip_auth_cookie
@@ -1368,6 +1480,7 @@ render_case roles-gate-two-apps fail 'guards with two apps' <<'EOF'
 app.{$DOMAIN} {
 	handle /other/* {
 		route {
+			import strip_client_identity
 			import auth_gate_role "other" "user"
 			reverse_proxy app:8080 {
 				import strip_auth_cookie

@@ -12,7 +12,9 @@
 #      cookie never reaches the app.
 #   2. When the auth service omits a header, the client's copy is dropped, not
 #      leaked (you can't smuggle Remote-Roles: admin past a response that
-#      carries no roles).
+#      carries no roles). Remote-Groups and Remote-Name, which the gateway
+#      never sends, reach the app only if strip_client_identity lets a
+#      client's copy through, so a forged one checks that snippet directly.
 #   3. An unauthenticated guarded request is 302-redirected to sign-in, and a
 #      spoofed identity header does not bypass that.
 #   4. A session cookie the auth service renews reaches the browser.
@@ -150,21 +152,27 @@ check() { if eval "$2"; then echo "  ok: $1"; else echo "  FAIL: $1" >&2; fail=1
 echo "1. authenticated request replaces spoofed identity with the auth values"
 body="$(curl -s -H "Host: fa.test" -H "Cookie: vps_auth_session=estate-secret; test_session=full" \
   -H "Remote-User: attacker@evil.com" -H "Remote-Roles: spoofed-admin" \
+  -H "Remote-Groups: spoofed-group" -H "Remote-Name: Spoofed Name" \
   -H "X-Auth-App: other" -H "X-Auth-Role: admin" "$base/admin/x")"
 check "Remote-User comes from auth"      "grep -qi 'Remote-User: realuser@example.com' <<<\"\$body\""
 check "Remote-Roles comes from auth"     "grep -qi 'Remote-Roles: user' <<<\"\$body\""
 check "spoofed Remote-User is stripped"  "! grep -qi 'attacker@evil.com' <<<\"\$body\""
 check "spoofed Remote-Roles is stripped" "! grep -qi 'spoofed-admin' <<<\"\$body\""
+check "spoofed Remote-Groups is stripped" "! grep -qi 'spoofed-group' <<<\"\$body\""
+check "spoofed Remote-Name is stripped"   "! grep -qi 'Spoofed Name' <<<\"\$body\""
 check "session cookie does not reach the app"  "! grep -qi 'estate-secret' <<<\"\$body\""
 check "the app's other cookies still reach it" "grep -qi 'test_session=full' <<<\"\$body\""
 
 echo "2. header omitted by auth is not satisfiable by a client-supplied copy"
 # shellcheck disable=SC2034  # read by the checks, inside eval
 body="$(curl -s -H "Host: fa.test" -H "Cookie: test_session=partial" \
-  -H "Remote-Roles: admin" -H "Remote-Email: attacker@evil.com" "$base/admin/x")"
+  -H "Remote-Roles: admin" -H "Remote-Email: attacker@evil.com" \
+  -H "Remote-Groups: admin" -H "Remote-Name: Forged Name" "$base/admin/x")"
 check "Remote-User still present"        "grep -qi 'Remote-User: realuser@example.com' <<<\"\$body\""
 check "client Remote-Roles not leaked"   "! grep -qiE 'Remote-Roles: admin' <<<\"\$body\""
 check "client Remote-Email not leaked"   "! grep -qi 'attacker@evil.com' <<<\"\$body\""
+check "client Remote-Groups not leaked"  "! grep -qiE '^Remote-Groups:' <<<\"\$body\""
+check "client Remote-Name not leaked"    "! grep -qi 'Forged Name' <<<\"\$body\""
 
 echo "3. unauthenticated guarded request redirects to sign-in; spoof cannot bypass"
 code="$(curl -s -o /dev/null -w '%{http_code}' -H "Host: fa.test" -H "Remote-Roles: admin" "$base/admin/x")"

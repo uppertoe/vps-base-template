@@ -155,6 +155,14 @@ if [[ -d "$repo_root/apps" ]]; then
         # site, beside a guard that sits only inside a handle, answers every
         # path that handle does not match, so it needs a guard or a marker at
         # the top level just as a handle would (2026-11-03 review, B-M4).
+        # An import counts as serving too, because a snippet can wrap a
+        # reverse_proxy: only the role guards, the strip snippets and
+        # error_pages (a handle_errors block) are known to serve nothing.
+        #
+        # A gate written out by hand, import auth_gate_role, must sit in a
+        # route block after import strip_client_identity in that same block,
+        # so the Remote-* headers a client sends are deleted before the gate
+        # copies in the values the gateway returns.
         if (in_site && depth > 0) {
           if (substr(trimmed, 1, 1) == "#") {
             if (trimmed ~ /scaffold-lint: open-path/) {
@@ -169,7 +177,7 @@ if [[ -d "$repo_root/apps" ]]; then
             nframes++
             frame_depth[nframes] = depth; frame_line[nframes] = FNR
             frame_route[nframes] = (trimmed ~ /^route/)
-            frame_code[nframes] = 0; frame_guard[nframes] = 0; frame_fwd[nframes] = 0
+            frame_code[nframes] = 0; frame_guard[nframes] = 0; frame_fwd[nframes] = 0; frame_sci[nframes] = 0
             frame_marker[nframes] = pending_open; pending_open = 0
             frame_exempt[nframes] = (trimmed ~ /^handle_errors/) || (nframes > 1 && frame_exempt[nframes - 1])
           } else if (trimmed != "" && substr(trimmed, 1, 1) != "@") {
@@ -177,12 +185,18 @@ if [[ -d "$repo_root/apps" ]]; then
               if (nframes > 0) { frame_marker[nframes] = 1 } else { top_marker = 1 }
               pending_open = 0
             }
+            serves = (trimmed ~ /^(reverse_proxy|file_server|respond)([[:space:]]|\{|$)/) || (trimmed ~ /^import[[:space:]]/ && trimmed !~ /^import[[:space:]]+(role|role_gate|role_redir|auth_gate_role|strip_client_identity|strip_public|strip_auth_cookie|error_pages)([[:space:]]|$)/)
+            if (trimmed ~ /^import[[:space:]]+strip_client_identity([[:space:]]|$)/ && nframes > 0) { frame_sci[nframes] = 1 }
+            if (trimmed ~ /^import[[:space:]]+auth_gate_role([[:space:]]|$)/ && (nframes == 0 || !frame_route[nframes] || !frame_sci[nframes])) {
+              printf "ERROR: %s:%d: import auth_gate_role must sit in a route block after import strip_client_identity in that same block, so the Remote-* headers a client sends are deleted before the gate runs\n", FILENAME, FNR > "/dev/stderr"
+              bad = 1
+            }
             if (nframes > 0) {
-              if (trimmed ~ /^(reverse_proxy|file_server|respond)([[:space:]]|\{|$)/) { frame_code[nframes] = 1 }
+              if (serves) { frame_code[nframes] = 1 }
               if (trimmed ~ /^import (role(_gate|_redir)?|auth_gate_role)[[:space:]]/ || trimmed ~ /^forward_auth([[:space:]]|$)/) { frame_guard[nframes] = 1 }
               if (trimmed ~ /^forward_auth([[:space:]]|$)/) { frame_fwd[nframes] = 1 }
             } else if (depth == 1) {
-              if (trimmed ~ /^(reverse_proxy|file_server|respond)([[:space:]]|\{|$)/ && !top_code) { top_code = 1; top_code_line = FNR }
+              if (serves && !top_code) { top_code = 1; top_code_line = FNR }
               if (trimmed ~ /^import (role(_gate|_redir)?|auth_gate_role)[[:space:]]/ || trimmed ~ /^forward_auth([[:space:]]|$)/) { top_guard = 1 }
             }
           }

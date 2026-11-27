@@ -183,7 +183,10 @@ manifest and in every refusal below.
 ```
 
 The renderer does not read inside a snippet that the app defines, so the
-route must be written out in each guarded handle.
+route must be written out in each guarded handle. The render fails unless
+`import strip_client_identity` comes before `import auth_gate_role` in the
+same `route` block, so that the `Remote-*` headers a client sends are deleted
+before the gate runs.
 
 ### A site that serves files or redirects
 

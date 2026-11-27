@@ -181,10 +181,13 @@ view beside a gated editor, a webhook that checks its own signature, a
 calendar feed that a calendar app fetches with a token in the URL. The renderer
 requires each such path to be declared, so the table shows the open paths of
 a gated site and not only its gate. Inside a site that has a guard, every
-`handle`, `handle_path` or `route` block that serves something itself (a
-`reverse_proxy`, `file_server` or `respond` line) must either be guarded or
-carry this marker, written inside the block or on the comment line just above
-it (a named matcher may sit between):
+`handle`, `handle_path` or `route` block that serves something itself must
+either be guarded or carry this marker. A `reverse_proxy`, `file_server` or
+`respond` line serves, and so does an `import`, because a snippet can wrap a
+proxy; only the role guards, the strip snippets and `error_pages` are known
+to serve nothing. The same holds at the top level of the site. The marker is
+written inside the block or on the comment line just above it (a named
+matcher may sit between):
 
 ```caddyfile
 	@public path / /Q/* /files/* /healthz /static/*

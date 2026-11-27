@@ -47,11 +47,20 @@ removes a copy left by an older scaffold. The `# scaffold-groups:` marker and
 the `@pending` line are retired, `route-access.tsv` lists only `roles` and
 `public` rows, and a `# scaffold-app:` marker on a site with no role guard is
 refused. `ci-forward-auth-test.sh` now tests the `(role)` snippet, so a
-server's `apps/auth/auth.caddy` must define it.
+server's `apps/auth/auth.caddy` must define it, and it fails unless
+`strip_client_identity` deletes a client's `Remote-Groups` and `Remote-Name`.
+
+In a site with a guard, an `import` now counts as serving, because a snippet
+can wrap a proxy: a block whose import is not a role guard, a strip snippet
+or `error_pages` needs a guard or an open-path marker. A hand-written
+`import auth_gate_role` must follow `import strip_client_identity` in the
+same `route` block.
 
 **Operator actions:** in each server repo, replace `apps/auth/auth.caddy`
 with the role guards and strip snippets from the gateway's
-`deploy/auth.caddy`, keeping any server-specific snippets. Remove
+`deploy/auth.caddy` (vps-scaffold-auth #98 or later, whose
+`strip_client_identity` deletes `Remote-Name`), keeping any server-specific
+snippets. Remove
 `ROUTE_GROUPS_FILE` and its mount from `apps/auth/docker-compose.yml`, then
 re-render and commit with `git add -A .generated`, so that the old
 `route-groups.tsv` is removed too. Nobody is signed out. A server that no

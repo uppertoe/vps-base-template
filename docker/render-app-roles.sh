@@ -72,7 +72,8 @@
 # open-path marker at the top level of the site; an open-path
 # marker on a catch-all handle that lists anything but the whole site (see
 # below); a card page that a user-guarded path does not decide;
-# an app with role guards but none for the user role; a path the manifest
+# an app with role guards but none for the user role, unless its catch-all
+# is open; a path the manifest
 # cannot express; a path declared twice; two handles whose paths overlap
 # (ignoring case) but that decide differently, because Caddy does not always
 # try the more specific handle first; a marker on a site with no role guard;
@@ -336,9 +337,6 @@ if [[ ${#snippets[@]} -gt 0 ]]; then
         if (ask_kind[k] == "X-Auth-App" && ask_value[k] != app) { err(FILENAME, ask_line[k], "X-Auth-App names app \"" ask_value[k] "\", but site " site_addr " is app \"" app "\"") }
         if (ask_kind[k] == "X-Auth-Role" && ask_value[k] != "user" && !(ask_value[k] in role_label)) { err(FILENAME, ask_line[k], "X-Auth-Role names role \"" ask_value[k] "\", which app \"" app "\" does not declare") }
       }
-      if (!has_user) {
-        err(FILENAME, site_line, "app \"" app "\" has role guards but none for the user role: guard the paths every signed-in user may open with import role \"" app "\" \"user\" <upstream>")
-      }
       if (top_open_line) {
         err(FILENAME, top_open_line, "an open-path marker at the top level of site " site_addr " would open every path of app \"" app "\" that no handle names; give the open paths their own handle and matcher, or, if every path no other handle names is public, put the directive in a catch-all handle with the marker \"# scaffold-lint: open-path -- /*: <reason>\"")
       }
@@ -381,6 +379,12 @@ if [[ ${#snippets[@]} -gt 0 ]]; then
       # guarded by the same role.
       open_rest = 0
       for (i = 1; i <= nl; i++) { if (l_kind[i] == "@open" && l_pats[i] == "*") { open_rest = 1 } }
+      # Every app needs a user guard, unless its catch-all is open: a public
+      # site may guard only a section that needs another role, as the CMS
+      # broker guards /auth for its editors.
+      if (!has_user && !open_rest) {
+        err(FILENAME, site_line, "app \"" app "\" has role guards but none for the user role: guard the paths every signed-in user may open with import role \"" app "\" \"user\" <upstream>, or, if every other path is public, open the catch-all with the marker \"# scaffold-lint: open-path -- /*: <reason>\"")
+      }
       for (i = 1; open_rest && i <= nl; i++) {
         if (l_kind[i] != "@path") { continue }
         n = split(l_pats[i], t, " ")

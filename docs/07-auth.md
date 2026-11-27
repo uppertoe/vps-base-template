@@ -300,6 +300,11 @@ marker at the top level of the site, so the open directives belong in the
 catch-all `handle`. A card page must sit under a guarded section, not on a
 page the catch-all decides.
 
+Such a site may guard its sections with a role other than `user` and have no
+`user` guard at all, as the CMS broker guards `/auth /auth/*` with its
+editor role. The renderer refuses an app without a `user` guard whose
+catch-all is guarded.
+
 This shape is meant for a site that Caddy's `file_server` answers, or for an
 upstream that reads a path exactly as Caddy matches it. Caddy decides which
 handle answers from the path as it arrives, so an upstream that drops a

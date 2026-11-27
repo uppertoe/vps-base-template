@@ -950,6 +950,54 @@ else
 fi
 expect_row roles-open-site $'{$DOMAIN},www.{$DOMAIN}\troles\thome user'
 expect_row roles-open-site $'{$DOMAIN},www.{$DOMAIN}\tpublic\t/*: the homepage and service directory are public; the paths above are gated'
+# With the catch-all open, the only guarded section may need a role other
+# than user, as the CMS broker's /auth does; the app has no user guard.
+render_case roles-open-site-no-user pass <<'EOF'
+# scaffold-roles: editor "Editor"
+app.{$DOMAIN} {
+	@editor path /auth /auth/*
+	handle @editor {
+		route {
+			import strip_client_identity
+			import auth_gate_role "app" "editor"
+			reverse_proxy app:8080 {
+				import strip_auth_cookie
+			}
+		}
+	}
+	handle {
+		# scaffold-lint: open-path -- /*: the broker checks its own session token
+		reverse_proxy app:8080 {
+			import strip_public
+		}
+	}
+}
+EOF
+cat > "$work/roles-open-site-no-user.golden" <<'EOF'
+app	user	User	app.{$DOMAIN}
+app	editor	Editor	app.{$DOMAIN}
+@label	app	App
+@source	app	apps/app/app.caddy
+@path	app	/auth /auth/*	editor
+@open	app	*	the broker checks its own session token
+EOF
+if diff -u "$work/roles-open-site-no-user.golden" <(grep -v '^#' "$work/roles-open-site-no-user-out/app-roles.tsv" | sed '/^$/d') >&2; then
+  pass "manifest: an open site may guard its only section with a role other than user"
+else
+  fail "manifest: the open site guarded only by another role differs (diff above)"
+fi
+# Without the open catch-all, the same guard still needs a user guard beside it.
+render_case roles-no-user-guarded-rest fail 'has role guards but none for the user role' <<'EOF'
+# scaffold-roles: editor "Editor"
+app.{$DOMAIN} {
+	handle /auth/* {
+		import role "app" "editor" app:8080
+	}
+	handle {
+		import role "app" "editor" app:8080
+	}
+}
+EOF
 # A card page that the open catch-all decides is refused; one under a
 # guarded section is accepted.
 render_case roles-open-site-card fail 'card page /contacts is not under a path guarded by import role "home" "user"; a break-glass card holds only the user role (an open path decides it)' <<'EOF'

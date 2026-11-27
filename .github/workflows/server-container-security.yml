@@ -13,30 +13,66 @@ on:
 permissions:
   contents: read
   packages: read
+  pull-requests: read
+  checks: read
 
 jobs:
   container-security:
     name: App image and compose scan
     runs-on: ubuntu-latest
     steps:
+      # A push to main that is the merge of a pull request whose own scan
+      # passed is not scanned again: the pull request scanned the same compose
+      # files merged onto main, and any other change on main was scanned when
+      # it was pushed. A direct push, a pull request whose scan did not pass,
+      # or anything this step cannot confirm (a caller that does not grant
+      # pull-requests and checks: read) is scanned as before. GitHub bills
+      # each scan about four minutes.
+      - name: Skip a merge already scanned in its pull request
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          scan=true
+          if [ "$EVENT" = push ]; then
+            pr="$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" \
+                  --jq "[.[] | select(.merged_at != null and .merge_commit_sha == \"$GITHUB_SHA\")][0] | select(.) | \"\(.number) \(.head.sha)\"" 2>/dev/null || true)"
+            if [ -n "$pr" ]; then
+              num="${pr%% *}"; head="${pr#* }"
+              ok="$(gh api "repos/$GITHUB_REPOSITORY/commits/$head/check-runs?per_page=100" \
+                    --jq '[.check_runs[] | select((.name | endswith("App image and compose scan")) and .conclusion == "success")] | length' 2>/dev/null || echo 0)"
+              if [ "${ok:-0}" -gt 0 ]; then
+                scan=false
+                echo "This commit is the merge of #$num, whose own scan passed, so the scan was not repeated." >> "$GITHUB_STEP_SUMMARY"
+              fi
+            fi
+          fi
+          echo "scan=$scan" >> "$GITHUB_OUTPUT"
+          echo "scan=$scan"
+
       - name: Check out repository
+        if: steps.gate.outputs.scan == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # The scaffold's pinned Caddy is the one internet-facing container on
       # every server, so it is scanned beside the apps.
       - name: Sync scaffold submodule
+        if: steps.gate.outputs.scan == 'true'
         run: |
           git config --global url."https://github.com/".insteadOf git@github.com:
           git submodule sync --recursive
           git submodule update --init --recursive
 
       - name: Prepare reports directory
+        if: steps.gate.outputs.scan == 'true'
         run: mkdir -p reports/container-security
 
       # Private first-party images need a registry login or Trivy cannot pull
       # them. GHCR_READ_TOKEN is a read:packages PAT; without it, fall back to
       # the repo's own token, which reaches the packages that grant it access.
       - name: Log in to ghcr.io
+        if: steps.gate.outputs.scan == 'true'
         env:
           TOKEN: ${{ secrets.GHCR_READ_TOKEN || github.token }}
           USER: ${{ secrets.GHCR_READ_TOKEN && 'uppertoe' || github.actor }}
@@ -47,6 +83,7 @@ jobs:
       # with a per-image count table so findings cannot hide behind a green
       # tick, and an image Trivy could not scan is flagged, not skipped silently.
       - name: Trivy image scan (app images and the proxy)
+        if: steps.gate.outputs.scan == 'true'
         run: |
           images="$(grep -rhoE 'image:\s*\S+' apps/*/docker-compose.yml scaffold/docker/caddy.base.yml | awk '{print $2}' | sort -u)"
           {
@@ -75,6 +112,7 @@ jobs:
       # query IDs are the accepted public-reverse-proxy exceptions documented
       # in docs/08-security-model.md.
       - name: KICS compose scan (apps)
+        if: steps.gate.outputs.scan == 'true'
         run: |
           docker run --rm -v "$PWD/apps:/path" -v "$PWD/reports/container-security:/out" \
             checkmarx/kics:latest@sha256:49ccc54b6ae7f5d5fc95e96f8f95c18c57f3bba047ab611a03d80792bdff6757 scan -p /path --type DockerCompose \
@@ -82,7 +120,7 @@ jobs:
             --report-formats json --output-name kics-apps -o /out --fail-on high
 
       - name: Upload container security reports
-        if: always()
+        if: always() && steps.gate.outputs.scan == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: container-security-reports

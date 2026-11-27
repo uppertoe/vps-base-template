@@ -33,6 +33,23 @@ of the actions, once.
 
 ---
 
+## 2026-11-27 — CI uses fewer Actions minutes
+
+The secret scan now runs inside CI's Static Checks job on every push and pull
+request, and `secret-scan.yml` keeps only the weekly and on-demand runs. The
+gateway suite runs only when `apps/auth/`, `.scaffold-server.yml`, the CI
+caller or the scaffold pointer changes. A merge to main is not scanned again
+by Container Security when its pull request's scan passed, and
+`container-security.yml` now grants `pull-requests: read` and `checks: read`
+so the scan can see that. Together these cut about 40% of the minutes a busy
+server bills.
+
+**Operator actions:** none beyond the usual
+`check-server-files.sh --fix`, which rewrites `secret-scan.yml` and
+`container-security.yml`.
+
+---
+
 ## 2026-11-27 — The older guards are refused, and route-groups.tsv is gone
 
 The renderer now refuses any import of an older guard: `protected` and its
